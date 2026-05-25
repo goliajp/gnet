@@ -1,4 +1,4 @@
-//! `gnet` — a secure UDP channel (and TUN tunnel) over the in-house mesh
+//! `gnet` — a secure UDP channel (and TUN tunnel) over the in-house gnet
 //! stack.
 //!
 //! ```text

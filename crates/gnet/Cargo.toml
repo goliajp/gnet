@@ -4,9 +4,9 @@ version.workspace = true
 edition.workspace = true
 authors = ["GOLIA K.K."]
 license = "MIT OR Apache-2.0"
-description = "Secure UDP channel CLI over the in-house mesh Noise_IK stack — no external dependencies."
+description = "Secure UDP channel CLI over the in-house gnet Noise_IK stack — no external dependencies."
 repository = "https://github.com/goliajp/portal"
-keywords = ["mesh", "wireguard", "noise", "vpn", "cli"]
+keywords = ["gnet", "wireguard", "noise", "vpn", "cli"]
 categories = ["command-line-utilities", "network-programming"]
 
 # only in-house path crates; no crates.io dependencies.

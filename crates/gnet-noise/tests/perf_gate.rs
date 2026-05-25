@@ -1,4 +1,4 @@
-//! Performance regression gate for `mesh-noise`, run under `cargo test`.
+//! Performance regression gate for `gnet-noise`, run under `cargo test`.
 //!
 //! The Noise_IK handshake runs once per session establishment (a warm path:
 //! several X25519 DHs plus the symmetric ratchet). A regression here slows every

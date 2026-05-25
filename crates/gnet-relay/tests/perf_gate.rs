@@ -1,4 +1,4 @@
-//! Performance regression gate for `mesh-relay`, run under `cargo test`.
+//! Performance regression gate for `gnet-relay`, run under `cargo test`.
 //!
 //! The envelope is on the relay data path, so a regression here costs every
 //! relayed packet. We assert `encode_into` stays within a generous budget —

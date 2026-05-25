@@ -1,6 +1,6 @@
-# mesh-relay performance budgets
+# gnet-relay performance budgets
 
-Baselines from `cargo bench -p mesh-relay` (release, single core). The envelope
+Baselines from `cargo bench -p gnet-relay` (release, single core). The envelope
 is on the relay data path: `encode_into` wraps every relayed packet on send,
 `dst_key` routes it at the relay, `decode` unwraps it at the receiver. These are
 the yardstick we polish against and the basis for the gate in
@@ -19,7 +19,7 @@ the yardstick we polish against and the basis for the gate in
 - **`encode_into`** is a `HEADER_LEN + inner` memcpy into the caller's send
   buffer (allocation-free). Its throughput tracks memory bandwidth — at ~100+
   GiB/s it is a rounding error next to the AEAD seal that produced the inner
-  ciphertext (`mesh-crypto` ~1.1 GiB/s for the 1400B hot path). Relay wrapping
+  ciphertext (`gnet-crypto` ~1.1 GiB/s for the 1400B hot path). Relay wrapping
   is never the bottleneck.
 - **`decode` / `dst_key`** are O(1) slice arithmetic — they borrow and never
   copy the payload, so their throughput figure is not meaningful; the **ns/op**
@@ -31,7 +31,7 @@ the yardstick we polish against and the basis for the gate in
 `tests/perf_gate.rs` asserts `encode_into` stays under **1000 ns/op** — a
 generous budget (~55× over the ~18 ns optimized baseline) that catches a gross
 regression while tolerating the unoptimized `cargo test` build and slow CI. It
-runs in the normal `cargo test -p mesh-relay`.
+runs in the normal `cargo test -p gnet-relay`.
 
 Rule: never weaken a budget without re-measuring and justifying it in the commit
 message.

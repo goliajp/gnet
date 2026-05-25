@@ -4,7 +4,7 @@
 //! This is the **point-to-point** layer: a single initiator ↔ responder
 //! connection. It backs the `listen` / `connect` (interactive messages) and
 //! `tunnel-listen` / `tunnel-connect` (1:1 TUN tunnel) CLI commands. The
-//! multi-peer mesh (the `up` command) is a separate stack in the `node`
+//! multi-peer gnet (the `up` command) is a separate stack in the `node`
 //! module; channel is **not** superseded by it — the two serve different
 //! shapes (one connection vs a routed peer table), so both stay.
 

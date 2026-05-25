@@ -1,6 +1,6 @@
-# mesh-crypto
+# gnet-crypto
 
-Zero-dependency, pure-Rust cryptographic primitives for the **mesh** overlay
+Zero-dependency, pure-Rust cryptographic primitives for the **gnet** overlay
 network — and usable standalone. Every primitive is implemented from the
 specification and validated against its published **known-answer test
 vectors**; nothing is pulled from crates.io.
@@ -32,7 +32,7 @@ vectors**; nothing is pulled from crates.io.
 ## Example
 
 ```rust
-use mesh_crypto::{aead, x25519};
+use gnet_crypto::{aead, x25519};
 
 // X25519 key agreement
 let base = {
@@ -57,8 +57,8 @@ assert_eq!(plaintext, b"secret message".to_vec());
 ## Testing & benchmarks
 
 ```sh
-cargo test  -p mesh-crypto   # RFC/NIST KATs + property tests
-cargo bench -p mesh-crypto   # 0-dep throughput harness (no criterion)
+cargo test  -p gnet-crypto   # RFC/NIST KATs + property tests
+cargo bench -p gnet-crypto   # 0-dep throughput harness (no criterion)
 ```
 
 Performance is currently the portable scalar reference; SIMD acceleration

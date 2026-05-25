@@ -11,7 +11,7 @@
 //!
 //! Ephemeral private keys are **injected** by the caller, not generated
 //! here: this keeps the crate free of an RNG dependency and makes the
-//! handshake deterministic-testable. The caller (or a future `mesh-rand`)
+//! handshake deterministic-testable. The caller (or a future `gnet-rand`)
 //! is responsible for supplying fresh, secret ephemerals.
 
 use crate::cipher_state::CipherState;

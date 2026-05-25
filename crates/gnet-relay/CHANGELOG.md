@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `mesh-relay` are documented here. The format follows
+All notable changes to `gnet-relay` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the crate tracks the
 workspace version.
 
@@ -15,6 +15,6 @@ workspace version.
   `dst_key` without ever decrypting.
 - Zero dependencies; `#![forbid(unsafe_code)]`.
 - Hand-rolled `std::time` throughput benchmark (`benches/envelope.rs`) and a
-  randomized roundtrip property test driven by the sibling `mesh-rand` (no
+  randomized roundtrip property test driven by the sibling `gnet-rand` (no
   external test crates).
 - `BUDGETS.md` performance baseline + `tests/perf_gate.rs` regression gate.

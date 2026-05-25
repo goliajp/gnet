@@ -1,6 +1,6 @@
-# mesh-crypto performance budgets
+# gnet-crypto performance budgets
 
-Baselines from `cargo bench -p mesh-crypto` (release, single core). These are
+Baselines from `cargo bench -p gnet-crypto` (release, single core). These are
 the yardstick we polish against and the basis for the regression gates in
 `tests/perf_gate.rs`.
 
@@ -34,7 +34,7 @@ the yardstick we polish against and the basis for the regression gates in
 
 `tests/perf_gate.rs` asserts the hot path stays within an order of magnitude of
 baseline — a generous budget that catches a ~6–7× regression while tolerating
-slow / contended CI. Runs in the normal `cargo test -p mesh-crypto`. The budget
+slow / contended CI. Runs in the normal `cargo test -p gnet-crypto`. The budget
 tracks the build mode (unoptimized `cargo test` runs the crypto ~60× slower
 than `--release`), so it is meaningful either way: 1000 µs/packet round-trip in
 debug, 20 µs in release.

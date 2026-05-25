@@ -1,14 +1,14 @@
 #!/bin/bash
 # Reproducible end-to-end test (Linux, root): two network namespaces, each
-# running a `meshcli tunnel` endpoint over its own TUN, ping each other
-# through the encrypted mesh. Proves the full data path — Noise_IK handshake
+# running a `gnetcli tunnel` endpoint over its own TUN, ping each other
+# through the encrypted gnet. Proves the full data path — Noise_IK handshake
 # + TUN + ChaCha20-Poly1305 transport + UDP — with zero external deps.
 #
-#   sudo bash crates/meshcli/scripts/netns-ping.sh
+#   sudo bash crates/gnetcli/scripts/netns-ping.sh
 set -u
 
-cargo build -p meshcli 2>&1 | tail -1 || exit 1
-BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/meshcli"
+cargo build -p gnetcli 2>&1 | tail -1 || exit 1
+BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnetcli"
 
 a_out=$("$BIN" keygen); b_out=$("$BIN" keygen)
 a_priv=$(echo "$a_out" | awk '/^private/{print $2}')
@@ -35,7 +35,7 @@ ip netns exec ns2 "$BIN" tunnel-connect 192.168.99.1:7777 "$b_priv" "$a_pub" 10.
 connect_pid=$!
 sleep 2
 
-echo "=== ping through the mesh tunnel: ns2 (10.88.0.2) -> ns1 (10.88.0.1) ==="
+echo "=== ping through the gnet tunnel: ns2 (10.88.0.2) -> ns1 (10.88.0.1) ==="
 rc=0
 ip netns exec ns2 ping -c3 -W2 10.88.0.1 || rc=1
 echo "=== result: $([ $rc = 0 ] && echo PASS || echo FAIL) ==="

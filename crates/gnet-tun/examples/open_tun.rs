@@ -2,7 +2,7 @@
 //! the kernel routes to it.
 //!
 //! ```sh
-//! sudo cargo run -p mesh-tun --example open_tun
+//! sudo cargo run -p gnet-tun --example open_tun
 //! # in another terminal, using the printed interface name:
 //! sudo ifconfig utunN 10.7.0.1 10.7.0.2 up
 //! ping 10.7.0.2          # packets should appear under the example
@@ -32,5 +32,5 @@ fn main() -> std::io::Result<()> {
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn main() {
-    eprintln!("mesh-tun supports macOS and Linux");
+    eprintln!("gnet-tun supports macOS and Linux");
 }

@@ -1,5 +1,5 @@
-//! `mesh-crypto` — zero-dependency, pure-Rust cryptographic core for the
-//! mesh overlay. **No external crates, by design.** Every primitive is
+//! `gnet-crypto` — zero-dependency, pure-Rust cryptographic core for the
+//! gnet overlay. **No external crates, by design.** Every primitive is
 //! validated against its published known-answer test vectors and written
 //! constant-time where secrets are involved.
 //!

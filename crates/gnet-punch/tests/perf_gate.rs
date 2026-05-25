@@ -1,4 +1,4 @@
-//! Performance regression gate for `mesh-punch`, run under `cargo test`.
+//! Performance regression gate for `gnet-punch`, run under `cargo test`.
 //!
 //! The rendezvous codec is setup-rate (a few calls per punch), not per-packet,
 //! so the budget is generous — it catches a gross regression while tolerating

@@ -1,4 +1,4 @@
-//! Performance regression gate for `mesh-wire`, run under `cargo test`.
+//! Performance regression gate for `gnet-wire`, run under `cargo test`.
 //!
 //! The transport-header stamp + read happens on every packet, so a regression
 //! here costs the whole data plane. We assert it stays within a generous budget

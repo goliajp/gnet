@@ -1,7 +1,7 @@
 #!/bin/bash
 # Run every netns end-to-end test in sequence and print a pass/fail matrix.
 #
-# Each netns-*.sh builds meshcli, stands up its own namespaces, runs its check,
+# Each netns-*.sh builds gnetcli, stands up its own namespaces, runs its check,
 # and tears the namespaces down via its own `cleanup` trap. This runner judges
 # each by exit code (0 = PASS) and, on failure, prints the tail of its output so
 # a regression is visible in one place. Ordered cheap → expensive so a basic
@@ -9,12 +9,12 @@
 #
 # Linux + root (the scripts create namespaces and iptables rules):
 #
-#   sudo bash crates/meshcli/scripts/netns-all.sh
+#   sudo bash crates/gnetcli/scripts/netns-all.sh
 set -u
 cd "$(dirname "$0")" || exit 1
 
 # cheap → expensive; punch/relay take ~15-30s each (they wait out NAT timing).
-SCRIPTS=(netns-ping netns-mesh netns-mesh-v6 netns-underlay-v6 netns-reflexive \
+SCRIPTS=(netns-ping netns-gnet netns-gnet-v6 netns-underlay-v6 netns-reflexive \
          netns-glare netns-reorder netns-roam netns-punch netns-punch-sync netns-relay)
 
 # fold in any netns-*.sh not in the ordered list above (new tests run last).

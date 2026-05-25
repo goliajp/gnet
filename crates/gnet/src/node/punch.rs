@@ -1,4 +1,4 @@
-//! Node-side hole-punch wiring: drives the `mesh-punch` rendezvous protocol
+//! Node-side hole-punch wiring: drives the `gnet-punch` rendezvous protocol
 //! over the live peer table. Relays connect/sync by destination key, starts a
 //! punch when a peer has no direct path, measures the coordinator RTT, and
 //! turns a due dial into a normal handshake. The zero-I/O codec + state machine

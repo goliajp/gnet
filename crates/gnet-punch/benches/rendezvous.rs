@@ -1,4 +1,4 @@
-//! Zero-dependency benchmarks for `mesh-punch`. Hand-rolled `std::time` harness
+//! Zero-dependency benchmarks for `gnet-punch`. Hand-rolled `std::time` harness
 //! (no criterion). The rendezvous codec + state transitions are setup-rate (a
 //! few per punch), not per-packet, so this tracks correctness-of-cost rather
 //! than a data-plane budget.
@@ -21,7 +21,7 @@ fn bench(name: &str, iters: u32, mut f: impl FnMut()) {
 }
 
 fn main() {
-    println!("mesh-punch rendezvous — per-op latency\n");
+    println!("gnet-punch rendezvous — per-op latency\n");
 
     let origin = [7u8; 32];
     let target = [9u8; 32];

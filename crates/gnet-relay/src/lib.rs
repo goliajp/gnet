@@ -1,4 +1,4 @@
-//! Relay envelope framing for the mesh overlay.
+//! Relay envelope framing for the gnet overlay.
 //!
 //! When two peers cannot hole-punch a direct path (symmetric NAT, CGNAT,
 //! hairpin) they fall back to relaying traffic through a mutually reachable

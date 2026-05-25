@@ -1,4 +1,4 @@
-//! `mesh-tun` — open and drive an OS TUN device for the mesh data plane.
+//! `gnet-tun` — open and drive an OS TUN device for the gnet data plane.
 //!
 //! **Zero crates.io dependencies**: FFI to the always-linked system C
 //! library (no `libc` crate) plus `std` for fd lifetime management. The

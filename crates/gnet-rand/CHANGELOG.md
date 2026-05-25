@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `mesh-rand` are documented here. The format follows
+All notable changes to `gnet-rand` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the crate tracks the
 workspace version.
 
@@ -8,7 +8,7 @@ workspace version.
 
 ### Added
 
-- Extracted from `meshcli` into a standalone zero-dependency stone:
+- Extracted from `gnetcli` into a standalone zero-dependency stone:
   cryptographically-secure OS randomness read from `/dev/urandom` via `std`
   only (no `unsafe`, no crates.io deps). `try_fill` / `fill` / `random_32` /
   `random_u32` cover Noise ephemeral + static key generation and transport

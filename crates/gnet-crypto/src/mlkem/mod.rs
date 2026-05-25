@@ -1,5 +1,5 @@
 //! ML-KEM-768 (FIPS 203) — the post-quantum key-encapsulation mechanism for
-//! the mesh hybrid handshake. Built bottom-up on [`ntt`] (ring arithmetic),
+//! the gnet hybrid handshake. Built bottom-up on [`ntt`] (ring arithmetic),
 //! [`serialize`]/[`sample`], [`kpke`] (the IND-CPA scheme), and
 //! [`crate::sha3`].
 //!

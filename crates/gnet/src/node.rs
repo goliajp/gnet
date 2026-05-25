@@ -1,4 +1,4 @@
-//! Static multi-peer mesh node: one TUN + one UDP socket serving many peers.
+//! Static multi-peer gnet node: one TUN + one UDP socket serving many peers.
 //!
 //! Outbound IP packets are routed by destination address to the matching
 //! peer's session (initiating a Noise_IK handshake on demand); inbound
