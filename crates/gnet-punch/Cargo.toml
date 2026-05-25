@@ -1,0 +1,26 @@
+[package]
+name = "gnet-punch"
+version.workspace = true
+edition.workspace = true
+authors = ["GOLIA K.K."]
+license = "MIT OR Apache-2.0"
+description = "Zero-dependency DCUtR-style synchronized hole-punch rendezvous for the mesh overlay — the wire codec (PunchConnect/PunchSync) and the per-peer state machine that measures the coordinator RTT and schedules both peers' dials to cross at the path midpoint. Pure logic, no I/O."
+repository = "https://github.com/goliajp/portal"
+readme = "README.md"
+keywords = ["nat-traversal", "hole-punching", "dcutr", "wireguard", "overlay"]
+categories = ["network-programming", "no-std"]
+
+# only the in-house wire-framing stone; no crates.io dependencies.
+[dependencies]
+gnet-wire = { path = "../gnet-wire" }
+
+[dev-dependencies]
+# randomized/property coverage via the sibling 0-dep RNG (no proptest).
+gnet-rand = { path = "../gnet-rand" }
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "rendezvous"
+harness = false

@@ -1,0 +1,22 @@
+[package]
+name = "gnet-crypto"
+version.workspace = true
+edition.workspace = true
+authors = ["GOLIA K.K."]
+license = "MIT OR Apache-2.0"
+description = "Zero-dependency, pure-Rust cryptographic primitives for the mesh overlay — ChaCha20-Poly1305, X25519, BLAKE2s, HKDF — validated against RFC/NIST known-answer vectors."
+repository = "https://github.com/goliajp/portal"
+readme = "README.md"
+keywords = ["cryptography", "chacha20", "x25519", "wireguard", "no-std"]
+categories = ["cryptography", "no-std"]
+
+# zero dependencies — by design. every primitive is hand-written pure Rust
+# and validated against its published RFC / NIST known-answer vectors.
+[dependencies]
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "crypto"
+harness = false

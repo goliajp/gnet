@@ -1,0 +1,23 @@
+[package]
+name = "gnet-config"
+version.workspace = true
+edition.workspace = true
+authors = ["GOLIA K.K."]
+license = "MIT OR Apache-2.0"
+description = "Zero-dependency parser for the mesh overlay's WireGuard-style node configuration — static identity plus a peer table (static key, ML-KEM ek, virtual IP, optional endpoint)."
+repository = "https://github.com/goliajp/portal"
+readme = "README.md"
+keywords = ["config", "parser", "wireguard", "vpn", "overlay"]
+categories = ["config", "network-programming"]
+
+# only in-house path stones; no crates.io dependencies.
+[dependencies]
+gnet-crypto = { path = "../gnet-crypto" }
+gnet-hex = { path = "../gnet-hex" }
+
+[dev-dependencies]
+# randomized config-roundtrip coverage via the sibling 0-dep RNG (no proptest).
+gnet-rand = { path = "../gnet-rand" }
+
+[lints]
+workspace = true

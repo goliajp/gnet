@@ -1,0 +1,28 @@
+# mesh-hex
+
+Zero-dependency lowercase-hex encode/decode for the **mesh** overlay — keys on
+the CLI and in config files.
+
+> Part of a from-scratch, 0-external-dependency overlay. `[dependencies]` is
+> empty.
+
+## API
+
+- `encode(&[u8]) -> String` — lowercase hex.
+- `decode(&str) -> Option<Vec<u8>>` — even-length, whitespace-trimmed; `None` if
+  malformed.
+- `decode_32(&str) -> Option<[u8; 32]>` — exactly 64 hex chars → 32 bytes.
+
+`decode` / `decode_32` accept upper- or lower-case input (via `to_digit(16)`);
+`encode` always emits lowercase.
+
+## Design
+
+No external crates; `#![forbid(unsafe_code)]`. Randomized roundtrip coverage uses
+the sibling `mesh-rand` (no proptest). A cold-path utility (config parsing /
+keygen output), so there is no per-packet budget — hence no bench/BUDGETS, in
+line with the other utility stones.
+
+## License
+
+MIT OR Apache-2.0.

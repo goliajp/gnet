@@ -1,0 +1,21 @@
+[package]
+name = "gnet-wire"
+version.workspace = true
+edition.workspace = true
+authors = ["GOLIA K.K."]
+license = "MIT OR Apache-2.0"
+description = "Zero-dependency, zero-allocation datagram framing for the mesh overlay — a one-byte type tag demultiplexes handshake / transport / endpoint-probe / rendezvous datagrams, with a fixed transport header (receiver index + packet counter) and a compact socket-address codec."
+repository = "https://github.com/goliajp/portal"
+readme = "README.md"
+keywords = ["framing", "wire-format", "wireguard", "overlay", "no-std"]
+categories = ["network-programming", "no-std"]
+
+# zero dependencies — by design. the framing is hand-written over std::net only.
+[dependencies]
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "framing"
+harness = false

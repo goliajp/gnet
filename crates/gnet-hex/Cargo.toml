@@ -1,0 +1,21 @@
+[package]
+name = "gnet-hex"
+version.workspace = true
+edition.workspace = true
+authors = ["GOLIA K.K."]
+license = "MIT OR Apache-2.0"
+description = "Zero-dependency lowercase-hex encode/decode for the mesh overlay — X25519 / ML-KEM keys on the CLI and in config files. Lowercase output, even-length whitespace-trimmed input."
+repository = "https://github.com/goliajp/portal"
+readme = "README.md"
+keywords = ["hex", "encoding", "decoder", "no-std", "overlay"]
+categories = ["encoding", "no-std"]
+
+# zero dependencies — by design.
+[dependencies]
+
+[dev-dependencies]
+# randomized roundtrip coverage via the sibling 0-dep RNG (no proptest).
+gnet-rand = { path = "../gnet-rand" }
+
+[lints]
+workspace = true

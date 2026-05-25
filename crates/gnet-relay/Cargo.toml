@@ -1,0 +1,27 @@
+[package]
+name = "gnet-relay"
+version.workspace = true
+edition.workspace = true
+authors = ["GOLIA K.K."]
+license = "MIT OR Apache-2.0"
+description = "Zero-dependency, zero-allocation relay envelope framing for the mesh overlay — wraps an opaque end-to-end-encrypted datagram with a `src_pubkey ‖ dst_pubkey` routing header so a relay can forward by destination key without ever seeing plaintext."
+repository = "https://github.com/goliajp/portal"
+readme = "README.md"
+keywords = ["relay", "nat-traversal", "wireguard", "overlay", "no-std"]
+categories = ["network-programming", "no-std"]
+
+# zero dependencies — by design. the envelope is a hand-written routing prefix
+# over an opaque ciphertext; nothing is pulled from crates.io.
+[dependencies]
+
+[dev-dependencies]
+# none — tests use gnet-rand (a sibling 0-dep crate) for randomized/property
+# coverage, and benches use a hand-rolled std::time harness.
+gnet-rand = { path = "../gnet-rand" }
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "envelope"
+harness = false
