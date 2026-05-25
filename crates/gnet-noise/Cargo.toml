@@ -1,0 +1,22 @@
+[package]
+name = "gnet-noise"
+version.workspace = true
+edition.workspace = true
+authors = ["GOLIA K.K."]
+license = "MIT OR Apache-2.0"
+description = "Noise_IK handshake (the WireGuard pattern, 25519/ChaChaPoly/BLAKE2s) for the mesh overlay, built on the in-house gnet-crypto primitives — no external dependencies."
+repository = "https://github.com/goliajp/portal"
+readme = "README.md"
+keywords = ["noise", "wireguard", "handshake", "x25519", "cryptography"]
+categories = ["cryptography", "network-programming"]
+
+# only in-house crate(s); no crates.io dependencies.
+[dependencies]
+gnet-crypto = { path = "../gnet-crypto" }
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "handshake"
+harness = false

@@ -1,0 +1,17 @@
+[package]
+name = "gnet-rand"
+version.workspace = true
+edition.workspace = true
+authors = ["GOLIA K.K."]
+license = "MIT OR Apache-2.0"
+description = "Zero-dependency cryptographically-secure randomness from the OS (/dev/urandom) for the mesh overlay."
+repository = "https://github.com/goliajp/portal"
+readme = "README.md"
+keywords = ["random", "csprng", "entropy", "urandom", "no-std"]
+categories = ["cryptography", "os"]
+
+# no crates.io dependencies — OS entropy via std only.
+[dependencies]
+
+[lints]
+workspace = true

@@ -1,0 +1,17 @@
+[package]
+name = "gnet-tun"
+version.workspace = true
+edition.workspace = true
+authors = ["GOLIA K.K."]
+license = "MIT OR Apache-2.0"
+description = "Zero-dependency OS TUN device access for the mesh overlay (macOS utun; Linux planned). FFI to the system libc, no crates.io deps."
+repository = "https://github.com/goliajp/portal"
+readme = "README.md"
+keywords = ["tun", "utun", "vpn", "networking", "wireguard"]
+categories = ["network-programming", "os"]
+
+# no crates.io dependencies — FFI to the always-linked system C library.
+[dependencies]
+
+[lints]
+workspace = true
