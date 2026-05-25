@@ -1,4 +1,4 @@
-//! Mesh wire framing: a one-byte type tag prefixes every UDP datagram so a
+//! Gnet wire framing: a one-byte type tag prefixes every UDP datagram so a
 //! node can demultiplex handshake from transport traffic — the foundation for
 //! routing datagrams to the right peer session once there is more than one.
 //!
@@ -86,7 +86,7 @@ pub enum Kind {
     /// waits RTT/2, so both first packets cross at the path midpoint.
     PunchSync = 0x07,
     /// Relay fallback: an end-to-end-encrypted inner datagram wrapped with a
-    /// `src ‖ dst` routing header (see `mesh-relay`) and forwarded by a
+    /// `src ‖ dst` routing header (see `gnet-relay`) and forwarded by a
     /// mutually reachable relay when two peers cannot hole-punch a direct path
     /// (symmetric NAT / CGNAT / hairpin). The relay routes by `dst` and never
     /// decrypts — the inner bytes stay end-to-end encrypted.

@@ -1,5 +1,5 @@
 //! Zero-dependency throughput benchmark for the Noise_IK and hybrid handshakes.
-//! Run with `cargo bench -p mesh-noise`.
+//! Run with `cargo bench -p gnet-noise`.
 
 use std::hint::black_box;
 use std::time::Instant;

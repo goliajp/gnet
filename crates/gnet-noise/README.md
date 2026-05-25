@@ -1,8 +1,8 @@
-# mesh-noise
+# gnet-noise
 
 The **`Noise_IK_25519_ChaChaPoly_BLAKE2s`** handshake — the pattern WireGuard
 is built on — with **no external dependencies**. It is implemented entirely on
-the in-house [`mesh-crypto`](../mesh-crypto) primitives (X25519,
+the in-house [`gnet-crypto`](../gnet-crypto) primitives (X25519,
 ChaCha20-Poly1305, BLAKE2s, HKDF); nothing comes from crates.io.
 
 > Part of a from-scratch WireGuard/Tailscale-class encrypted overlay.
@@ -25,18 +25,18 @@ After message 2 both sides `Split()` into a pair of transport ciphers
 
 ## Design
 
-- **No external crates.** Depends only on the in-house `mesh-crypto`.
+- **No external crates.** Depends only on the in-house `gnet-crypto`.
 - **Ephemerals are injected** by the caller — this crate contains **no RNG**,
   which keeps it deterministic-testable. Supplying fresh, secret ephemeral
-  keys (e.g. from a future `mesh-rand`/OS entropy) is the caller's job.
+  keys (e.g. from a future `gnet-rand`/OS entropy) is the caller's job.
 - Modules: `cipher_state` (Noise §5.1), `symmetric_state` (§5.2),
   `handshake` (the IK initiator/responder state machines).
 
 ## Example
 
 ```rust
-use mesh_noise::handshake::{Initiator, Responder};
-use mesh_crypto::x25519;
+use gnet_noise::handshake::{Initiator, Responder};
+use gnet_crypto::x25519;
 
 let base = {
     let mut b = [0u8; 32];
@@ -64,7 +64,7 @@ assert_eq!(responder_tp.recv.decrypt_with_ad(b"", &ct).unwrap(), b"ping".to_vec(
 ## Testing
 
 ```sh
-cargo test -p mesh-noise   # CipherState/SymmetricState units + full IK round-trip
+cargo test -p gnet-noise   # CipherState/SymmetricState units + full IK round-trip
 ```
 
 ## License

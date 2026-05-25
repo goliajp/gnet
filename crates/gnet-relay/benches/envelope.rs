@@ -1,8 +1,8 @@
-//! Zero-dependency throughput benchmarks for `mesh-relay`.
+//! Zero-dependency throughput benchmarks for `gnet-relay`.
 //!
-//! Run: `cargo bench -p mesh-relay`. Hand-rolled `std::time` harness — criterion
+//! Run: `cargo bench -p gnet-relay`. Hand-rolled `std::time` harness — criterion
 //! is an external dependency, forbidden in the overlay (same rule as
-//! `mesh-crypto`). The envelope sits on the relay data path: every relayed
+//! `gnet-crypto`). The envelope sits on the relay data path: every relayed
 //! packet is wrapped on send (`encode_into`) and routed (`dst_key`) + unwrapped
 //! (`decode`) on receive, so these are per-packet hot-path costs.
 
@@ -35,7 +35,7 @@ fn main() {
     let iters = 5_000_000;
     let total = gnet_relay::HEADER_LEN + inner.len();
 
-    println!("mesh-relay envelope — per-packet hot path\n");
+    println!("gnet-relay envelope — per-packet hot path\n");
 
     bench("encode_into 1400B", total, iters, || {
         let n = gnet_relay::encode_into(&mut out, &src, &dst, black_box(&inner)).unwrap();

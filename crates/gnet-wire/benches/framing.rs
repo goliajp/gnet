@@ -1,8 +1,8 @@
-//! Zero-dependency throughput benchmarks for `mesh-wire`.
+//! Zero-dependency throughput benchmarks for `gnet-wire`.
 //!
-//! Run: `cargo bench -p mesh-wire`. Hand-rolled `std::time` harness — criterion
+//! Run: `cargo bench -p gnet-wire`. Hand-rolled `std::time` harness — criterion
 //! is an external dependency, forbidden in the overlay (same rule as
-//! `mesh-crypto`). The transport-header stamp/read is the per-packet hot path
+//! `gnet-crypto`). The transport-header stamp/read is the per-packet hot path
 //! (every datagram); `frame`/`parse` and the address codec are handshake- /
 //! discovery-rate, measured here for completeness.
 
@@ -27,7 +27,7 @@ fn bench(name: &str, iters: u32, mut f: impl FnMut()) {
 }
 
 fn main() {
-    println!("mesh-wire framing — per-op latency\n");
+    println!("gnet-wire framing — per-op latency\n");
 
     // hot path: stamp + read the transport header on every packet
     let mut dg = [0u8; TRANSPORT_HEADER + 1400];

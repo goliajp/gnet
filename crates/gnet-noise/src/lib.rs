@@ -1,5 +1,5 @@
-//! `mesh-noise` — the Noise_IK handshake (the pattern WireGuard uses) for
-//! the mesh overlay. No external dependencies: built entirely on the
+//! `gnet-noise` — the Noise_IK handshake (the pattern WireGuard uses) for
+//! the gnet overlay. No external dependencies: built entirely on the
 //! in-house [`gnet_crypto`] primitives.
 //!
 //! Cipher suite: `Noise_IK_25519_ChaChaPoly_BLAKE2s`.

@@ -1,6 +1,6 @@
-# mesh-wire performance budgets
+# gnet-wire performance budgets
 
-Baselines from `cargo bench -p mesh-wire` (release, single core). The
+Baselines from `cargo bench -p gnet-wire` (release, single core). The
 transport-header stamp/read + `parse` demux run on every packet; `frame` and the
 address codec are handshake- / discovery-rate. These are the yardstick we polish
 against and the basis for the gate in `tests/perf_gate.rs`.
@@ -20,7 +20,7 @@ against and the basis for the gate in `tests/perf_gate.rs`.
 
 - The **transport path is allocation-free**: `put_*` / readers touch fields in
   place in the same buffer the ciphertext occupies. At ~1–2 ns/op the framing is
-  a rounding error next to the AEAD seal (`mesh-crypto` ~1.2 µs/packet) — it will
+  a rounding error next to the AEAD seal (`gnet-crypto` ~1.2 µs/packet) — it will
   never be the data-plane bottleneck.
 - `frame` and `encode_addr` allocate a small `Vec`, but both are off the data
   plane (handshake / endpoint discovery), so the allocation is acceptable.

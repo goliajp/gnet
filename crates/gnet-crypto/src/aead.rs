@@ -202,7 +202,7 @@ mod tests {
     fn seal_open_roundtrip() {
         let key = [0x11u8; 32];
         let nonce = [0x22u8; 12];
-        let aad = b"mesh-overlay-header";
+        let aad = b"gnet-overlay-header";
         let pt = b"the quick brown fox";
         let (ct, tag) = seal(&key, &nonce, aad, pt);
         assert_eq!(open(&key, &nonce, aad, &ct, &tag).as_deref(), Some(&pt[..]));
@@ -239,7 +239,7 @@ mod tests {
     fn in_place_roundtrip_matches_owned() {
         let key = [0x11u8; 32];
         let nonce = [0x22u8; 12];
-        let aad = b"mesh-overlay-header";
+        let aad = b"gnet-overlay-header";
         for len in [0usize, 1, 15, 16, 63, 64, 65, 1000] {
             let pt: Vec<u8> = (0..len).map(|i| (i as u8).wrapping_mul(5) ^ 0x3c).collect();
             let mut buf = pt.clone();

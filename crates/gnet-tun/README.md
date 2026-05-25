@@ -1,7 +1,7 @@
-# mesh-tun
+# gnet-tun
 
-Zero-dependency OS **TUN device** access for the mesh overlay — the data-plane
-hook that lets real IP traffic flow through the mesh. FFI to the always-linked
+Zero-dependency OS **TUN device** access for the gnet overlay — the data-plane
+hook that lets real IP traffic flow through the gnet. FFI to the always-linked
 system C library (no `libc` crate, **no crates.io dependencies**); `unsafe` is
 used for the device syscalls, each with a `// SAFETY:` note.
 
@@ -14,7 +14,7 @@ Opening a TUN device needs elevated privileges, so this crate cannot be
 exercised in unprivileged CI. Verify manually:
 
 ```sh
-sudo cargo run -p mesh-tun --example open_tun
+sudo cargo run -p gnet-tun --example open_tun
 # note the printed interface name (e.g. utun4), then in another terminal:
 sudo ifconfig utun4 10.7.0.1 10.7.0.2 up
 ping 10.7.0.2     # packets should print under the example

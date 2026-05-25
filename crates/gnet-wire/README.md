@@ -1,6 +1,6 @@
-# mesh-wire
+# gnet-wire
 
-Zero-dependency, zero-allocation **datagram framing** for the **mesh** overlay
+Zero-dependency, zero-allocation **datagram framing** for the **gnet** overlay
 network.
 
 > Part of a from-scratch WireGuard/Tailscale-class encrypted overlay. The

@@ -1,5 +1,5 @@
 //! TUN ↔ UDP pump: bridge a `utun` device to the encrypted channel so real
-//! IP traffic flows through the mesh. macOS only (depends on `mesh-tun`).
+//! IP traffic flows through the gnet. macOS only (depends on `gnet-tun`).
 
 use std::io;
 use std::net::{SocketAddr, UdpSocket};

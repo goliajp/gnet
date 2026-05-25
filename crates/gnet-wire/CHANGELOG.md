@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `mesh-wire` are documented here. The format follows
+All notable changes to `gnet-wire` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the crate tracks the
 workspace version.
 
@@ -8,7 +8,7 @@ workspace version.
 
 ### Added
 
-- Extracted from `meshcli`'s internal `wire` module into a standalone
+- Extracted from `gnetcli`'s internal `wire` module into a standalone
   zero-dependency stone: datagram type tags (`Kind`), `frame` / `parse`, the
   allocation-free transport-header field codecs (`put_index` / `index` /
   `put_counter` / `counter`), and the compact `SocketAddr` codec
@@ -19,7 +19,7 @@ workspace version.
   dependencies; the transport path is allocation-free.
 - `Kind::RelayData` (0x08): the relay-fallback datagram tag (CP3). Tags traffic
   forwarded through a mutually reachable relay when two peers cannot hole-punch
-  a direct path; pairs with the `mesh-relay` `src ‖ dst ‖ inner` envelope. The
+  a direct path; pairs with the `gnet-relay` `src ‖ dst ‖ inner` envelope. The
   relay routes by `dst` and never decrypts the inner bytes.
 - `encode_addr_into` + `ADDR_MAX`: an allocation-free `SocketAddr` encoder into a
   caller-supplied buffer; the owned `encode_addr` now wraps it. Lets the

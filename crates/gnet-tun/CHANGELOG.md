@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `mesh-tun` are documented here. The format follows
+All notable changes to `gnet-tun` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the crate tracks the
 workspace version.
 
@@ -8,7 +8,7 @@ workspace version.
 
 ### Added
 
-- Extracted from `meshcli` into a standalone stone for the data plane: open and
+- Extracted from `gnetcli` into a standalone stone for the data plane: open and
   drive an OS TUN device with zero crates.io dependencies — FFI to the
   always-linked system C library (no `libc` crate) plus `std` for fd lifetime.
   Both macOS (`utun`) and Linux (`/dev/net/tun`, `IFF_TUN | IFF_NO_PI`) are

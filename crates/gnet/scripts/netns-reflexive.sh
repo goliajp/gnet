@@ -5,11 +5,11 @@
 # NAT's public address:port, not its private one. This is the first building
 # block of hole punching. Uses a fixed-port SNAT (no conntrack tooling needed).
 #
-#   sudo bash crates/meshcli/scripts/netns-reflexive.sh
+#   sudo bash crates/gnetcli/scripts/netns-reflexive.sh
 set -u
 
-cargo build -p meshcli 2>&1 | tail -1 || exit 1
-BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/meshcli"
+cargo build -p gnetcli 2>&1 | tail -1 || exit 1
+BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnetcli"
 TMP=$(mktemp -d)
 NAT_PUB=192.168.52.254
 NAT_PORT=45000
@@ -17,9 +17,9 @@ NAT_PORT=45000
 cleanup() {
     kill "${pid_pub:-}" "${pid_cli:-}" 2>/dev/null
     for ns in ns-pub ns-nat ns-cli; do ip netns del "$ns" 2>/dev/null; done
-    iptables -D FORWARD -i br-mesh -o br-mesh -j ACCEPT 2>/dev/null
+    iptables -D FORWARD -i br-gnet -o br-gnet -j ACCEPT 2>/dev/null
     iptables -D FORWARD -i br-priv -o br-priv -j ACCEPT 2>/dev/null
-    ip link del br-mesh 2>/dev/null
+    ip link del br-gnet 2>/dev/null
     ip link del br-priv 2>/dev/null
     rm -rf "$TMP"
 }
@@ -33,9 +33,9 @@ cli_priv=$(echo "$cli_out" | awk '/^private/{print $2}')
 cli_pub=$(echo "$cli_out"  | awk '/^public/{print $2}')
 cli_mlk=$(echo "$cli_out"  | awk '/^mlkem-public/{print $2}')
 
-ip link add br-mesh type bridge; ip link set br-mesh up
+ip link add br-gnet type bridge; ip link set br-gnet up
 ip link add br-priv type bridge; ip link set br-priv up
-iptables -I FORWARD -i br-mesh -o br-mesh -j ACCEPT 2>/dev/null
+iptables -I FORWARD -i br-gnet -o br-gnet -j ACCEPT 2>/dev/null
 iptables -I FORWARD -i br-priv -o br-priv -j ACCEPT 2>/dev/null
 
 ip netns add ns-pub
@@ -45,7 +45,7 @@ ip netns add ns-cli
 # ns-pub (B): public node
 ip link add veth-pub type veth peer name br-pub
 ip link set veth-pub netns ns-pub
-ip link set br-pub master br-mesh; ip link set br-pub up
+ip link set br-pub master br-gnet; ip link set br-pub up
 ip -n ns-pub addr add 192.168.52.1/24 dev veth-pub
 ip -n ns-pub link set veth-pub up
 ip -n ns-pub link set lo up
@@ -53,7 +53,7 @@ ip -n ns-pub link set lo up
 # ns-nat: NAT gateway, SNATs the client to a fixed public port
 ip link add nat-pub type veth peer name br-natpub
 ip link set nat-pub netns ns-nat
-ip link set br-natpub master br-mesh; ip link set br-natpub up
+ip link set br-natpub master br-gnet; ip link set br-natpub up
 ip -n ns-nat addr add $NAT_PUB/24 dev nat-pub
 ip -n ns-nat link set nat-pub up
 ip link add nat-priv type veth peer name br-natpriv

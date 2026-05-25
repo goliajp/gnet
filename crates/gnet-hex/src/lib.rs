@@ -1,4 +1,4 @@
-//! Minimal zero-dependency lowercase-hex encode/decode for the mesh overlay —
+//! Minimal zero-dependency lowercase-hex encode/decode for the gnet overlay —
 //! handling X25519 / ML-KEM keys on the CLI and in config files.
 //!
 //! Part of a from-scratch, 0-external-dependency overlay; `[dependencies]` is

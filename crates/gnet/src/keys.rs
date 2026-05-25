@@ -1,4 +1,4 @@
-//! Static keypair generation for mesh endpoints: the X25519 identity key plus
+//! Static keypair generation for gnet endpoints: the X25519 identity key plus
 //! a deterministically-derived ML-KEM-768 key pair for the post-quantum hybrid
 //! handshake. Deriving ML-KEM from the X25519 private key keeps the secret a
 //! single 32-byte value; only the (public) ML-KEM encapsulation key needs to
@@ -14,7 +14,7 @@ const BASE_POINT: [u8; 32] = {
 };
 
 /// Domain separator for ML-KEM seed derivation.
-const MLKEM_DERIVE_DOMAIN: &[u8] = b"mesh-mlkem768-v1";
+const MLKEM_DERIVE_DOMAIN: &[u8] = b"gnet-mlkem768-v1";
 
 /// Generate a fresh static keypair `(private, public)` using OS entropy.
 pub fn generate_static() -> ([u8; 32], [u8; 32]) {

@@ -33,7 +33,7 @@ fn next_retry_at() -> Instant {
     Instant::now() + RETRY_BASE + Duration::from_millis(jitter)
 }
 
-/// Route a framed datagram to a peer: wrapped in a `mesh-relay` envelope through
+/// Route a framed datagram to a peer: wrapped in a `gnet-relay` envelope through
 /// the peer's relay when it has tripped to relay fallback, else sent directly to
 /// its endpoint. Returns the target endpoint and the bytes to send, or `None`
 /// if no path is known. `public` is our own static key (the envelope `src`).

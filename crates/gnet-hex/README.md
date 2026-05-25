@@ -1,6 +1,6 @@
-# mesh-hex
+# gnet-hex
 
-Zero-dependency lowercase-hex encode/decode for the **mesh** overlay — keys on
+Zero-dependency lowercase-hex encode/decode for the **gnet** overlay — keys on
 the CLI and in config files.
 
 > Part of a from-scratch, 0-external-dependency overlay. `[dependencies]` is
@@ -19,7 +19,7 @@ the CLI and in config files.
 ## Design
 
 No external crates; `#![forbid(unsafe_code)]`. Randomized roundtrip coverage uses
-the sibling `mesh-rand` (no proptest). A cold-path utility (config parsing /
+the sibling `gnet-rand` (no proptest). A cold-path utility (config parsing /
 keygen output), so there is no per-packet budget — hence no bench/BUDGETS, in
 line with the other utility stones.
 

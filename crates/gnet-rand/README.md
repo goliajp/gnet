@@ -1,7 +1,7 @@
-# mesh-rand
+# gnet-rand
 
 Zero-dependency cryptographically-secure randomness from the operating
-system, for the **mesh** overlay — and usable standalone. Reads
+system, for the **gnet** overlay — and usable standalone. Reads
 `/dev/urandom` via `std` only: **no `unsafe`, no crates.io dependencies.**
 
 Used to generate Noise ephemeral and static private keys.
@@ -14,11 +14,11 @@ syscall) is a future addition.
 ## Example
 
 ```rust
-let sk = mesh_rand::random_32(); // 32 bytes for an X25519 private key
+let sk = gnet_rand::random_32(); // 32 bytes for an X25519 private key
 assert_ne!(sk, [0u8; 32]);
 
 let mut nonce = [0u8; 12];
-mesh_rand::fill(&mut nonce);
+gnet_rand::fill(&mut nonce);
 ```
 
 ## API

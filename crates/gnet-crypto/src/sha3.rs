@@ -282,8 +282,8 @@ mod tests {
     #[test]
     fn xof_matches_oneshot() {
         let mut oneshot = [0u8; 300];
-        shake128(b"mesh-xof", &mut oneshot);
-        let mut x = Xof::shake128(b"mesh-xof");
+        shake128(b"gnet-xof", &mut oneshot);
+        let mut x = Xof::shake128(b"gnet-xof");
         let mut got = [0u8; 300];
         // squeeze in irregular chunks to exercise the resume path
         let mut off = 0;
@@ -306,10 +306,10 @@ mod tests {
     #[test]
     fn shake128_long_output_crosses_blocks() {
         let mut long = [0u8; 200]; // > rate (168)
-        shake128(b"mesh", &mut long);
+        shake128(b"gnet", &mut long);
         // re-deriving the prefix must be stable
         let mut prefix = [0u8; 32];
-        shake128(b"mesh", &mut prefix);
+        shake128(b"gnet", &mut prefix);
         assert_eq!(&long[..32], &prefix[..]);
     }
 }

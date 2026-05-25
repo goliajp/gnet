@@ -1,5 +1,5 @@
-//! `mesh-rand` — zero-dependency cryptographically-secure randomness for the
-//! mesh overlay, sourced from the operating system.
+//! `gnet-rand` — zero-dependency cryptographically-secure randomness for the
+//! gnet overlay, sourced from the operating system.
 //!
 //! Reads `/dev/urandom` via `std` only (no `unsafe`, no crates.io
 //! dependencies). This covers Unix targets (Linux, macOS, the BSDs);

@@ -1,6 +1,6 @@
-# mesh-noise performance budgets
+# gnet-noise performance budgets
 
-Baselines from `cargo bench -p mesh-noise` (release, single core). The Noise_IK
+Baselines from `cargo bench -p gnet-noise` (release, single core). The Noise_IK
 handshake runs once per session establishment — a warm path (several X25519
 Diffie-Hellmans plus the symmetric ratchet), not per-packet. It is the yardstick
 we polish against and the basis for the gate in `tests/perf_gate.rs`.
@@ -18,11 +18,11 @@ initiator and decaps on the responder.)
 
 ## Notes
 
-- The handshake is dominated by the X25519 Diffie-Hellmans in `mesh-crypto`. It
+- The handshake is dominated by the X25519 Diffie-Hellmans in `gnet-crypto`. It
   runs once when a session comes up, never on the data plane, so the µs cost is
   amortized over the whole connection's traffic.
 - The `hybrid` variant layers an ML-KEM-768 encaps/decaps on top (post-quantum
-  KEM), adding ~60–140 µs. It is the handshake `meshcli` actually runs, so it is
+  KEM), adding ~60–140 µs. It is the handshake `gnetcli` actually runs, so it is
   benched and gated here alongside Noise_IK.
 
 ## Regression gate

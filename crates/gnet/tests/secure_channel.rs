@@ -38,12 +38,12 @@ fn two_endpoints_handshake_and_exchange_over_udp() {
         &initiator_sock,
         responder_addr,
         &mut transport,
-        b"hello mesh",
+        b"hello gnet",
     )
     .expect("send");
     let echoed = channel::recv(&initiator_sock, &mut transport).expect("recv echo");
 
-    assert_eq!(echoed, b"hello mesh");
+    assert_eq!(echoed, b"hello gnet");
     responder.join().unwrap();
 }
 

@@ -1,6 +1,6 @@
 //! Noise `SymmetricState` — chaining key, transcript hash, and the running
 //! cipher (Noise Protocol Framework §5.2). HKDF over HMAC-BLAKE2s and the
-//! BLAKE2s transcript hash come from `mesh-crypto`.
+//! BLAKE2s transcript hash come from `gnet-crypto`.
 
 use crate::cipher_state::CipherState;
 use gnet_crypto::{blake2s, hkdf};

@@ -1,6 +1,6 @@
-# mesh-relay
+# gnet-relay
 
-Zero-dependency, zero-allocation **relay envelope framing** for the **mesh**
+Zero-dependency, zero-allocation **relay envelope framing** for the **gnet**
 overlay network — and usable standalone.
 
 > Part of a from-scratch WireGuard/Tailscale-class encrypted overlay. The
@@ -11,7 +11,7 @@ overlay network — and usable standalone.
 
 When two peers cannot hole-punch a direct path (symmetric NAT, CGNAT, hairpin),
 they fall back to relaying traffic through a mutually reachable node — the
-DERP/TURN backstop every production overlay keeps. `mesh-relay` is the **wire
+DERP/TURN backstop every production overlay keeps. `gnet-relay` is the **wire
 envelope** for that path and nothing else:
 
 ```text
@@ -45,28 +45,28 @@ the crate independently testable, fuzzable, and benchmarkable.
 | `encode(src, dst, inner) -> Vec<u8>` | cold | owned convenience for tests / non-data-plane |
 
 ```rust
-let src = [7u8; mesh_relay::KEY_LEN];
-let dst = [9u8; mesh_relay::KEY_LEN];
+let src = [7u8; gnet_relay::KEY_LEN];
+let dst = [9u8; gnet_relay::KEY_LEN];
 let inner = b"...opaque end-to-end ciphertext...";
 
 let mut buf = [0u8; 2048];
-let n = mesh_relay::encode_into(&mut buf, &src, &dst, inner).unwrap();
+let n = gnet_relay::encode_into(&mut buf, &src, &dst, inner).unwrap();
 
 // on the relay: route on dst only, forward the bytes unchanged
-let target = mesh_relay::dst_key(&buf[..n]).unwrap();
+let target = gnet_relay::dst_key(&buf[..n]).unwrap();
 
 // on the receiver: unwrap and re-dispatch the inner datagram
-let (from, _to, payload) = mesh_relay::decode(&buf[..n]).unwrap();
+let (from, _to, payload) = gnet_relay::decode(&buf[..n]).unwrap();
 ```
 
 ## Design
 
 - **No external crates.** `[dependencies]` is empty; tests use the sibling
-  `mesh-rand` for randomized coverage and benches use a hand-rolled `std::time`
+  `gnet-rand` for randomized coverage and benches use a hand-rolled `std::time`
   harness — no `criterion` / `proptest` / `libfuzzer-sys`.
 - **Zero allocation on the hot path.** `encode_into` writes into the caller's
   send buffer; `decode` / `dst_key` borrow. Matches the per-packet discipline
-  of `mesh-crypto`'s `seal_in_place`.
+  of `gnet-crypto`'s `seal_in_place`.
 - **No length field.** The inner datagram is delimited by the UDP payload
   boundary, exactly as an unrelayed datagram is.
 - **`#![forbid(unsafe_code)]`.**

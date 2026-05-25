@@ -6,11 +6,11 @@
 # so loss stays at 0%. Without the window (strict in-order nonce) a reordered
 # packet fails to decrypt and the session wedges — loss would be severe.
 #
-#   sudo bash crates/meshcli/scripts/netns-reorder.sh
+#   sudo bash crates/gnetcli/scripts/netns-reorder.sh
 set -u
 
-cargo build -p meshcli 2>&1 | tail -1 || exit 1
-BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/meshcli"
+cargo build -p gnetcli 2>&1 | tail -1 || exit 1
+BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnetcli"
 TMP=$(mktemp -d)
 
 cleanup() {
@@ -18,8 +18,8 @@ cleanup() {
         kill "${pid[$i]:-}" 2>/dev/null
         ip netns del "ns$i" 2>/dev/null
     done
-    iptables -D FORWARD -i br-mesh -o br-mesh -j ACCEPT 2>/dev/null
-    ip link del br-mesh 2>/dev/null
+    iptables -D FORWARD -i br-gnet -o br-gnet -j ACCEPT 2>/dev/null
+    ip link del br-gnet 2>/dev/null
     rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -32,14 +32,14 @@ for i in 1 2; do
 done
 
 # underlay bridge with one veth per namespace (192.168.51.0/24)
-ip link add br-mesh type bridge
-ip link set br-mesh up
-iptables -I FORWARD -i br-mesh -o br-mesh -j ACCEPT 2>/dev/null
+ip link add br-gnet type bridge
+ip link set br-gnet up
+iptables -I FORWARD -i br-gnet -o br-gnet -j ACCEPT 2>/dev/null
 for i in 1 2; do
     ip netns add "ns$i"
     ip link add "veth$i" type veth peer name "br$i"
     ip link set "veth$i" netns "ns$i"
-    ip link set "br$i" master br-mesh
+    ip link set "br$i" master br-gnet
     ip link set "br$i" up
     ip -n "ns$i" addr add "192.168.51.$i/24" dev "veth$i"
     ip -n "ns$i" link set "veth$i" up

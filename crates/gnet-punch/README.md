@@ -1,10 +1,10 @@
-# mesh-punch
+# gnet-punch
 
 Zero-dependency **DCUtR-style synchronized hole-punch rendezvous** for the
-**mesh** overlay — the wire codec + the per-peer state machine.
+**gnet** overlay — the wire codec + the per-peer state machine.
 
 > Part of a from-scratch WireGuard/Tailscale-class encrypted overlay. 0 external
-> crates.io deps (only the sibling `mesh-wire` for the address codec).
+> crates.io deps (only the sibling `gnet-wire` for the address codec).
 
 ## What it is
 
@@ -43,11 +43,11 @@ Idle ─(target receives connect)─▶ Awaiting{endpoint} ─(dials on sync)─
 
 ## Design
 
-- **0-dep** beyond `mesh-wire`; `#![forbid(unsafe_code)]`.
+- **0-dep** beyond `gnet-wire`; `#![forbid(unsafe_code)]`.
 - Pure logic: clock injected via `now: Instant` params, so the state machine is
   unit-testable without sleeping.
 - Hand-rolled std::time bench, `BUDGETS.md`, `tests/perf_gate.rs`, a randomized
-  codec property test via the sibling `mesh-rand` (no proptest), plus
+  codec property test via the sibling `gnet-rand` (no proptest), plus
   README/CHANGELOG/dual-LICENSE/crates.io metadata.
 
 ## License

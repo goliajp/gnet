@@ -10,18 +10,18 @@
 # source IP it uses (.10 -> .11), removing the old one so replies to the stale
 # endpoint cannot reach it — making roaming the sole discriminator.
 #
-#   sudo bash crates/meshcli/scripts/netns-roam.sh
+#   sudo bash crates/gnetcli/scripts/netns-roam.sh
 set -u
 
-cargo build -p meshcli 2>&1 | tail -1 || exit 1
-BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/meshcli"
+cargo build -p gnetcli 2>&1 | tail -1 || exit 1
+BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnetcli"
 TMP=$(mktemp -d)
 
 cleanup() {
     kill "${pid_pub:-}" "${pid_cli:-}" 2>/dev/null
     for ns in ns-pub ns-cli; do ip netns del "$ns" 2>/dev/null; done
-    iptables -D FORWARD -i br-mesh -o br-mesh -j ACCEPT 2>/dev/null
-    ip link del br-mesh 2>/dev/null
+    iptables -D FORWARD -i br-gnet -o br-gnet -j ACCEPT 2>/dev/null
+    ip link del br-gnet 2>/dev/null
     rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -34,14 +34,14 @@ cli_priv=$(echo "$cli_out" | awk '/^private/{print $2}')
 cli_pub=$(echo "$cli_out"  | awk '/^public/{print $2}')
 cli_mlk=$(echo "$cli_out"  | awk '/^mlkem-public/{print $2}')
 
-ip link add br-mesh type bridge; ip link set br-mesh up
-iptables -I FORWARD -i br-mesh -o br-mesh -j ACCEPT 2>/dev/null
+ip link add br-gnet type bridge; ip link set br-gnet up
+iptables -I FORWARD -i br-gnet -o br-gnet -j ACCEPT 2>/dev/null
 
 # ns-pub (A): the public node
 ip netns add ns-pub
 ip link add veth-pub type veth peer name br-pub
 ip link set veth-pub netns ns-pub
-ip link set br-pub master br-mesh; ip link set br-pub up
+ip link set br-pub master br-gnet; ip link set br-pub up
 ip -n ns-pub addr add 192.168.52.1/24 dev veth-pub
 ip -n ns-pub link set veth-pub up
 ip -n ns-pub link set lo up
@@ -50,7 +50,7 @@ ip -n ns-pub link set lo up
 ip netns add ns-cli
 ip link add veth-cli type veth peer name br-cli
 ip link set veth-cli netns ns-cli
-ip link set br-cli master br-mesh; ip link set br-cli up
+ip link set br-cli master br-gnet; ip link set br-cli up
 ip -n ns-cli addr add 192.168.52.10/24 dev veth-cli
 ip -n ns-cli link set veth-cli up
 ip -n ns-cli link set lo up

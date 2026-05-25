@@ -1,6 +1,6 @@
-# mesh-punch performance budgets
+# gnet-punch performance budgets
 
-Baselines from `cargo bench -p mesh-punch` (release, single core). The
+Baselines from `cargo bench -p gnet-punch` (release, single core). The
 rendezvous codec + state transitions are setup-rate (a handful of calls per
 punch), not per-packet, so these are cost-tracking baselines rather than
 data-plane budgets.

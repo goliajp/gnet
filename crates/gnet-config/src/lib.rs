@@ -19,7 +19,7 @@
 //! by `gnet keygen` as `mlkem-public`.
 //!
 //! Part of a from-scratch, 0-external-dependency overlay: depends only on the
-//! sibling stones `mesh-hex` (key codec) and `mesh-crypto` (the `EK_LEN`
+//! sibling stones `gnet-hex` (key codec) and `gnet-crypto` (the `EK_LEN`
 //! constant). A cold-path text parser run once at node startup — no per-packet
 //! budget, hence no bench/BUDGETS, in line with the other utility stones.
 

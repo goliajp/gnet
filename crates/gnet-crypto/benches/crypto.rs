@@ -1,6 +1,6 @@
-//! Zero-dependency throughput benchmarks for `mesh-crypto`.
+//! Zero-dependency throughput benchmarks for `gnet-crypto`.
 //!
-//! Run: `cargo bench -p mesh-crypto`. We use a hand-rolled `std::time`
+//! Run: `cargo bench -p gnet-crypto`. We use a hand-rolled `std::time`
 //! harness because criterion is an external dependency (forbidden here).
 //!
 //! Baseline target: meet or beat best-in-class implementations
@@ -53,7 +53,7 @@ fn main() {
     let mut buf = vec![0u8; SIZE];
 
     println!(
-        "mesh-crypto throughput  ({} KiB/op, {ITERS} iters; target >= ring/dalek/RustCrypto/libsodium)",
+        "gnet-crypto throughput  ({} KiB/op, {ITERS} iters; target >= ring/dalek/RustCrypto/libsodium)",
         SIZE / 1024
     );
 

@@ -1,10 +1,10 @@
-# mesh-config
+# gnet-config
 
-Zero-dependency parser for the **mesh** overlay's WireGuard-style node
+Zero-dependency parser for the **gnet** overlay's WireGuard-style node
 configuration: a node's static identity plus a table of peers.
 
 > Part of a from-scratch, 0-external-dependency overlay. Depends only on the
-> sibling stones `mesh-hex` (key codec) and `mesh-crypto` (the `EK_LEN`
+> sibling stones `gnet-hex` (key codec) and `gnet-crypto` (the `EK_LEN`
 > constant).
 
 ## Format
@@ -31,7 +31,7 @@ peer <pubkey-64hex> <mlkem-ek-hex> <ip> [endpoint]
 No external crates; `#![forbid(unsafe_code)]`. A cold-path parser run once at
 node startup, so there is no per-packet budget — hence no bench/BUDGETS, in line
 with the other utility stones. Randomized roundtrip coverage uses the sibling
-`mesh-rand` (no proptest).
+`gnet-rand` (no proptest).
 
 ## License
 
