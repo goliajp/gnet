@@ -12,6 +12,10 @@
 //! keepalive <secs>           # optional: send an empty transport packet to each
 //!                            # established peer every <secs> to hold NAT mappings
 //!                            # open (0 disables); absent = disabled
+//! coordinator <url>          # optional: gnet-discover base URL for peer polling
+//! device_token <hex>         # optional: long-lived secret returned by `/join`;
+//!                            # the daemon uses it as Bearer auth on
+//!                            # `POST /endpoint-report` (reflexive endpoint updates)
 //! peer <pubkey-64hex> <mlkem-ek-hex> <vip4>[,<vip6>] [endpoint]
 //! peer <pubkey-64hex> <mlkem-ek-hex> <vip4>[,<vip6>] [endpoint]
 //! ```
@@ -74,6 +78,12 @@ pub struct Config {
     /// table. `None` keeps the daemon entirely conf-driven (legacy / offline
     /// deployments).
     pub coordinator: Option<String>,
+    /// Long-lived secret issued by `gnet-discover` at `/join`. The daemon
+    /// presents it as a Bearer token on `POST /endpoint-report` so that the
+    /// coordinator can authenticate reflexive-endpoint updates. `None` keeps
+    /// the daemon read-only against the coordinator (legacy joins or
+    /// always-public peers that never need to report a reflexive endpoint).
+    pub device_token: Option<String>,
     /// Configured peers.
     pub peers: Vec<PeerConfig>,
 }
@@ -86,6 +96,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
     let mut listen: Option<SocketAddr> = None;
     let mut keepalive: Option<Duration> = None;
     let mut coordinator: Option<String> = None;
+    let mut device_token: Option<String> = None;
     let mut peers = Vec::new();
 
     for (lineno, raw) in text.lines().enumerate() {
@@ -129,6 +140,13 @@ pub fn parse(text: &str) -> Result<Config, String> {
                     return Err(err("coordinator: url must start with http:// or https://"));
                 }
                 coordinator = Some(url.trim_end_matches('/').to_string());
+            }
+            "device_token" => {
+                let tok = t.next().ok_or_else(|| err("device_token: missing value"))?;
+                if tok.is_empty() || !tok.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(err("device_token: must be non-empty hex"));
+                }
+                device_token = Some(tok.to_string());
             }
             "peer" => {
                 let pk = t.next().ok_or_else(|| err("peer: missing public key"))?;
@@ -181,6 +199,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
         listen: listen.ok_or("missing `listen`")?,
         keepalive,
         coordinator,
+        device_token,
         peers,
     })
 }
@@ -281,6 +300,25 @@ peer 0000000000000000000000000000000000000000000000000000000000000003 {ek3} 10.8
         );
         // non-numeric is an error
         assert!(parse(&format!("{base}keepalive soon")).is_err());
+    }
+
+    #[test]
+    fn device_token_directive() {
+        let base = "private 0000000000000000000000000000000000000000000000000000000000000001\naddress 10.0.0.1\nlisten 0.0.0.0:1\n";
+        // absent → None
+        assert_eq!(parse(base).unwrap().device_token, None);
+        // present → Some
+        let c = parse(&format!("{base}device_token deadbeef0123456789abcdef")).unwrap();
+        assert_eq!(c.device_token.as_deref(), Some("deadbeef0123456789abcdef"));
+        // empty → reject
+        assert!(parse(&format!("{base}device_token")).is_err());
+        // non-hex → reject
+        assert!(parse(&format!("{base}device_token not-hex!")).is_err());
+        // uppercase hex → reject (we issue lowercase; uppercase would be a typo)
+        // actually accept either since is_ascii_hexdigit() allows both — locked by
+        // explicit assertion below to document the policy.
+        let c = parse(&format!("{base}device_token ABCDEF0123")).unwrap();
+        assert_eq!(c.device_token.as_deref(), Some("ABCDEF0123"));
     }
 
     #[test]
