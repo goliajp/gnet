@@ -10,13 +10,43 @@ use gnet_discover::state::Store;
 #[tokio::main]
 async fn main() -> ExitCode {
     init_log();
-    match run().await {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("gnet-discover: {e}");
-            ExitCode::FAILURE
+    let args: Vec<String> = std::env::args().collect();
+    match args.get(1).map(String::as_str) {
+        Some("--validate-state") => match validate_state().await {
+            Ok(devices) => {
+                println!("ok: state.json loads cleanly ({devices} devices)");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("gnet-discover --validate-state: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("--help") | Some("-h") => {
+            eprintln!("usage:");
+            eprintln!("  gnet-discover                  serve the coordinator (config from env)");
+            eprintln!("  gnet-discover --validate-state load state.json + exit 0/1 (failover check)");
+            ExitCode::SUCCESS
         }
+        _ => match run().await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("gnet-discover: {e}");
+                ExitCode::FAILURE
+            }
+        },
     }
+}
+
+/// Smoke-test that the configured state.json path loads + parses + matches the
+/// current `Device` schema. Operators run this on a warm-standby host against
+/// the latest scp'd backup to verify it's restoreable BEFORE the primary
+/// coordinator goes down. Returns the device count on success.
+async fn validate_state() -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    let config = Config::from_env()?;
+    let store = Store::load(&config.state_path).await?;
+    let snapshot = store.snapshot().await;
+    Ok(snapshot.devices.len())
 }
 
 fn init_log() {
