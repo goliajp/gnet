@@ -57,6 +57,16 @@ impl JoinTokenStore {
         prune(&mut guard);
         guard.remove(token)
     }
+
+    /// Snapshot of currently-live (un-expired) pending enrolments.
+    ///
+    /// Used by allocation logic so two concurrent admin enrols cannot hand
+    /// out the same overlay IP / alias before either device finishes joining.
+    pub async fn live_pending(&self) -> Vec<PendingEnrol> {
+        let mut guard = self.inner.lock().await;
+        prune(&mut guard);
+        guard.values().cloned().collect()
+    }
 }
 
 fn prune(map: &mut HashMap<String, PendingEnrol>) {

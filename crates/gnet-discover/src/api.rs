@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::{JoinTokenStore, admin_token_matches};
 use crate::config::Config;
 use crate::http::{Handler, Request, Response};
-use crate::state::{Device, Store, allocate_v4_octet};
+use crate::state::{Device, Store};
 use crate::time::now_rfc3339;
 
 pub struct AppState {
@@ -65,11 +65,18 @@ async fn admin_enrol(state: Arc<AppState>, req: Request) -> Response {
         return Response::text(400, "Bad Request", "invalid alias");
     }
 
+    // Pending join tokens occupy alias + overlay IP too — without this, two
+    // concurrent admin enrols (before either device finishes joining) would
+    // each see an empty devices snapshot and hand out duplicate assignments.
     let snapshot = state.store.snapshot().await;
-    if snapshot.devices.iter().any(|d| d.alias == body.alias) {
+    let pending = state.join_tokens.live_pending().await;
+
+    if snapshot.devices.iter().any(|d| d.alias == body.alias)
+        || pending.iter().any(|p| p.alias == body.alias)
+    {
         return Response::text(409, "Conflict", "alias already exists");
     }
-    let Some(octet) = allocate_v4_octet(&snapshot) else {
+    let Some(octet) = allocate_v4_octet_with_pending(&snapshot, &pending) else {
         return Response::text(409, "Conflict", "v4 pool exhausted");
     };
     let v4 = format!(
@@ -90,6 +97,26 @@ async fn admin_enrol(state: Arc<AppState>, req: Request) -> Response {
         overlay_v4: v4,
         overlay_v6: v6,
     })
+}
+
+fn allocate_v4_octet_with_pending(
+    state: &crate::state::State,
+    pending: &[crate::auth::PendingEnrol],
+) -> Option<u8> {
+    let mut used: std::collections::HashSet<u8> = state
+        .devices
+        .iter()
+        .filter_map(|d| d.overlay_v4.rsplit('.').next())
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    for p in pending {
+        if let Some(last) = p.overlay_v4.rsplit('.').next()
+            && let Ok(n) = last.parse::<u8>()
+        {
+            used.insert(n);
+        }
+    }
+    (2u8..=254u8).find(|n| !used.contains(n))
 }
 
 // ── join ──────────────────────────────────────────────────────
@@ -425,6 +452,35 @@ mod tests {
         let bad_pk = "A".repeat(64);
         let (st, _) = raw(addr, &join_request(&tok, &bad_pk, "abcd")).await;
         assert_eq!(st, 400);
+    }
+
+    #[tokio::test]
+    async fn concurrent_enrols_get_distinct_overlay_ips() {
+        // Bug fix: previously two enrols before any join completed both saw an
+        // empty devices snapshot and were each assigned 10.42.42.2 (live
+        // pending tokens were ignored by the allocator).
+        let (addr, _t) = spawn_test_server().await;
+        let (_, b1) = raw(addr, &enrol_req("t01", "test-token-1234567890")).await;
+        let v1: serde_json::Value = serde_json::from_str(&b1).unwrap();
+        let (_, b2) = raw(addr, &enrol_req("t02", "test-token-1234567890")).await;
+        let v2: serde_json::Value = serde_json::from_str(&b2).unwrap();
+        assert_ne!(
+            v1["overlay_v4"], v2["overlay_v4"],
+            "two consecutive enrols must get distinct overlay IPs"
+        );
+        assert_eq!(v1["overlay_v4"], "10.42.42.2");
+        assert_eq!(v2["overlay_v4"], "10.42.42.3");
+    }
+
+    #[tokio::test]
+    async fn pending_alias_collides_on_repeat_enrol() {
+        // Same alias enrolled twice before any join should 409 — the first
+        // enrol's pending token already holds the alias.
+        let (addr, _t) = spawn_test_server().await;
+        let (st1, _) = raw(addr, &enrol_req("dup", "test-token-1234567890")).await;
+        assert_eq!(st1, 200);
+        let (st2, _) = raw(addr, &enrol_req("dup", "test-token-1234567890")).await;
+        assert_eq!(st2, 409);
     }
 
     #[tokio::test]

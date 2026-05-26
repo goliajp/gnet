@@ -41,7 +41,7 @@ fn main() -> ExitCode {
             );
             eprintln!("  gnet up <config_path>            (static multi-peer node)");
             eprintln!(
-                "  gnet join --token <T> --coordinator <URL> [--hostname H] [--endpoint EP] [--out PATH] [--no-hosts] [--hosts PATH]"
+                "  gnet join --token <T> --coordinator <URL> [--endpoint EP] [--out PATH] [--no-hosts] [--hosts PATH]"
             );
             eprintln!("  gnet purge-hosts [--hosts PATH]  (remove the gnet block from /etc/hosts)");
             return ExitCode::FAILURE;
