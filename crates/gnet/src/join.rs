@@ -1,9 +1,10 @@
-//! `gnet join` — onboard a daemon against a coordinator.
+//! `gnet join` — onboard a daemon against a gnet-discover coordinator.
 //!
 //! Generates a fresh X25519 + ML-KEM-768 identity, POSTs to
-//! `<coordinator>/gnet/login` with the supplied one-shot auth-key, and
-//! writes a complete config file to disk (the daemon's static private
-//! key is prepended locally; the coordinator never sees it).
+//! `<coordinator>/join` carrying the one-shot join token in the
+//! `X-Join-Token` header, and writes a complete config file to disk (the
+//! daemon's static private key is prepended locally; the coordinator never
+//! sees it).
 //!
 //! HTTP transport is delegated to the system `curl` binary so the gnet
 //! crate itself stays free of any external Rust dependencies. JSON
@@ -35,41 +36,29 @@ pub fn run(args: &[String]) -> io::Result<()> {
     let pk_hex = hex::encode(&pk);
     let mlkem_ek_hex = hex::encode(&mlkem_ek);
 
-    // 2. POST to coordinator.
-    let hostname = opts
-        .hostname
-        .clone()
-        .or_else(read_system_hostname)
-        .ok_or_else(|| io::Error::other("hostname: not provided and `hostname` lookup failed"))?;
-    let body = build_request_json(
+    // 2. POST to coordinator. The join token rides in X-Join-Token; the body
+    //    carries the device's public material + reflexive endpoint hint.
+    let body = build_request_json(&pk_hex, &mlkem_ek_hex, opts.endpoint.as_deref());
+    eprintln!("posting join to {}/join", opts.coordinator);
+    let resp = post_json(
+        &format!("{}/join", opts.coordinator),
+        &body,
         &opts.token,
-        &pk_hex,
-        &mlkem_ek_hex,
-        &hostname,
-        opts.endpoint.as_deref(),
-    );
-    eprintln!(
-        "posting enrol to {}/gnet/login (hostname={hostname})",
-        opts.coordinator
-    );
-    let resp = post_json(&format!("{}/gnet/login", opts.coordinator), &body)?;
+    )?;
 
     // 3. Parse response (hand-rolled subset of JSON).
     let alias = extract_string(&resp, "alias")
         .ok_or_else(|| io::Error::other("response missing `alias`"))?;
-    let device_id = extract_string(&resp, "deviceId")
-        .ok_or_else(|| io::Error::other("response missing `deviceId`"))?;
-    let overlay_v4 = extract_string(&resp, "overlayV4")
-        .ok_or_else(|| io::Error::other("response missing `overlayV4`"))?;
-    let overlay_v6 = extract_string(&resp, "overlayV6")
-        .ok_or_else(|| io::Error::other("response missing `overlayV6`"))?;
+    let overlay_v4 = extract_string(&resp, "overlay_v4")
+        .ok_or_else(|| io::Error::other("response missing `overlay_v4`"))?;
+    let overlay_v6 = extract_string(&resp, "overlay_v6")
+        .ok_or_else(|| io::Error::other("response missing `overlay_v6`"))?;
     let peers_block = extract_array(&resp, "peers")
         .ok_or_else(|| io::Error::other("response missing `peers` array"))?;
     let peer_objs = split_objects(peers_block);
 
     // 4. Build conf text (gnet-config format).
     let mut conf = String::new();
-    conf.push_str(&format!("# device_id {device_id}\n"));
     conf.push_str(&format!("# alias {alias}\n"));
     conf.push_str(&format!("private {}\n", hex::encode(&sk)));
     conf.push_str(&format!("address  {overlay_v4}\n"));
@@ -79,15 +68,15 @@ pub fn run(args: &[String]) -> io::Result<()> {
     // hand them to the /etc/hosts splice below without re-parsing.
     let mut peer_hosts: Vec<hosts::Entry> = Vec::with_capacity(peer_objs.len());
     for obj in &peer_objs {
-        let p_pk = extract_string(obj, "x25519Pubkey")
-            .ok_or_else(|| io::Error::other("peer missing x25519Pubkey"))?;
-        let p_ek = extract_string(obj, "mlkemEk")
-            .ok_or_else(|| io::Error::other("peer missing mlkemEk"))?;
-        let p_vip4 = extract_string(obj, "overlayV4")
-            .ok_or_else(|| io::Error::other("peer missing overlayV4"))?;
-        // overlayV6 is optional on the wire only as a defensive guard; the
-        // server always emits it in v0.1 since both stacks are dual-stack.
-        let p_vip6 = extract_string(obj, "overlayV6");
+        let p_pk = extract_string(obj, "x25519_pubkey")
+            .ok_or_else(|| io::Error::other("peer missing x25519_pubkey"))?;
+        let p_ek = extract_string(obj, "mlkem_ek")
+            .ok_or_else(|| io::Error::other("peer missing mlkem_ek"))?;
+        let p_vip4 = extract_string(obj, "overlay_v4")
+            .ok_or_else(|| io::Error::other("peer missing overlay_v4"))?;
+        // overlay_v6 is optional on the wire only as a defensive guard; the
+        // server always emits it since v0.1 (both stacks are dual-stack).
+        let p_vip6 = extract_string(obj, "overlay_v6");
         let p_alias =
             extract_string(obj, "alias").ok_or_else(|| io::Error::other("peer missing alias"))?;
         let vip_token = match &p_vip6 {
@@ -142,7 +131,6 @@ pub fn run(args: &[String]) -> io::Result<()> {
         }
     };
 
-    println!("device_id  {device_id}");
     println!("alias      {alias}");
     println!("overlay_v4 {overlay_v4}");
     println!("overlay_v6 {overlay_v6}");
@@ -208,7 +196,6 @@ fn splice_hosts_atomic(
 struct Options {
     token: String,
     coordinator: String,
-    hostname: Option<String>,
     endpoint: Option<String>,
     out: PathBuf,
     /// Opt-out of writing the /etc/hosts marker block.
@@ -223,7 +210,6 @@ impl Options {
     fn parse(args: &[String]) -> io::Result<Self> {
         let mut token = None;
         let mut coordinator = None;
-        let mut hostname = None;
         let mut endpoint = None;
         let mut out = default_conf_path();
         let mut no_hosts = false;
@@ -245,10 +231,6 @@ impl Options {
                     coordinator = Some(val_at(i + 1, "--coordinator")?);
                     i += 2;
                 }
-                "--hostname" => {
-                    hostname = Some(val_at(i + 1, "--hostname")?);
-                    i += 2;
-                }
                 "--endpoint" => {
                     endpoint = Some(val_at(i + 1, "--endpoint")?);
                     i += 2;
@@ -267,7 +249,7 @@ impl Options {
                 }
                 other => {
                     return Err(io::Error::other(format!(
-                        "unknown argument `{other}`; expected --token/--coordinator/--hostname/--endpoint/--out/--no-hosts/--hosts"
+                        "unknown argument `{other}`; expected --token/--coordinator/--endpoint/--out/--no-hosts/--hosts"
                     )));
                 }
             }
@@ -280,7 +262,6 @@ impl Options {
         Ok(Self {
             token,
             coordinator,
-            hostname,
             endpoint,
             out,
             no_hosts,
@@ -304,30 +285,19 @@ fn default_conf_path() -> PathBuf {
     PathBuf::from("./gnet.conf")
 }
 
-fn read_system_hostname() -> Option<String> {
-    let out = Command::new("hostname").output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() { None } else { Some(s) }
-}
-
 fn build_request_json(
-    token: &str,
     x25519_pubkey: &str,
     mlkem_ek: &str,
-    hostname: &str,
     endpoint: Option<&str>,
 ) -> String {
-    let mut s = String::with_capacity(2048);
+    let mut s = String::with_capacity(512);
     s.push('{');
-    s.push_str(&format!("\"authKey\":\"{}\"", json_escape(token)));
-    s.push_str(&format!(",\"x25519Pubkey\":\"{x25519_pubkey}\""));
-    s.push_str(&format!(",\"mlkemEk\":\"{mlkem_ek}\""));
-    s.push_str(&format!(",\"hostname\":\"{}\"", json_escape(hostname)));
+    s.push_str(&format!("\"x25519_pubkey\":\"{x25519_pubkey}\""));
+    s.push_str(&format!(",\"mlkem_ek\":\"{mlkem_ek}\""));
     if let Some(ep) = endpoint {
         s.push_str(&format!(",\"endpoint\":\"{}\"", json_escape(ep)));
+    } else {
+        s.push_str(",\"endpoint\":null");
     }
     s.push('}');
     s
@@ -351,9 +321,10 @@ fn json_escape(raw: &str) -> String {
     out
 }
 
-/// POST a JSON body via `curl`. Returns the response body on 2xx; errors
-/// on transport failure or non-2xx HTTP status.
-fn post_json(url: &str, body: &str) -> io::Result<String> {
+/// POST a JSON body via `curl`, attaching the one-shot join token in the
+/// `X-Join-Token` header. Returns the response body on 2xx; errors on
+/// transport failure or non-2xx HTTP status.
+fn post_json(url: &str, body: &str, join_token: &str) -> io::Result<String> {
     let out = Command::new("curl")
         .arg("--silent")
         .arg("--show-error")
@@ -368,6 +339,8 @@ fn post_json(url: &str, body: &str) -> io::Result<String> {
         .arg("Content-Type: application/json")
         .arg("-H")
         .arg("Accept: application/json")
+        .arg("-H")
+        .arg(format!("X-Join-Token: {join_token}"))
         .arg("-d")
         .arg(body)
         .arg(url)
@@ -752,19 +725,19 @@ mod tests {
     }
 
     #[test]
-    fn build_request_json_omits_endpoint_when_absent() {
-        let s = build_request_json("tok", "aa", "bb", "host", None);
-        assert!(s.contains("\"authKey\":\"tok\""));
-        assert!(s.contains("\"x25519Pubkey\":\"aa\""));
-        assert!(s.contains("\"mlkemEk\":\"bb\""));
-        assert!(s.contains("\"hostname\":\"host\""));
-        assert!(!s.contains("endpoint"));
+    fn build_request_json_endpoint_null_when_absent() {
+        let s = build_request_json("aa", "bb", None);
+        assert!(s.contains("\"x25519_pubkey\":\"aa\""));
+        assert!(s.contains("\"mlkem_ek\":\"bb\""));
+        assert!(s.contains("\"endpoint\":null"));
+        assert!(!s.contains("authKey"));
+        assert!(!s.contains("hostname"));
     }
 
     #[test]
-    fn build_request_json_escapes_quotes_in_hostname() {
-        let s = build_request_json("tok", "aa", "bb", "ho\"st", None);
-        assert!(s.contains("\"hostname\":\"ho\\\"st\""));
+    fn build_request_json_escapes_quotes_in_endpoint() {
+        let s = build_request_json("aa", "bb", Some("ho\"st:1"));
+        assert!(s.contains("\"endpoint\":\"ho\\\"st:1\""));
     }
 
     #[test]
@@ -784,9 +757,7 @@ mod tests {
             "--token".into(),
             "tsk-1".into(),
             "--coordinator".into(),
-            "https://portal.golia.jp/".into(),
-            "--hostname".into(),
-            "mini".into(),
+            "http://gnet.golia.jp:44520/".into(),
             "--endpoint".into(),
             "1.2.3.4:51820".into(),
             "--out".into(),
@@ -797,8 +768,7 @@ mod tests {
         let opts = Options::parse(&argv).unwrap();
         assert_eq!(opts.token, "tsk-1");
         // trailing / stripped from coordinator
-        assert_eq!(opts.coordinator, "https://portal.golia.jp");
-        assert_eq!(opts.hostname.as_deref(), Some("mini"));
+        assert_eq!(opts.coordinator, "http://gnet.golia.jp:44520");
         assert_eq!(opts.endpoint.as_deref(), Some("1.2.3.4:51820"));
         assert_eq!(opts.out, PathBuf::from("/tmp/x.conf"));
         assert_eq!(opts.hosts, Some(PathBuf::from("/tmp/x.hosts")));
