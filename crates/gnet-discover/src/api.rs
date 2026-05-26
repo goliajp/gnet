@@ -2,11 +2,12 @@
 //!
 //! Endpoints:
 //! - `GET  /healthz`            — unauth liveness probe.
-//! - `POST /admin/enrol`        — admin Bearer; creates pending row + returns join token.
-//! - `POST /join`               — `x-join-token` header; finalises row, returns
+//! - `POST   /admin/enrol`            — admin Bearer; creates pending row + returns join token.
+//! - `DELETE /admin/devices/<alias>`  — admin Bearer; removes device + any pending token.
+//! - `POST   /join`                   — `x-join-token` header; finalises row, returns
 //!   conf JSON including a long-lived `device_token`.
-//! - `POST /endpoint-report`    — device Bearer; updates own underlay endpoint.
-//! - `GET  /peers`              — `x-device-pubkey` header; current peer list (self excluded).
+//! - `POST   /endpoint-report`        — device Bearer; updates own underlay endpoint.
+//! - `GET    /peers`                  — `x-device-pubkey` header; current peer list.
 
 use std::sync::Arc;
 
@@ -27,6 +28,12 @@ pub struct AppState {
 pub fn handler() -> Handler<AppState> {
     Arc::new(|req: Request, state: Arc<AppState>| {
         Box::pin(async move {
+            // dynamic-segment routes first (path-prefix match), then static routes.
+            if req.method == "DELETE"
+                && let Some(alias) = req.path.strip_prefix("/admin/devices/")
+            {
+                return admin_delete_device(state, &req, alias).await;
+            }
             match (req.method.as_str(), req.path.as_str()) {
                 ("GET", "/healthz") => Response::text(200, "OK", "ok"),
                 ("POST", "/admin/enrol") => admin_enrol(state, req).await,
@@ -220,6 +227,41 @@ async fn join(state: Arc<AppState>, req: Request) -> Response {
         device_token,
         peers,
     })
+}
+
+// ── admin delete device ───────────────────────────────────────
+
+async fn admin_delete_device(state: Arc<AppState>, req: &Request, alias: &str) -> Response {
+    let Some(provided) = bearer(req) else {
+        return Response::text(401, "Unauthorized", "missing bearer");
+    };
+    if !admin_token_matches(&state.config.admin_token, provided) {
+        return Response::text(401, "Unauthorized", "bad admin token");
+    }
+    if !valid_alias(alias) {
+        return Response::text(400, "Bad Request", "invalid alias");
+    }
+
+    let snapshot = state.store.snapshot().await;
+    if !snapshot.devices.iter().any(|d| d.alias == alias) {
+        // also clear any pending token for this alias — caller may want to
+        // recycle the slot even if no completed device row exists.
+        let _ = state.join_tokens.evict_alias(alias).await;
+        return Response::text(404, "Not Found", "no such device");
+    }
+
+    let target = alias.to_string();
+    let persist = state
+        .store
+        .mutate(move |st| {
+            st.devices.retain(|d| d.alias != target);
+        })
+        .await;
+    if persist.is_err() {
+        return Response::text(500, "Internal Server Error", "persist failed");
+    }
+    let _ = state.join_tokens.evict_alias(alias).await;
+    Response::text(200, "OK", "deleted")
 }
 
 // ── endpoint-report ───────────────────────────────────────────
@@ -561,6 +603,80 @@ mod tests {
         let (_, body) = raw(addr, &join_request(&join_tok, pk, ek)).await;
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         v["device_token"].as_str().unwrap().to_string()
+    }
+
+    fn delete_device_req(alias: &str, admin_token: &str) -> Vec<u8> {
+        format!(
+            "DELETE /admin/devices/{alias} HTTP/1.1\r\nhost: x\r\nauthorization: Bearer {admin_token}\r\n\r\n"
+        )
+        .into_bytes()
+    }
+
+    #[tokio::test]
+    async fn admin_delete_device_happy_path() {
+        let (addr, _t) = spawn_test_server().await;
+        let pk = "a".repeat(64);
+        let _ = enrol_and_join(addr, "alpha", &pk, &"aa".repeat(32)).await;
+
+        // alias is present in /peers (from a second device's perspective)
+        let pk_other = "b".repeat(64);
+        let _ = enrol_and_join(addr, "beta", &pk_other, &"bb".repeat(32)).await;
+        let probe = format!("GET /peers HTTP/1.1\r\nhost: x\r\nx-device-pubkey: {pk_other}\r\n\r\n");
+        let (_, body) = raw(addr, probe.as_bytes()).await;
+        assert!(body.contains("alpha"), "alpha should be visible before delete");
+
+        // delete
+        let (st, body) = raw(addr, &delete_device_req("alpha", "test-token-1234567890")).await;
+        assert_eq!(st, 200, "{body}");
+
+        // gone from /peers
+        let (_, body) = raw(addr, probe.as_bytes()).await;
+        assert!(!body.contains("alpha"), "alpha should be gone after delete");
+
+        // alias slot is now free — re-enrol succeeds (would 409 if still held)
+        let (st, _) = raw(addr, &enrol_req("alpha", "test-token-1234567890")).await;
+        assert_eq!(st, 200);
+    }
+
+    #[tokio::test]
+    async fn admin_delete_device_unknown_alias_404() {
+        let (addr, _t) = spawn_test_server().await;
+        let (st, _) = raw(addr, &delete_device_req("nobody", "test-token-1234567890")).await;
+        assert_eq!(st, 404);
+    }
+
+    #[tokio::test]
+    async fn admin_delete_device_rejects_bad_token() {
+        let (addr, _t) = spawn_test_server().await;
+        let (st, _) = raw(addr, &delete_device_req("anyalias", "wrong-token-12345")).await;
+        assert_eq!(st, 401);
+    }
+
+    #[tokio::test]
+    async fn admin_delete_device_evicts_pending_alias() {
+        // Even if no completed device row exists, an unfinished /admin/enrol
+        // holds the alias slot. DELETE should evict the pending token so the
+        // alias can be re-issued without waiting for the 10-min TTL.
+        let (addr, _t) = spawn_test_server().await;
+        let (_, _) = raw(addr, &enrol_req("ghost", "test-token-1234567890")).await;
+        // re-enrol immediately → conflict
+        let (st, _) = raw(addr, &enrol_req("ghost", "test-token-1234567890")).await;
+        assert_eq!(st, 409);
+        // delete (returns 404 since no completed row, but should still evict pending)
+        let _ = raw(addr, &delete_device_req("ghost", "test-token-1234567890")).await;
+        // now re-enrol works
+        let (st, _) = raw(addr, &enrol_req("ghost", "test-token-1234567890")).await;
+        assert_eq!(st, 200);
+    }
+
+    #[tokio::test]
+    async fn admin_delete_device_rejects_invalid_alias() {
+        // `!` is rejected by valid_alias (alphanumeric + `-_` only).
+        // Space cannot be used here — httparse rejects spaces in the request-uri
+        // and the server drops the connection without a response.
+        let (addr, _t) = spawn_test_server().await;
+        let (st, _) = raw(addr, &delete_device_req("bad!alias", "test-token-1234567890")).await;
+        assert_eq!(st, 400);
     }
 
     #[tokio::test]

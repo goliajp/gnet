@@ -67,6 +67,16 @@ impl JoinTokenStore {
         prune(&mut guard);
         guard.values().cloned().collect()
     }
+
+    /// Drop every pending token associated with `alias`. Called by the
+    /// device-delete admin path so the freed alias is immediately re-enrollable.
+    /// Returns the number of pending tokens evicted (0 if none).
+    pub async fn evict_alias(&self, alias: &str) -> usize {
+        let mut guard = self.inner.lock().await;
+        let before = guard.len();
+        guard.retain(|_, p| p.alias != alias);
+        before - guard.len()
+    }
 }
 
 fn prune(map: &mut HashMap<String, PendingEnrol>) {
