@@ -144,6 +144,7 @@ pub fn run(config: Config) -> io::Result<()> {
 
     let keepalive = config.keepalive;
     let coordinator = config.coordinator.clone();
+    let device_token = config.device_token.clone();
     let peers = config
         .peers
         .into_iter()
@@ -254,7 +255,7 @@ pub fn run(config: Config) -> io::Result<()> {
     // start the discovery thread if a coordinator URL is configured —
     // it polls /peers and hot-adds newly-joined peers to `Node.peers`.
     if let Some(url) = coordinator.clone() {
-        discovery::spawn(node.clone(), url);
+        discovery::spawn(node.clone(), url, device_token.clone());
     }
 
     let up = pump::uplink(tun.clone(), socket.clone(), node.clone());
