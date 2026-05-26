@@ -68,6 +68,12 @@ pub struct Config {
     /// sent to every established peer each interval to keep NAT mappings open.
     /// `None` disables keepalive.
     pub keepalive: Option<Duration>,
+    /// gnet-discover coordinator base URL — when set, the daemon spawns a
+    /// background discovery thread that polls `GET <coordinator>/peers`
+    /// periodically and hot-adds newly-joined peers to the in-memory routing
+    /// table. `None` keeps the daemon entirely conf-driven (legacy / offline
+    /// deployments).
+    pub coordinator: Option<String>,
     /// Configured peers.
     pub peers: Vec<PeerConfig>,
 }
@@ -79,6 +85,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
     let mut address6: Option<IpAddr> = None;
     let mut listen: Option<SocketAddr> = None;
     let mut keepalive: Option<Duration> = None;
+    let mut coordinator: Option<String> = None;
     let mut peers = Vec::new();
 
     for (lineno, raw) in text.lines().enumerate() {
@@ -115,6 +122,13 @@ pub fn parse(text: &str) -> Result<Config, String> {
                 let secs: u64 = s.parse().map_err(|_| err("keepalive: bad seconds"))?;
                 // 0 disables, matching WireGuard's PersistentKeepalive semantics
                 keepalive = (secs > 0).then(|| Duration::from_secs(secs));
+            }
+            "coordinator" => {
+                let url = t.next().ok_or_else(|| err("coordinator: missing url"))?;
+                if !(url.starts_with("http://") || url.starts_with("https://")) {
+                    return Err(err("coordinator: url must start with http:// or https://"));
+                }
+                coordinator = Some(url.trim_end_matches('/').to_string());
             }
             "peer" => {
                 let pk = t.next().ok_or_else(|| err("peer: missing public key"))?;
@@ -166,6 +180,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
         address6,
         listen: listen.ok_or("missing `listen`")?,
         keepalive,
+        coordinator,
         peers,
     })
 }
@@ -266,6 +281,21 @@ peer 0000000000000000000000000000000000000000000000000000000000000003 {ek3} 10.8
         );
         // non-numeric is an error
         assert!(parse(&format!("{base}keepalive soon")).is_err());
+    }
+
+    #[test]
+    fn coordinator_directive() {
+        let base = "private 0000000000000000000000000000000000000000000000000000000000000001\naddress 10.0.0.1\nlisten 0.0.0.0:1\n";
+        // absent → None
+        assert_eq!(parse(base).unwrap().coordinator, None);
+        // valid http url
+        let c = parse(&format!("{base}coordinator http://gnet.golia.jp:44520")).unwrap();
+        assert_eq!(c.coordinator.as_deref(), Some("http://gnet.golia.jp:44520"));
+        // trailing slash stripped (cosmetic — keeps URLs canonical for downstream concat)
+        let c = parse(&format!("{base}coordinator https://example.test:443/")).unwrap();
+        assert_eq!(c.coordinator.as_deref(), Some("https://example.test:443"));
+        // unsupported scheme rejected
+        assert!(parse(&format!("{base}coordinator ftp://x/")).is_err());
     }
 
     #[test]
