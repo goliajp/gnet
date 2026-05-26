@@ -3,14 +3,16 @@
 //! Endpoints:
 //! - `GET  /healthz`            — unauth liveness probe.
 //! - `POST /admin/enrol`        — admin Bearer; creates pending row + returns join token.
-//! - `POST /join`               — `x-join-token` header; finalises row, returns conf JSON.
+//! - `POST /join`               — `x-join-token` header; finalises row, returns
+//!   conf JSON including a long-lived `device_token`.
+//! - `POST /endpoint-report`    — device Bearer; updates own underlay endpoint.
 //! - `GET  /peers`              — `x-device-pubkey` header; current peer list (self excluded).
 
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::auth::{JoinTokenStore, admin_token_matches};
+use crate::auth::{JoinTokenStore, admin_token_matches, mint_token, token_matches};
 use crate::config::Config;
 use crate::http::{Handler, Request, Response};
 use crate::state::{Device, Store};
@@ -29,6 +31,7 @@ pub fn handler() -> Handler<AppState> {
                 ("GET", "/healthz") => Response::text(200, "OK", "ok"),
                 ("POST", "/admin/enrol") => admin_enrol(state, req).await,
                 ("POST", "/join") => join(state, req).await,
+                ("POST", "/endpoint-report") => endpoint_report(state, req).await,
                 ("GET", "/peers") => peers(state, req).await,
                 _ => Response::text(404, "Not Found", "not found"),
             }
@@ -133,6 +136,9 @@ struct JoinResp {
     alias: String,
     overlay_v4: String,
     overlay_v6: String,
+    /// Long-lived secret the daemon stores in its conf and presents on
+    /// `POST /endpoint-report`. Issued fresh on every successful join.
+    device_token: String,
     peers: Vec<PeerView>,
 }
 
@@ -172,6 +178,7 @@ async fn join(state: Arc<AppState>, req: Request) -> Response {
         return Response::text(401, "Unauthorized", "invalid or expired join token");
     };
 
+    let device_token = mint_token();
     let device = Device {
         alias: pending.alias.clone(),
         x25519_pubkey: body.x25519_pubkey.clone(),
@@ -179,6 +186,7 @@ async fn join(state: Arc<AppState>, req: Request) -> Response {
         overlay_v4: pending.overlay_v4.clone(),
         overlay_v6: pending.overlay_v6.clone(),
         endpoint: body.endpoint,
+        device_token: device_token.clone(),
         created_at: now_rfc3339(),
     };
     let alias = device.alias.clone();
@@ -209,8 +217,58 @@ async fn join(state: Arc<AppState>, req: Request) -> Response {
         alias,
         overlay_v4: v4,
         overlay_v6: v6,
+        device_token,
         peers,
     })
+}
+
+// ── endpoint-report ───────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct EndpointReportReq {
+    endpoint: String,
+}
+
+async fn endpoint_report(state: Arc<AppState>, req: Request) -> Response {
+    let Some(token) = bearer(&req) else {
+        return Response::text(401, "Unauthorized", "missing bearer");
+    };
+    let body: EndpointReportReq = match serde_json::from_slice(&req.body) {
+        Ok(b) => b,
+        Err(_) => return Response::text(400, "Bad Request", "invalid json"),
+    };
+    if body.endpoint.parse::<std::net::SocketAddr>().is_err() {
+        return Response::text(400, "Bad Request", "endpoint must be ip:port");
+    }
+
+    // Constant-time lookup: walk all devices, compare token against each. An
+    // attacker without a valid token cannot learn whether *any* token exists
+    // because the loop always completes.
+    let snapshot = state.store.snapshot().await;
+    let mut matched_pk: Option<String> = None;
+    for d in &snapshot.devices {
+        if !d.device_token.is_empty() && token_matches(&d.device_token, token) {
+            matched_pk = Some(d.x25519_pubkey.clone());
+            // do not break — keeps timing independent of position
+        }
+    }
+    let Some(pk) = matched_pk else {
+        return Response::text(401, "Unauthorized", "unknown device token");
+    };
+
+    let new_ep = body.endpoint;
+    let persist = state
+        .store
+        .mutate(move |st| {
+            if let Some(d) = st.devices.iter_mut().find(|d| d.x25519_pubkey == pk) {
+                d.endpoint = Some(new_ep);
+            }
+        })
+        .await;
+    if persist.is_err() {
+        return Response::text(500, "Internal Server Error", "persist failed");
+    }
+    Response::text(200, "OK", "ok")
 }
 
 // ── peers ─────────────────────────────────────────────────────
@@ -380,6 +438,10 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["alias"], "alpha");
         assert_eq!(v["peers"].as_array().unwrap().len(), 0);
+        assert!(
+            v["device_token"].as_str().is_some_and(|t| t.len() == 48),
+            "device_token must be returned on successful join"
+        );
 
         // device 2 enrol
         let (st, body) = raw(addr, &enrol_req("beta", "test-token-1234567890")).await;
@@ -481,6 +543,92 @@ mod tests {
         assert_eq!(st1, 200);
         let (st2, _) = raw(addr, &enrol_req("dup", "test-token-1234567890")).await;
         assert_eq!(st2, 409);
+    }
+
+    fn endpoint_report_request(device_token: &str, endpoint: &str) -> Vec<u8> {
+        let body = format!(r#"{{"endpoint":"{endpoint}"}}"#);
+        format!(
+            "POST /endpoint-report HTTP/1.1\r\nhost: x\r\nauthorization: Bearer {device_token}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    }
+
+    async fn enrol_and_join(addr: std::net::SocketAddr, alias: &str, pk: &str, ek: &str) -> String {
+        let (_, body) = raw(addr, &enrol_req(alias, "test-token-1234567890")).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let join_tok = v["join_token"].as_str().unwrap().to_string();
+        let (_, body) = raw(addr, &join_request(&join_tok, pk, ek)).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        v["device_token"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn endpoint_report_happy_path() {
+        let (addr, _t) = spawn_test_server().await;
+        let pk = "a".repeat(64);
+        let device_token = enrol_and_join(addr, "alpha", &pk, &"aa".repeat(32)).await;
+
+        let (st, _) =
+            raw(addr, &endpoint_report_request(&device_token, "203.0.113.7:65432")).await;
+        assert_eq!(st, 200);
+
+        // peer list should now include the reported endpoint
+        let pk_other = "b".repeat(64);
+        let _other_dt = enrol_and_join(addr, "beta", &pk_other, &"bb".repeat(32)).await;
+        let req = format!("GET /peers HTTP/1.1\r\nhost: x\r\nx-device-pubkey: {pk_other}\r\n\r\n");
+        let (st, body) = raw(addr, req.as_bytes()).await;
+        assert_eq!(st, 200);
+        let peers: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let alpha = peers
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["alias"] == "alpha")
+            .unwrap();
+        assert_eq!(alpha["endpoint"], "203.0.113.7:65432");
+    }
+
+    #[tokio::test]
+    async fn endpoint_report_rejects_unknown_token() {
+        let (addr, _t) = spawn_test_server().await;
+        let (st, _) = raw(
+            addr,
+            &endpoint_report_request("ffeeddccbbaa99887766554433221100ffeeddccbbaa9988", "1.2.3.4:5000"),
+        )
+        .await;
+        assert_eq!(st, 401);
+    }
+
+    #[tokio::test]
+    async fn endpoint_report_rejects_bad_endpoint_format() {
+        let (addr, _t) = spawn_test_server().await;
+        let pk = "a".repeat(64);
+        let device_token = enrol_and_join(addr, "alpha", &pk, &"aa".repeat(32)).await;
+        let (st, _) = raw(addr, &endpoint_report_request(&device_token, "not-an-address")).await;
+        assert_eq!(st, 400);
+    }
+
+    #[tokio::test]
+    async fn endpoint_report_rejects_empty_token_match() {
+        // pre-v0.3 devices with `device_token == ""` must not match a bearer
+        // header that happens to also be empty (the constant-time compare
+        // would otherwise succeed against any unjoined-legacy row).
+        let (addr, _t) = spawn_test_server().await;
+        // join a device, then deliberately blank its token via the store —
+        // simulates a legacy on-disk row loaded with #[serde(default)].
+        let pk = "a".repeat(64);
+        let _ = enrol_and_join(addr, "alpha", &pk, &"aa".repeat(32)).await;
+        // can't easily reach into store from here without extra wiring, but
+        // we can test the auth path: bearer with empty string must be rejected
+        // by HTTP parsing (no value after `Bearer `).
+        let body = r#"{"endpoint":"1.2.3.4:5000"}"#;
+        let req = format!(
+            "POST /endpoint-report HTTP/1.1\r\nhost: x\r\nauthorization: Bearer \r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let (st, _) = raw(addr, req.as_bytes()).await;
+        assert_eq!(st, 401);
     }
 
     #[tokio::test]

@@ -29,6 +29,12 @@ pub struct Device {
     pub overlay_v4: String,
     pub overlay_v6: String,
     pub endpoint: Option<String>,
+    /// Long-lived secret issued at `/join`. The daemon presents it as a Bearer
+    /// token on `POST /endpoint-report` so a peer can only update its own row.
+    /// `serde(default)` keeps old on-disk state loadable; rows without one are
+    /// patched on next mutation (see `Store::patch_missing_device_tokens`).
+    #[serde(default)]
+    pub device_token: String,
     /// RFC 3339 UTC string, second resolution. See [`crate::time`].
     pub created_at: String,
 }
@@ -108,6 +114,7 @@ mod tests {
             overlay_v4: format!("10.42.42.{last_octet}"),
             overlay_v6: format!("fd8d:f090:2ebb::{last_octet:x}"),
             endpoint: None,
+            device_token: format!("dt-{alias}"),
             created_at: now_rfc3339(),
         }
     }
@@ -162,6 +169,24 @@ mod tests {
             state.devices.push(make_device(&format!("d{n}"), n));
         }
         assert_eq!(allocate_v4_octet(&state), None);
+    }
+
+    #[tokio::test]
+    async fn legacy_state_without_device_token_loads() {
+        // pre-v0.3 state.json with no `device_token` field on any device must
+        // still deserialise, with the missing token defaulting to "".
+        let path = tmp_path("legacy_no_token");
+        let legacy = r#"{"devices":[{
+            "alias":"alpha","x25519_pubkey":"pk","mlkem_ek":"ek",
+            "overlay_v4":"10.42.42.2","overlay_v6":"fd8d:f090:2ebb::2",
+            "endpoint":null,"created_at":"2026-01-01T00:00:00Z"
+        }]}"#;
+        tokio::fs::write(&path, legacy).await.unwrap();
+        let store = Store::load(&path).await.unwrap();
+        let devices = store.snapshot().await.devices;
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].device_token, "");
+        let _ = tokio::fs::remove_file(&path).await;
     }
 
     #[tokio::test]

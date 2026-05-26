@@ -74,10 +74,15 @@ fn prune(map: &mut HashMap<String, PendingEnrol>) {
     map.retain(|_, p| now.duration_since(p.issued_at) < JOIN_TOKEN_TTL);
 }
 
-fn mint_token() -> String {
+pub(crate) fn mint_token() -> String {
     let mut bytes = [0u8; 24];
     gnet_rand::fill(&mut bytes);
     gnet_hex::encode(&bytes)
+}
+
+/// Constant-time compare for any opaque hex/ASCII token (admin / device).
+pub(crate) fn token_matches(expected: &str, provided: &str) -> bool {
+    admin_token_matches(expected, provided)
 }
 
 /// Constant-time compare for admin token check.
