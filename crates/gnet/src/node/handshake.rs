@@ -148,6 +148,7 @@ mod tests {
             mlkem_ek,
             mlkem_dk,
             peers: vec![Peer {
+                alias: String::new(),
                 public: peer_pub,
                 mlkem_ek: peer_ek
                     .into_boxed_slice()

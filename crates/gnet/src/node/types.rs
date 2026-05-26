@@ -74,6 +74,12 @@ pub(super) enum Session {
 
 /// Runtime state for one configured peer.
 pub(super) struct Peer {
+    /// Coordinator-side alias (bare, no `gnet-` prefix). Discovery uses it
+    /// as the stable identifier across key rotations: when a `/peers` row's
+    /// pubkey changes but the alias matches, the daemon treats it as the
+    /// same peer with rotated keys and resets the session in-place.
+    /// Empty string for peers loaded from static conf (no alias source).
+    pub(super) alias: String,
     pub(super) public: [u8; 32],
     pub(super) mlkem_ek: Box<[u8; mlkem::EK_LEN]>,
     pub(super) vip: IpAddr,
@@ -362,6 +368,7 @@ mod tests {
 
     pub(super) fn test_peer(ek: &[u8], session: Session, endpoint: Option<SocketAddr>) -> Peer {
         Peer {
+            alias: String::new(),
             public: [0u8; 32],
             mlkem_ek: Box::<[u8; mlkem::EK_LEN]>::try_from(ek.to_vec().into_boxed_slice())
                 .expect("test ek must be EK_LEN bytes"),

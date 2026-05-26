@@ -8,6 +8,8 @@
 //! - `POST   /join`                   — `x-join-token` header; finalises row, returns
 //!   conf JSON including a long-lived `device_token`.
 //! - `POST   /endpoint-report`        — device Bearer; updates own underlay endpoint.
+//! - `POST   /devices/self/rotate`    — device Bearer; swaps own static keys in place,
+//!   keeps alias + overlay + device_token. Used by `gnet rotate-key`.
 //! - `GET    /peers`                  — `x-device-pubkey` header; current peer list.
 
 use std::sync::Arc;
@@ -45,6 +47,7 @@ pub fn handler() -> Handler<AppState> {
                 ("POST", "/admin/enrol") => admin_enrol(state, req).await,
                 ("POST", "/join") => join(state, req).await,
                 ("POST", "/endpoint-report") => endpoint_report(state, req).await,
+                ("POST", "/devices/self/rotate") => rotate_self(state, req).await,
                 ("GET", "/peers") => peers(state, req).await,
                 _ => Response::text(404, "Not Found", "not found"),
             }
@@ -364,6 +367,69 @@ async fn endpoint_report(state: Arc<AppState>, req: Request) -> Response {
         return Response::text(500, "Internal Server Error", "persist failed");
     }
     Response::text(200, "OK", "ok")
+}
+
+// ── rotate self ───────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct RotateSelfReq {
+    x25519_pubkey: String,
+    mlkem_ek: String,
+}
+
+async fn rotate_self(state: Arc<AppState>, req: Request) -> Response {
+    let Some(token) = bearer(&req) else {
+        return Response::text(401, "Unauthorized", "missing bearer");
+    };
+    let body: RotateSelfReq = match serde_json::from_slice(&req.body) {
+        Ok(b) => b,
+        Err(_) => return Response::text(400, "Bad Request", "invalid json"),
+    };
+    if !is_hex_pubkey(&body.x25519_pubkey) {
+        return Response::text(400, "Bad Request", "x25519_pubkey must be 64 lowercase hex chars");
+    }
+    if !is_lower_hex(&body.mlkem_ek) || body.mlkem_ek.is_empty() {
+        return Response::text(400, "Bad Request", "mlkem_ek must be a non-empty lowercase hex string");
+    }
+
+    // identify the caller by device_token, same constant-time pattern as
+    // endpoint_report. A rotation request must match exactly one device.
+    let snapshot = state.store.snapshot().await;
+    let mut matched_alias: Option<String> = None;
+    for d in &snapshot.devices {
+        if !d.device_token.is_empty() && token_matches(&d.device_token, token) {
+            matched_alias = Some(d.alias.clone());
+        }
+    }
+    let Some(alias) = matched_alias else {
+        return Response::text(401, "Unauthorized", "unknown device token");
+    };
+
+    // reject collisions: rotating into a pubkey already used by another device
+    // would corrupt the peer table (two rows, same pubkey).
+    if snapshot
+        .devices
+        .iter()
+        .any(|d| d.alias != alias && d.x25519_pubkey == body.x25519_pubkey)
+    {
+        return Response::text(409, "Conflict", "x25519_pubkey already used by another device");
+    }
+
+    let new_pk = body.x25519_pubkey;
+    let new_ek = body.mlkem_ek;
+    let persist = state
+        .store
+        .mutate(move |st| {
+            if let Some(d) = st.devices.iter_mut().find(|d| d.alias == alias) {
+                d.x25519_pubkey = new_pk;
+                d.mlkem_ek = new_ek;
+            }
+        })
+        .await;
+    if persist.is_err() {
+        return Response::text(500, "Internal Server Error", "persist failed");
+    }
+    Response::text(200, "OK", "rotated")
 }
 
 // ── peers ─────────────────────────────────────────────────────
@@ -798,6 +864,78 @@ mod tests {
         let (addr, _t) = spawn_test_server().await;
         let (st, _) = raw(addr, &delete_device_req("bad!alias", "test-token-1234567890")).await;
         assert_eq!(st, 400);
+    }
+
+    fn rotate_self_request(device_token: &str, new_pk: &str, new_ek: &str) -> Vec<u8> {
+        let body = format!(r#"{{"x25519_pubkey":"{new_pk}","mlkem_ek":"{new_ek}"}}"#);
+        format!(
+            "POST /devices/self/rotate HTTP/1.1\r\nhost: x\r\nauthorization: Bearer {device_token}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    }
+
+    #[tokio::test]
+    async fn rotate_self_happy_path_swaps_keys_in_place() {
+        let (addr, _t) = spawn_test_server().await;
+        let old_pk = "a".repeat(64);
+        let old_ek = "aa".repeat(32);
+        let device_token = enrol_and_join(addr, "alpha", &old_pk, &old_ek).await;
+
+        // observe old state from a sibling device's /peers
+        let pk_other = "b".repeat(64);
+        let _ = enrol_and_join(addr, "beta", &pk_other, &"bb".repeat(32)).await;
+        let probe = format!("GET /peers HTTP/1.1\r\nhost: x\r\nx-device-pubkey: {pk_other}\r\n\r\n");
+        let (_, body) = raw(addr, probe.as_bytes()).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let alpha = v.as_array().unwrap().iter().find(|p| p["alias"] == "alpha").unwrap();
+        assert_eq!(alpha["x25519_pubkey"], old_pk);
+
+        // rotate
+        let new_pk = "c".repeat(64);
+        let new_ek = "cc".repeat(32);
+        let (st, body) = raw(addr, &rotate_self_request(&device_token, &new_pk, &new_ek)).await;
+        assert_eq!(st, 200, "{body}");
+
+        // /peers now shows the new keys, alias unchanged
+        let (_, body) = raw(addr, probe.as_bytes()).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let alpha = v.as_array().unwrap().iter().find(|p| p["alias"] == "alpha").unwrap();
+        assert_eq!(alpha["x25519_pubkey"], new_pk);
+        assert_eq!(alpha["mlkem_ek"], new_ek);
+    }
+
+    #[tokio::test]
+    async fn rotate_self_rejects_unknown_token() {
+        let (addr, _t) = spawn_test_server().await;
+        let (st, _) = raw(
+            addr,
+            &rotate_self_request("ffeeddccbbaa99887766554433221100ffeeddccbbaa9988", &"a".repeat(64), &"aa".repeat(32)),
+        )
+        .await;
+        assert_eq!(st, 401);
+    }
+
+    #[tokio::test]
+    async fn rotate_self_rejects_bad_pubkey_format() {
+        let (addr, _t) = spawn_test_server().await;
+        let pk = "a".repeat(64);
+        let device_token = enrol_and_join(addr, "alpha", &pk, &"aa".repeat(32)).await;
+        // uppercase rejected (matches /join policy)
+        let (st, _) = raw(addr, &rotate_self_request(&device_token, &"A".repeat(64), &"aa".repeat(32))).await;
+        assert_eq!(st, 400);
+    }
+
+    #[tokio::test]
+    async fn rotate_self_rejects_pubkey_collision() {
+        let (addr, _t) = spawn_test_server().await;
+        let pk_a = "a".repeat(64);
+        let pk_b = "b".repeat(64);
+        let device_token = enrol_and_join(addr, "alpha", &pk_a, &"aa".repeat(32)).await;
+        let _ = enrol_and_join(addr, "beta", &pk_b, &"bb".repeat(32)).await;
+        // alpha tries to rotate INTO beta's pubkey → 409
+        let (st, _) = raw(addr, &rotate_self_request(&device_token, &pk_b, &"cc".repeat(32))).await;
+        assert_eq!(st, 409);
     }
 
     #[tokio::test]
