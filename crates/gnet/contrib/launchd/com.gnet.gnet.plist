@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  gnet overlay daemon (macOS, system-level LaunchDaemon).
+
+  Install:
+    sudo install -d -m 0755 -o root -g wheel /usr/local/etc/gnet /var/log/gnet
+    sudo install -m 0600 -o root -g wheel  /path/to/main.conf   /usr/local/etc/gnet/main.conf
+    sudo install -m 0755 -o root -g wheel  target/release/gnet  /usr/local/bin/gnet
+    sudo install -m 0644 -o root -g wheel  com.gnet.gnet.plist  /Library/LaunchDaemons/com.gnet.gnet.plist
+    sudo launchctl bootstrap system /Library/LaunchDaemons/com.gnet.gnet.plist
+
+  Status / log:
+    sudo launchctl print system/com.gnet.gnet
+    tail -f /var/log/gnet/stderr.log
+
+  Stop / uninstall:
+    sudo launchctl bootout system/com.gnet.gnet
+    sudo rm /Library/LaunchDaemons/com.gnet.gnet.plist
+
+  utun N is owned by this fd; kernel destroys it when the process exits
+  (whether via SIGTERM in bootout or a crash). No PID file, no cleanup script.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.gnet.gnet</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/gnet</string>
+        <string>up</string>
+        <string>/usr/local/etc/gnet/main.conf</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- restart on crash, but not on clean exit (status 0) -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- hold off >=10s between restarts to avoid hammering after a crash loop -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- bootout sends SIGTERM; if still alive after 10s, launchd SIGKILLs -->
+    <key>ExitTimeOut</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/gnet/stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/gnet/stderr.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

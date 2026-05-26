@@ -1,0 +1,54 @@
+# gnet overlay daemon (Linux, systemd template unit).
+#
+# Install one instance:
+#   sudo install -d -m 0755 /etc/gnet /var/log/gnet
+#   sudo install -m 0600 main.conf            /etc/gnet/<instance>.conf
+#   sudo install -m 0755 target/release/gnet  /usr/local/bin/gnet
+#   sudo install -m 0644 gnet@.service        /etc/systemd/system/gnet@.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now gnet@<instance>
+#
+# %i in this template expands to <instance>, so `gnet@main` loads
+# /etc/gnet/main.conf, `gnet@home` loads /etc/gnet/home.conf, etc.
+#
+# Tail logs:   journalctl -u gnet@<instance> -f
+# Status:      systemctl status gnet@<instance>
+# Stop / off:  systemctl disable --now gnet@<instance>
+#
+# tun0 is owned by this fd (IFF_TUN, no IFF_PERSIST); kernel destroys
+# the interface when the process exits. No PID file, no cleanup hook.
+
+[Unit]
+Description=gnet overlay daemon (%i)
+Documentation=https://github.com/goliajp/portal
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/gnet/%i.conf
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gnet up /etc/gnet/%i.conf
+
+# Lifecycle: SIGTERM the main process, give it 10s to close the tun fd,
+# then SIGKILL the whole cgroup. Restart only on failure (status != 0).
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+KillMode=control-group
+TimeoutStopSec=10s
+
+# Hardening (conservative — daemon still needs root + CAP_NET_ADMIN + /dev/net/tun).
+# Wider sandbox flags (PrivateDevices, RestrictAddressFamilies, ProtectKernel*)
+# are deliberately omitted until verified not to break tun ioctl / netlink /
+# raw UDP paths; revisit once Step 1.4 cross-build deploy is green.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/etc/gnet
+ProtectHome=true
+PrivateTmp=true
+LockPersonality=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
