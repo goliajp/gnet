@@ -1,0 +1,26 @@
+[package]
+name = "gnet-discover"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "gnet-discover"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+# control-plane allow-list — see memory [[feedback-gnet-0dep-self-research]]
+# "Control plane 边界 (2026-05-26 v0.2 协商)".
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+httparse.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+gnet-rand = { path = "../gnet-rand" }
+gnet-hex = { path = "../gnet-hex" }
