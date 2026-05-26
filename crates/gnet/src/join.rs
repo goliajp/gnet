@@ -20,7 +20,7 @@ use gnet_hex as hex;
 
 use crate::hosts;
 
-const LISTEN_DEFAULT: &str = "0.0.0.0:51820";
+const LISTEN_DEFAULT: &str = "0.0.0.0:65432";
 /// Default hosts file. The same path on macOS and Linux — we splice a
 /// marker block into it rather than running our own DNS server, to
 /// keep system resolution unaffected when the gnet daemon is down.

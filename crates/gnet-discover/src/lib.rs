@@ -1,4 +1,4 @@
-//! gnet-discover — standalone coordinator (control plane) for the 0-dep gnet mesh.
+//! gnet-discover — standalone coordinator (control plane) for the 0-dep gnet overlay.
 //!
 //! Independent of the portal-server identity stack. Persists device state in a
 //! single JSON file under [`state`]; serves [`api`] via the minimal HTTP/1.1

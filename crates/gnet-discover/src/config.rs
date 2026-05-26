@@ -27,7 +27,7 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
         let bind: SocketAddr = std::env::var("GNET_DISCOVER_BIND")
-            .unwrap_or_else(|_| "0.0.0.0:44520".to_string())
+            .unwrap_or_else(|_| "0.0.0.0:65432".to_string())
             .parse()
             .map_err(|source| ConfigError::BadAddr {
                 var: "GNET_DISCOVER_BIND",
