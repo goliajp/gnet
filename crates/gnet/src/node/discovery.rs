@@ -35,12 +35,20 @@ const POLL_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Start the discovery thread. The thread runs for the process lifetime; if
 /// the coordinator is unreachable it logs and retries on the next interval.
-pub(super) fn spawn(node: Arc<Mutex<Node>>, coordinator: String) {
+///
+/// When `device_token` is `Some`, the same thread also POSTs the daemon's
+/// current reflexive endpoint to `POST /endpoint-report` whenever it changes
+/// (or first becomes known), so two NAT-behind-NAT peers can discover each
+/// other via the coordinator. A `None` token (legacy join, public peer)
+/// silently disables the reporter — peers configured with a static `endpoint`
+/// already advertise themselves via the conf at startup.
+pub(super) fn spawn(node: Arc<Mutex<Node>>, coordinator: String, device_token: Option<String>) {
     let our_pk_hex = {
         let g = node.lock().expect("node mutex");
         hex::encode(&g.public)
     };
     thread::spawn(move || {
+        let mut last_reported: Option<SocketAddr> = None;
         loop {
             match fetch_peers(&coordinator, &our_pk_hex) {
                 Ok(views) => {
@@ -54,9 +62,59 @@ pub(super) fn spawn(node: Arc<Mutex<Node>>, coordinator: String) {
                 }
                 Err(e) => eprintln!("discovery: poll failed: {e}"),
             }
+
+            if let Some(tok) = device_token.as_deref() {
+                let current = node.lock().expect("node mutex").reflexive;
+                if let Some(ep) = current
+                    && last_reported != Some(ep)
+                {
+                    match report_endpoint(&coordinator, tok, ep) {
+                        Ok(()) => {
+                            eprintln!("endpoint-report: {ep} -> coordinator");
+                            last_reported = Some(ep);
+                        }
+                        Err(e) => eprintln!("endpoint-report failed: {e}"),
+                    }
+                }
+            }
+
             thread::sleep(POLL_INTERVAL);
         }
     });
+}
+
+/// POST our reflexive endpoint to `<coordinator>/endpoint-report` with the
+/// device token as Bearer auth. Schema-locked to the v0.3 coordinator.
+fn report_endpoint(coordinator: &str, device_token: &str, endpoint: SocketAddr) -> io::Result<()> {
+    let url = format!("{coordinator}/endpoint-report");
+    let body = format!(r#"{{"endpoint":"{endpoint}"}}"#);
+    let out = Command::new("curl")
+        .arg("--silent")
+        .arg("--show-error")
+        .arg("--fail-with-body")
+        .arg("--connect-timeout")
+        .arg("10")
+        .arg("--max-time")
+        .arg("30")
+        .arg("-X")
+        .arg("POST")
+        .arg("-H")
+        .arg(format!("Authorization: Bearer {device_token}"))
+        .arg("-H")
+        .arg("Content-Type: application/json")
+        .arg("--data-binary")
+        .arg(&body)
+        .arg(&url)
+        .output()?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        return Err(io::Error::other(format!(
+            "curl POST {url} exit={:?} stderr={stderr} body={stdout}",
+            out.status.code()
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
