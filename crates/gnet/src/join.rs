@@ -53,6 +53,9 @@ pub fn run(args: &[String]) -> io::Result<()> {
         .ok_or_else(|| io::Error::other("response missing `overlay_v4`"))?;
     let overlay_v6 = extract_string(&resp, "overlay_v6")
         .ok_or_else(|| io::Error::other("response missing `overlay_v6`"))?;
+    // device_token is optional only for backward compat with pre-v0.3 coordinators;
+    // a current coordinator always emits it, so its absence is logged but not fatal.
+    let device_token = extract_string(&resp, "device_token");
     let peers_block = extract_array(&resp, "peers")
         .ok_or_else(|| io::Error::other("response missing `peers` array"))?;
     let peer_objs = split_objects(peers_block);
@@ -66,6 +69,9 @@ pub fn run(args: &[String]) -> io::Result<()> {
     conf.push_str(&format!("listen   {LISTEN_DEFAULT}\n"));
     // The daemon's discovery thread polls this URL for peer-list refreshes.
     conf.push_str(&format!("coordinator {}\n", opts.coordinator));
+    if let Some(tok) = &device_token {
+        conf.push_str(&format!("device_token {tok}\n"));
+    }
     // Peer entries pulled out as we build the conf, so we can also
     // hand them to the /etc/hosts splice below without re-parsing.
     let mut peer_hosts: Vec<hosts::Entry> = Vec::with_capacity(peer_objs.len());
