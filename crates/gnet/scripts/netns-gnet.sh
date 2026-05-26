@@ -1,15 +1,15 @@
 #!/bin/bash
 # Reproducible multi-peer end-to-end test (Linux, root): three network
-# namespaces on a shared underlay bridge, each running `gnetcli up` with the
+# namespaces on a shared underlay bridge, each running `gnet up` with the
 # other two configured as static peers, then ping across the overlay. Proves
 # the multi-peer data plane — per-destination routing, on-demand Noise_IK
 # handshakes, and many concurrent sessions — with zero external deps.
 #
-#   sudo bash crates/gnetcli/scripts/netns-gnet.sh
+#   sudo bash crates/gnet/scripts/netns-gnet.sh
 set -u
 
-cargo build -p gnetcli 2>&1 | tail -1 || exit 1
-BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnetcli"
+cargo build -p gnet 2>&1 | tail -1 || exit 1
+BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnet"
 TMP=$(mktemp -d)
 
 cleanup() {

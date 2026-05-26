@@ -8,7 +8,7 @@ workspace version.
 
 ### Added
 
-- Extracted from `gnetcli` into a standalone zero-dependency stone: the
+- Extracted from `gnet` into a standalone zero-dependency stone: the
   `Noise_IK_25519_ChaChaPoly_BLAKE2s` handshake (the pattern WireGuard uses),
   built bottom-up on the in-house `gnet-crypto` primitives — `cipher_state`
   (AEAD key + nonce), `symmetric_state` (chaining key + transcript hash +
@@ -19,5 +19,5 @@ workspace version.
   `tests/perf_gate.rs` regression gate, and a `BUDGETS.md` baseline.
 - README, dual LICENSE, crates.io metadata. Zero external crates.
 - Hybrid (Noise_IK + ML-KEM-768) handshake bench + perf_gate (40 ms budget) +
-  BUDGETS row. The hybrid handshake is the one `gnetcli` actually runs;
+  BUDGETS row. The hybrid handshake is the one `gnet` actually runs;
   previously only the classical Noise_IK path was benched and gated.

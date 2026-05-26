@@ -9,11 +9,11 @@
 # Topology (all NATs on one public bridge; each client on its own private one):
 #   ns-a — br-pa — ns-nata — br-pub — ns-natb — br-pb — ns-b
 #
-#   sudo bash crates/gnetcli/scripts/netns-punch.sh
+#   sudo bash crates/gnet/scripts/netns-punch.sh
 set -u
 
-cargo build -p gnetcli 2>&1 | tail -1 || exit 1
-BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnetcli"
+cargo build -p gnet 2>&1 | tail -1 || exit 1
+BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnet"
 TMP=$(mktemp -d)
 A_PUB=192.168.60.10; A_PORT=50001
 B_PUB=192.168.60.20; B_PORT=50002

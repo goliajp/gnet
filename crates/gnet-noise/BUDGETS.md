@@ -22,7 +22,7 @@ initiator and decaps on the responder.)
   runs once when a session comes up, never on the data plane, so the µs cost is
   amortized over the whole connection's traffic.
 - The `hybrid` variant layers an ML-KEM-768 encaps/decaps on top (post-quantum
-  KEM), adding ~60–140 µs. It is the handshake `gnetcli` actually runs, so it is
+  KEM), adding ~60–140 µs. It is the handshake `gnet` actually runs, so it is
   benched and gated here alongside Noise_IK.
 
 ## Regression gate

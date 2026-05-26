@@ -19,11 +19,11 @@
 #                              |
 #                          ns-coord (public, no NAT)
 #
-#   sudo bash crates/gnetcli/scripts/netns-punch-sync.sh
+#   sudo bash crates/gnet/scripts/netns-punch-sync.sh
 set -u
 
-cargo build -p gnetcli 2>&1 | tail -1 || exit 1
-BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnetcli"
+cargo build -p gnet 2>&1 | tail -1 || exit 1
+BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnet"
 TMP=$(mktemp -d)
 A_PUB=192.168.60.10;   A_PORT=50001
 B_PUB=192.168.60.20;   B_PORT=50002

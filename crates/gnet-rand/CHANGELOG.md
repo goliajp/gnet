@@ -8,7 +8,7 @@ workspace version.
 
 ### Added
 
-- Extracted from `gnetcli` into a standalone zero-dependency stone:
+- Extracted from `gnet` into a standalone zero-dependency stone:
   cryptographically-secure OS randomness read from `/dev/urandom` via `std`
   only (no `unsafe`, no crates.io deps). `try_fill` / `fill` / `random_32` /
   `random_u32` cover Noise ephemeral + static key generation and transport

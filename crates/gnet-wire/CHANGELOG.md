@@ -8,7 +8,7 @@ workspace version.
 
 ### Added
 
-- Extracted from `gnetcli`'s internal `wire` module into a standalone
+- Extracted from `gnet`'s internal `wire` module into a standalone
   zero-dependency stone: datagram type tags (`Kind`), `frame` / `parse`, the
   allocation-free transport-header field codecs (`put_index` / `index` /
   `put_counter` / `counter`), and the compact `SocketAddr` codec

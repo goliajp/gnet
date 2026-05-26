@@ -1,14 +1,14 @@
 #!/bin/bash
 # Reproducible end-to-end test (Linux, root): two network namespaces, each
-# running a `gnetcli tunnel` endpoint over its own TUN, ping each other
+# running a `gnet tunnel` endpoint over its own TUN, ping each other
 # through the encrypted gnet. Proves the full data path — Noise_IK handshake
 # + TUN + ChaCha20-Poly1305 transport + UDP — with zero external deps.
 #
-#   sudo bash crates/gnetcli/scripts/netns-ping.sh
+#   sudo bash crates/gnet/scripts/netns-ping.sh
 set -u
 
-cargo build -p gnetcli 2>&1 | tail -1 || exit 1
-BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnetcli"
+cargo build -p gnet 2>&1 | tail -1 || exit 1
+BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnet"
 
 a_out=$("$BIN" keygen); b_out=$("$BIN" keygen)
 a_priv=$(echo "$a_out" | awk '/^private/{print $2}')

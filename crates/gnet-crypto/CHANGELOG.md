@@ -8,7 +8,7 @@ workspace version.
 
 ### Added
 
-- Extracted from `gnetcli` into a standalone zero-dependency cryptographic
+- Extracted from `gnet` into a standalone zero-dependency cryptographic
   core, every primitive hand-written in pure Rust and validated against its
   published known-answer vectors: ChaCha20 + Poly1305 + the ChaCha20-Poly1305
   AEAD (RFC 8439), X25519 (RFC 7748), BLAKE2s + keyed MAC (RFC 7693), HKDF

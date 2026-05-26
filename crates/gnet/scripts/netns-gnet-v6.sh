@@ -1,15 +1,15 @@
 #!/bin/bash
 # IPv6 overlay end-to-end test (Linux, root): three namespaces on a shared
-# IPv4 underlay bridge, each running `gnetcli up` with an IPv6 overlay address
+# IPv4 underlay bridge, each running `gnet up` with an IPv6 overlay address
 # (fd00:88::/64) on the TUN, then ping6 across the overlay. Proves the overlay
 # is dual-stack — IPv6 dst-IP routing, /64 TUN configuration, and IPv6 ICMP
 # over the (IPv4) encrypted transport — with zero external deps.
 #
-#   sudo bash crates/gnetcli/scripts/netns-gnet-v6.sh
+#   sudo bash crates/gnet/scripts/netns-gnet-v6.sh
 set -u
 
-cargo build -p gnetcli 2>&1 | tail -1 || exit 1
-BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnetcli"
+cargo build -p gnet 2>&1 | tail -1 || exit 1
+BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnet"
 TMP=$(mktemp -d)
 
 cleanup() {

@@ -8,11 +8,11 @@
 # converge on one session. This isolates the handshake from any NAT behaviour:
 # run it in a loop to confirm the simultaneous open is deterministic, not flaky.
 #
-#   sudo bash crates/gnetcli/scripts/netns-glare.sh
+#   sudo bash crates/gnet/scripts/netns-glare.sh
 set -u
 
-cargo build -p gnetcli 2>&1 | tail -1 || exit 1
-BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnetcli"
+cargo build -p gnet 2>&1 | tail -1 || exit 1
+BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnet"
 TMP=$(mktemp -d)
 
 cleanup() {
