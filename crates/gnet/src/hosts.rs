@@ -23,9 +23,17 @@
 const BEGIN_MARKER: &str = "# ---BEGIN gnet---";
 const END_MARKER: &str = "# ---END gnet---";
 
+/// Hostname prefix applied to every alias when written into `/etc/hosts`.
+/// Keeps the gnet overlay's name-space distinct from anything else the
+/// system resolver might already know about (Tailscale MagicDNS, mDNS,
+/// other VPN clients, etc.). Coordinator-side aliases stay short
+/// (e.g. `lx64`) — the prefix is a splice-time decoration only.
+pub const HOST_PREFIX: &str = "gnet-";
+
 /// One overlay host: an alias plus its v4 and/or v6 overlay address.
 /// Either family may be absent (e.g. a v4-only peer), in which case
-/// that line is not emitted.
+/// that line is not emitted. `alias` is the bare coordinator alias
+/// (no `gnet-` prefix) — the prefix is added on splice.
 pub struct Entry {
     pub alias: String,
     pub v4: Option<String>,
@@ -45,11 +53,12 @@ pub fn format_block(self_e: &Entry, peers: &[Entry]) -> String {
 }
 
 fn push_entry(out: &mut String, e: &Entry) {
+    let host = format!("{HOST_PREFIX}{}", e.alias);
     if let Some(v4) = &e.v4 {
-        out.push_str(&format!("{v4}\t{}\n", e.alias));
+        out.push_str(&format!("{v4}\t{host}\n"));
     }
     if let Some(v6) = &e.v6 {
-        out.push_str(&format!("{v6}\t{}\n", e.alias));
+        out.push_str(&format!("{v6}\t{host}\n"));
     }
 }
 
@@ -133,25 +142,24 @@ mod tests {
 
     #[test]
     fn format_block_emits_both_families_per_entry() {
+        // entries carry bare aliases; the splice automatically prefixes them
+        // with `gnet-` so they don't collide with Tailscale MagicDNS / mDNS.
         let body = format_block(
-            &e("gnet-mini", Some("10.42.42.7"), Some("fd8d:f090:2ebb::7")),
-            &[e(
-                "gnet-lx64",
-                Some("10.42.42.8"),
-                Some("fd8d:f090:2ebb::8"),
-            )],
+            &e("mini", Some("10.42.42.7"), Some("fd8d:f090:2ebb::7")),
+            &[e("lx64", Some("10.42.42.8"), Some("fd8d:f090:2ebb::8"))],
         );
-        // each alias contributes exactly two lines (one A, one AAAA)
         assert_eq!(body.lines().count(), 4);
         assert!(body.contains("10.42.42.7\tgnet-mini"));
         assert!(body.contains("fd8d:f090:2ebb::7\tgnet-mini"));
         assert!(body.contains("10.42.42.8\tgnet-lx64"));
         assert!(body.contains("fd8d:f090:2ebb::8\tgnet-lx64"));
+        // and not the bare form (that would shadow Tailscale's `lx64`)
+        assert!(!body.contains("10.42.42.7\tmini\n"));
+        assert!(!body.contains("10.42.42.8\tlx64\n"));
     }
 
     #[test]
     fn format_block_skips_absent_family() {
-        // a v4-only peer contributes one line; a v6-only peer one line
         let body = format_block(
             &e("self", Some("10.0.0.1"), None),
             &[
@@ -160,7 +168,9 @@ mod tests {
             ],
         );
         assert_eq!(body.lines().count(), 3);
-        assert!(!body.contains("v6only\n") || body.contains("fd00::3\tv6only"));
+        assert!(body.contains("10.0.0.1\tgnet-self"));
+        assert!(body.contains("10.0.0.2\tgnet-v4only"));
+        assert!(body.contains("fd00::3\tgnet-v6only"));
     }
 
     #[test]
