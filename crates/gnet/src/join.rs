@@ -816,13 +816,14 @@ mod tests {
         let path = tmpdir.join("hosts");
         std::fs::write(&path, "127.0.0.1\tlocalhost\n").unwrap();
 
+        // bare aliases — splice adds `gnet-` prefix automatically (see hosts::HOST_PREFIX)
         let self_e = hosts::Entry {
-            alias: "gnet-self".into(),
+            alias: "self".into(),
             v4: Some("10.42.42.1".into()),
             v6: Some("fd8d::1".into()),
         };
         let peer = hosts::Entry {
-            alias: "gnet-peer".into(),
+            alias: "peer".into(),
             v4: Some("10.42.42.2".into()),
             v6: Some("fd8d::2".into()),
         };

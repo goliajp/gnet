@@ -162,6 +162,9 @@ pub fn run(config: Config) -> io::Result<()> {
             punch_failures: 0,
             relay: false,
             relay_endpoint: None,
+            // static conf has no relay_eligible directive yet — coordinator
+            // is the source of truth and pushes the flag via /peers polling.
+            relay_eligible: false,
         })
         .collect();
     // our own ML-KEM key pair is derived from our X25519 private key.

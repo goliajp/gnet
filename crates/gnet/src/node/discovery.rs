@@ -125,6 +125,7 @@ pub(super) struct PeerView {
     pub overlay_v4: IpAddr,
     pub overlay_v6: Option<IpAddr>,
     pub endpoint: Option<SocketAddr>,
+    pub relay_eligible: bool,
 }
 
 fn fetch_peers(coordinator: &str, our_pk_hex: &str) -> io::Result<Vec<PeerView>> {
@@ -162,8 +163,16 @@ pub(super) fn apply(node: &Mutex<Node>, views: &[PeerView]) -> (usize, usize) {
     for v in views {
         match g.peers.iter_mut().find(|p| p.public == v.x25519_pubkey) {
             Some(existing) => {
+                let mut changed = false;
                 if existing.endpoint != v.endpoint {
                     existing.endpoint = v.endpoint;
+                    changed = true;
+                }
+                if existing.relay_eligible != v.relay_eligible {
+                    existing.relay_eligible = v.relay_eligible;
+                    changed = true;
+                }
+                if changed {
                     updated += 1;
                 }
             }
@@ -182,6 +191,7 @@ pub(super) fn apply(node: &Mutex<Node>, views: &[PeerView]) -> (usize, usize) {
                     punch_failures: 0,
                     relay: false,
                     relay_endpoint: None,
+                    relay_eligible: v.relay_eligible,
                 });
                 added += 1;
             }
@@ -232,6 +242,8 @@ fn parse_peer_object(obj: &str) -> io::Result<PeerView> {
         ),
         _ => None,
     };
+    // optional field — old coordinators omit it; default to false.
+    let relay_eligible = extract_bool(obj, "relay_eligible").unwrap_or(false);
     Ok(PeerView {
         alias,
         x25519_pubkey,
@@ -239,10 +251,24 @@ fn parse_peer_object(obj: &str) -> io::Result<PeerView> {
         overlay_v4,
         overlay_v6,
         endpoint,
+        relay_eligible,
     })
 }
 
 // Hand-rolled extractors — schema-locked, escape-aware enough for our wire.
+
+fn extract_bool(body: &str, key: &str) -> Option<bool> {
+    let key_pos = find_key(body, key)?;
+    let after_colon = skip_to_value(body, key_pos)?;
+    let s = body.get(after_colon..)?;
+    if s.starts_with("true") {
+        Some(true)
+    } else if s.starts_with("false") {
+        Some(false)
+    } else {
+        None
+    }
+}
 
 fn extract_string(body: &str, key: &str) -> Option<String> {
     let key_pos = find_key(body, key)?;
@@ -522,6 +548,7 @@ mod tests {
             overlay_v4: "10.42.42.2".parse().unwrap(),
             overlay_v6: Some("fd8d::2".parse().unwrap()),
             endpoint: Some("1.2.3.4:51820".parse().unwrap()),
+            relay_eligible: false,
         };
         let (added, updated) = apply(&node, &[v]);
         assert_eq!(added, 1);
@@ -543,6 +570,7 @@ mod tests {
             overlay_v4: "10.42.42.2".parse().unwrap(),
             overlay_v6: None,
             endpoint: Some("1.1.1.1:51820".parse().unwrap()),
+            relay_eligible: false,
         };
         let _ = apply(&node, &[v0]);
 
@@ -554,6 +582,7 @@ mod tests {
             overlay_v4: "10.42.42.2".parse().unwrap(),
             overlay_v6: None,
             endpoint: Some("2.2.2.2:51820".parse().unwrap()),
+            relay_eligible: false,
         };
         let (added, updated) = apply(&node, &[v1]);
         assert_eq!(added, 0);
@@ -576,6 +605,7 @@ mod tests {
             overlay_v4: "10.42.42.2".parse().unwrap(),
             overlay_v6: None,
             endpoint: Some("1.1.1.1:51820".parse().unwrap()),
+            relay_eligible: false,
         };
         let _ = apply(&node, std::slice::from_ref(&v));
         let (added, updated) = apply(&node, &[v]);
