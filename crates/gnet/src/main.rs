@@ -16,6 +16,8 @@ use std::process::ExitCode;
 use gnet::{channel, keys};
 use gnet_hex as hex;
 
+mod join;
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let result = match args.get(1).map(String::as_str) {
@@ -25,6 +27,7 @@ fn main() -> ExitCode {
         Some("tunnel-listen") => cmd_tunnel_listen(&args),
         Some("tunnel-connect") => cmd_tunnel_connect(&args),
         Some("up") => cmd_up(&args),
+        Some("join") => join::run(&args),
         _ => {
             eprintln!("usage:");
             eprintln!("  gnet keygen");
@@ -35,6 +38,9 @@ fn main() -> ExitCode {
                 "  gnet tunnel-connect <peer_addr> <private_hex> <peer_public_hex> <local_ip> <peer_ip>"
             );
             eprintln!("  gnet up <config_path>            (static multi-peer node)");
+            eprintln!(
+                "  gnet join --token <T> --coordinator <URL> [--hostname H] [--endpoint EP] [--out PATH]"
+            );
             return ExitCode::FAILURE;
         }
     };
