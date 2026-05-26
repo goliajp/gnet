@@ -77,6 +77,9 @@ pub(super) struct Peer {
     pub(super) public: [u8; 32],
     pub(super) mlkem_ek: Box<[u8; mlkem::EK_LEN]>,
     pub(super) vip: IpAddr,
+    /// Peer's IPv6 overlay address when dual-stack. `None` keeps the peer
+    /// v4-only — `by_vip` then matches v4 packets only.
+    pub(super) vip6: Option<IpAddr>,
     pub(super) endpoint: Option<SocketAddr>,
     /// The index we assigned this session; peers stamp it on transport packets
     /// they send us, so we demux incoming transport by index, not by address.
@@ -124,7 +127,9 @@ pub(super) struct Node {
 
 impl Node {
     pub(super) fn by_vip(&mut self, dst: IpAddr) -> Option<usize> {
-        self.peers.iter().position(|p| p.vip == dst)
+        self.peers
+            .iter()
+            .position(|p| p.vip == dst || p.vip6 == Some(dst))
     }
     pub(super) fn by_endpoint(&mut self, addr: SocketAddr) -> Option<usize> {
         self.peers.iter().position(|p| p.endpoint == Some(addr))
@@ -357,6 +362,7 @@ mod tests {
             mlkem_ek: Box::<[u8; mlkem::EK_LEN]>::try_from(ek.to_vec().into_boxed_slice())
                 .expect("test ek must be EK_LEN bytes"),
             vip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            vip6: None,
             endpoint,
             rx_index: 0,
             tx_index: 0,
@@ -420,6 +426,27 @@ mod tests {
             .recv_at(ctr, &[], &mut ct, ct_len)
             .expect("keepalive decrypts");
         assert_eq!(len, 0);
+    }
+
+    #[test]
+    fn by_vip_matches_both_address_families() {
+        let (ek, _dk) = keys::derive_mlkem(&[9u8; 32]);
+        // peer 0: dual-stack — both vip and vip6 must route to it
+        let mut dual = test_peer(&ek, Session::Idle, None);
+        dual.vip = IpAddr::V4(Ipv4Addr::new(10, 42, 42, 8));
+        dual.vip6 = Some("fd8d:f090:2ebb::8".parse().unwrap());
+        // peer 1: v4-only — its v6 column stays None
+        let mut v4only = test_peer(&ek, Session::Idle, None);
+        v4only.vip = IpAddr::V4(Ipv4Addr::new(10, 42, 42, 9));
+        let mut node = test_node(&ek, vec![dual, v4only]);
+
+        assert_eq!(node.by_vip("10.42.42.8".parse().unwrap()), Some(0));
+        assert_eq!(node.by_vip("fd8d:f090:2ebb::8".parse().unwrap()), Some(0));
+        assert_eq!(node.by_vip("10.42.42.9".parse().unwrap()), Some(1));
+        // v6 packet for a v4-only peer must not match
+        assert_eq!(node.by_vip("fd8d:f090:2ebb::9".parse().unwrap()), None);
+        // an unknown overlay address routes to no peer
+        assert_eq!(node.by_vip("10.42.42.99".parse().unwrap()), None);
     }
 
     #[test]

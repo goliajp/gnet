@@ -65,23 +65,30 @@ pub fn run(args: &[String]) -> io::Result<()> {
     let mut conf = String::new();
     conf.push_str(&format!("# device_id {device_id}\n"));
     conf.push_str(&format!("# alias {alias}\n"));
-    conf.push_str(&format!("# overlay_v6 {overlay_v6}\n"));
     conf.push_str(&format!("private {}\n", hex::encode(&sk)));
-    conf.push_str(&format!("address {overlay_v4}\n"));
-    conf.push_str(&format!("listen {LISTEN_DEFAULT}\n"));
+    conf.push_str(&format!("address  {overlay_v4}\n"));
+    conf.push_str(&format!("address6 {overlay_v6}\n"));
+    conf.push_str(&format!("listen   {LISTEN_DEFAULT}\n"));
     for obj in &peer_objs {
         let p_pk = extract_string(obj, "x25519Pubkey")
             .ok_or_else(|| io::Error::other("peer missing x25519Pubkey"))?;
         let p_ek = extract_string(obj, "mlkemEk")
             .ok_or_else(|| io::Error::other("peer missing mlkemEk"))?;
-        let p_vip = extract_string(obj, "overlayV4")
+        let p_vip4 = extract_string(obj, "overlayV4")
             .ok_or_else(|| io::Error::other("peer missing overlayV4"))?;
+        // overlayV6 is optional on the wire only as a defensive guard; the
+        // server always emits it in v0.1 since both stacks are dual-stack.
+        let p_vip6 = extract_string(obj, "overlayV6");
+        let vip_token = match &p_vip6 {
+            Some(v6) if !v6.is_empty() => format!("{p_vip4},{v6}"),
+            _ => p_vip4,
+        };
         let endpoint = extract_string(obj, "endpoint");
         match endpoint {
             Some(ep) if !ep.is_empty() => {
-                conf.push_str(&format!("peer {p_pk} {p_ek} {p_vip} {ep}\n"));
+                conf.push_str(&format!("peer {p_pk} {p_ek} {vip_token} {ep}\n"));
             }
-            _ => conf.push_str(&format!("peer {p_pk} {p_ek} {p_vip}\n")),
+            _ => conf.push_str(&format!("peer {p_pk} {p_ek} {vip_token}\n")),
         }
     }
 

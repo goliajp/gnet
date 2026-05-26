@@ -187,6 +187,7 @@ mod tests {
                 .try_into()
                 .expect("test ek must be EK_LEN bytes"),
             vip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 9)),
+            vip6: None,
             endpoint,
             rx_index: 0,
             tx_index: 0,
