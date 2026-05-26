@@ -149,6 +149,10 @@ pub fn run(config: Config) -> io::Result<()> {
         .peers
         .into_iter()
         .map(|p| Peer {
+            // static conf has no alias on peer lines — discovery fills it in
+            // on the first coordinator poll. Empty string is a sentinel that
+            // means "not yet known", distinct from "explicit empty alias".
+            alias: String::new(),
             public: p.public,
             mlkem_ek: p.mlkem_ek,
             vip: p.vip,

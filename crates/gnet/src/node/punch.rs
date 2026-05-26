@@ -188,6 +188,7 @@ mod tests {
     /// Build an idle peer with a known pubkey/ek and optional direct endpoint.
     fn peer(public: [u8; 32], ek: Vec<u8>, endpoint: Option<SocketAddr>) -> Peer {
         Peer {
+            alias: String::new(),
             public,
             mlkem_ek: ek
                 .into_boxed_slice()

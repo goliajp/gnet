@@ -156,46 +156,87 @@ fn fetch_peers(coordinator: &str, our_pk_hex: &str) -> io::Result<Vec<PeerView>>
 /// Apply a coordinator-provided peer view to `Node.peers`. Returns
 /// `(added, updated)` counts for telemetry. Self is filtered server-side, so
 /// any view here is a remote peer.
+///
+/// Match order: pubkey first (the common case — endpoint/flag updates);
+/// alias second (key rotation: a peer whose pubkey changed but alias stayed
+/// the same). On alias-match with a different pubkey, the peer's identity
+/// is swapped in place and its session is reset to `Idle` so the next
+/// outbound packet re-handshakes with the new keys.
 pub(super) fn apply(node: &Mutex<Node>, views: &[PeerView]) -> (usize, usize) {
     let mut g = node.lock().expect("node mutex");
     let mut added = 0usize;
     let mut updated = 0usize;
     for v in views {
-        match g.peers.iter_mut().find(|p| p.public == v.x25519_pubkey) {
-            Some(existing) => {
-                let mut changed = false;
-                if existing.endpoint != v.endpoint {
-                    existing.endpoint = v.endpoint;
-                    changed = true;
-                }
-                if existing.relay_eligible != v.relay_eligible {
-                    existing.relay_eligible = v.relay_eligible;
-                    changed = true;
-                }
-                if changed {
-                    updated += 1;
-                }
+        // 1. existing peer with matching pubkey — endpoint/flag refresh
+        if let Some(idx) = g.peers.iter().position(|p| p.public == v.x25519_pubkey) {
+            let p = &mut g.peers[idx];
+            let mut changed = false;
+            // backfill alias if it was empty (peer originally from static conf).
+            if p.alias != v.alias {
+                p.alias = v.alias.clone();
+                changed = true;
             }
-            None => {
-                g.peers.push(Peer {
-                    public: v.x25519_pubkey,
-                    mlkem_ek: v.mlkem_ek.clone(),
-                    vip: v.overlay_v4,
-                    vip6: v.overlay_v6,
-                    endpoint: v.endpoint,
-                    rx_index: 0,
-                    tx_index: 0,
-                    session: Session::Idle,
-                    punch: PunchState::Idle,
-                    punched: false,
-                    punch_failures: 0,
-                    relay: false,
-                    relay_endpoint: None,
-                    relay_eligible: v.relay_eligible,
-                });
-                added += 1;
+            if p.endpoint != v.endpoint {
+                p.endpoint = v.endpoint;
+                changed = true;
             }
+            if p.relay_eligible != v.relay_eligible {
+                p.relay_eligible = v.relay_eligible;
+                changed = true;
+            }
+            if changed {
+                updated += 1;
+            }
+            continue;
         }
+        // 2. alias-keyed lookup — a non-empty alias match with a different
+        //    pubkey means key rotation: swap identity in place, reset session.
+        if !v.alias.is_empty()
+            && let Some(idx) = g.peers.iter().position(|p| p.alias == v.alias)
+        {
+            let p = &mut g.peers[idx];
+            eprintln!(
+                "discovery: peer alias={} rotated keys (pubkey changed), resetting session",
+                v.alias
+            );
+            p.public = v.x25519_pubkey;
+            p.mlkem_ek = v.mlkem_ek.clone();
+            p.vip = v.overlay_v4;
+            p.vip6 = v.overlay_v6;
+            p.endpoint = v.endpoint;
+            p.relay_eligible = v.relay_eligible;
+            // drop any cached session — old keys won't authenticate inbound
+            // transport from the new identity, and we must initiate fresh.
+            p.session = Session::Idle;
+            p.punch = PunchState::Idle;
+            p.punched = false;
+            p.punch_failures = 0;
+            p.relay = false;
+            p.relay_endpoint = None;
+            p.rx_index = 0;
+            p.tx_index = 0;
+            updated += 1;
+            continue;
+        }
+        // 3. genuinely new peer.
+        g.peers.push(Peer {
+            alias: v.alias.clone(),
+            public: v.x25519_pubkey,
+            mlkem_ek: v.mlkem_ek.clone(),
+            vip: v.overlay_v4,
+            vip6: v.overlay_v6,
+            endpoint: v.endpoint,
+            rx_index: 0,
+            tx_index: 0,
+            session: Session::Idle,
+            punch: PunchState::Idle,
+            punched: false,
+            punch_failures: 0,
+            relay: false,
+            relay_endpoint: None,
+            relay_eligible: v.relay_eligible,
+        });
+        added += 1;
     }
     (added, updated)
 }
@@ -612,5 +653,96 @@ mod tests {
         assert_eq!(added, 0);
         assert_eq!(updated, 0);
         assert_eq!(node.lock().unwrap().peers.len(), 1);
+    }
+
+    #[test]
+    fn apply_handles_key_rotation_in_place() {
+        // Peer "alpha" exists with pubkey [0xab; 32] and an established
+        // session. After coordinator rotates alpha to pubkey [0xee; 32],
+        // discovery should not push a second entry — it should swap the
+        // pubkey/ek in place and reset session/punch state so the next
+        // outbound packet re-handshakes with the new keys.
+        let node = make_node_with_self_key([0xcd; 32]);
+        let v0 = PeerView {
+            alias: "alpha".into(),
+            x25519_pubkey: fake_pk(0xab),
+            mlkem_ek: fake_ek(),
+            overlay_v4: "10.42.42.2".parse().unwrap(),
+            overlay_v6: None,
+            endpoint: Some("1.1.1.1:51820".parse().unwrap()),
+            relay_eligible: false,
+        };
+        let (added, _) = apply(&node, &[v0]);
+        assert_eq!(added, 1);
+
+        // simulate an active session + non-zero indices so we can verify
+        // that rotation tears them down.
+        {
+            let mut g = node.lock().unwrap();
+            g.peers[0].rx_index = 0x1111_2222;
+            g.peers[0].tx_index = 0x3333_4444;
+            g.peers[0].relay = true;
+            g.peers[0].relay_endpoint = Some("9.9.9.9:65432".parse().unwrap());
+        }
+
+        let v1 = PeerView {
+            alias: "alpha".into(),
+            // ↓ rotated pubkey
+            x25519_pubkey: fake_pk(0xee),
+            mlkem_ek: Box::new([0x55; mlkem::EK_LEN]),
+            overlay_v4: "10.42.42.2".parse().unwrap(),
+            overlay_v6: None,
+            endpoint: Some("2.2.2.2:51820".parse().unwrap()),
+            relay_eligible: false,
+        };
+        let (added, updated) = apply(&node, &[v1]);
+        assert_eq!(added, 0, "rotation must not push a second peer entry");
+        assert_eq!(updated, 1);
+
+        let g = node.lock().unwrap();
+        assert_eq!(g.peers.len(), 1, "still one peer slot for alias alpha");
+        assert_eq!(g.peers[0].public, fake_pk(0xee), "pubkey swapped");
+        assert_eq!(g.peers[0].mlkem_ek[0], 0x55, "ek swapped");
+        assert!(matches!(g.peers[0].session, Session::Idle), "session reset");
+        assert_eq!(g.peers[0].rx_index, 0, "indices cleared");
+        assert_eq!(g.peers[0].tx_index, 0);
+        assert!(!g.peers[0].relay, "relay state cleared");
+        assert_eq!(g.peers[0].relay_endpoint, None);
+        assert_eq!(g.peers[0].endpoint.unwrap().to_string(), "2.2.2.2:51820");
+    }
+
+    #[test]
+    fn apply_backfills_alias_for_static_conf_peers() {
+        // A peer loaded from static conf has alias=="" — when discovery
+        // first sees a /peers row with the matching pubkey it should write
+        // the alias in so future rotation matches succeed.
+        let node = make_node_with_self_key([0xcd; 32]);
+        // simulate a static-conf peer (apply with empty alias view to push
+        // it, then verify alias is backfilled on the next poll).
+        let static_view = PeerView {
+            alias: String::new(),
+            x25519_pubkey: fake_pk(0xab),
+            mlkem_ek: fake_ek(),
+            overlay_v4: "10.42.42.2".parse().unwrap(),
+            overlay_v6: None,
+            endpoint: None,
+            relay_eligible: false,
+        };
+        let _ = apply(&node, &[static_view]);
+        assert_eq!(node.lock().unwrap().peers[0].alias, "");
+
+        let with_alias = PeerView {
+            alias: "alpha".into(),
+            x25519_pubkey: fake_pk(0xab),
+            mlkem_ek: fake_ek(),
+            overlay_v4: "10.42.42.2".parse().unwrap(),
+            overlay_v6: None,
+            endpoint: None,
+            relay_eligible: false,
+        };
+        let (added, updated) = apply(&node, &[with_alias]);
+        assert_eq!(added, 0);
+        assert_eq!(updated, 1, "alias backfill counts as one update");
+        assert_eq!(node.lock().unwrap().peers[0].alias, "alpha");
     }
 }
