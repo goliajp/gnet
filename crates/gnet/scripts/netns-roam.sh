@@ -10,11 +10,11 @@
 # source IP it uses (.10 -> .11), removing the old one so replies to the stale
 # endpoint cannot reach it — making roaming the sole discriminator.
 #
-#   sudo bash crates/gnetcli/scripts/netns-roam.sh
+#   sudo bash crates/gnet/scripts/netns-roam.sh
 set -u
 
-cargo build -p gnetcli 2>&1 | tail -1 || exit 1
-BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnetcli"
+cargo build -p gnet 2>&1 | tail -1 || exit 1
+BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnet"
 TMP=$(mktemp -d)
 
 cleanup() {

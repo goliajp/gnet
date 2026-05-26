@@ -6,11 +6,11 @@
 # so loss stays at 0%. Without the window (strict in-order nonce) a reordered
 # packet fails to decrypt and the session wedges — loss would be severe.
 #
-#   sudo bash crates/gnetcli/scripts/netns-reorder.sh
+#   sudo bash crates/gnet/scripts/netns-reorder.sh
 set -u
 
-cargo build -p gnetcli 2>&1 | tail -1 || exit 1
-BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnetcli"
+cargo build -p gnet 2>&1 | tail -1 || exit 1
+BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnet"
 TMP=$(mktemp -d)
 
 cleanup() {

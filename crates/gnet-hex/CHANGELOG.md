@@ -8,7 +8,7 @@ workspace version.
 
 ### Added
 
-- Extracted from `gnetcli`'s internal `hex` module into a standalone
+- Extracted from `gnet`'s internal `hex` module into a standalone
   zero-dependency stone: `encode`, `decode`, `decode_32`. Lowercase output,
   even-length whitespace-trimmed input.
 - Randomized roundtrip property test via the sibling `gnet-rand`; dual LICENSE +

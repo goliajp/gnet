@@ -5,11 +5,11 @@
 # NAT's public address:port, not its private one. This is the first building
 # block of hole punching. Uses a fixed-port SNAT (no conntrack tooling needed).
 #
-#   sudo bash crates/gnetcli/scripts/netns-reflexive.sh
+#   sudo bash crates/gnet/scripts/netns-reflexive.sh
 set -u
 
-cargo build -p gnetcli 2>&1 | tail -1 || exit 1
-BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnetcli"
+cargo build -p gnet 2>&1 | tail -1 || exit 1
+BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnet"
 TMP=$(mktemp -d)
 NAT_PUB=192.168.52.254
 NAT_PORT=45000

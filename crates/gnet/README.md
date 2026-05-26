@@ -1,4 +1,4 @@
-# gnetcli
+# gnet
 
 A **secure UDP channel** over the in-house gnet stack — a working
 demonstration that two endpoints can mutually authenticate and exchange
@@ -14,15 +14,15 @@ crates.io.
 
 ```sh
 # generate a static keypair on each side
-gnetcli keygen
+gnet keygen
 #   private <64 hex>
 #   public  <64 hex>
 
 # responder (knows its own private key)
-gnetcli listen 127.0.0.1:5555 <responder_private_hex>
+gnet listen 127.0.0.1:5555 <responder_private_hex>
 
 # initiator (must know the responder's PUBLIC key — the Noise IK pattern)
-gnetcli connect 127.0.0.1:5555 <initiator_private_hex> <responder_public_hex>
+gnet connect 127.0.0.1:5555 <initiator_private_hex> <responder_public_hex>
 ```
 
 After the handshake, lines typed on the initiator's stdin are encrypted and

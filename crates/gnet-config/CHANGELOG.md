@@ -8,7 +8,7 @@ workspace version.
 
 ### Added
 
-- Extracted from `gnetcli`'s internal `config` module into a standalone
+- Extracted from `gnet`'s internal `config` module into a standalone
   zero-dependency stone: `parse`, `Config`, `PeerConfig`. Parses the
   WireGuard-style text config (private / address / listen / keepalive + a peer
   table). Depends only on the sibling stones `gnet-hex` (key codec) and

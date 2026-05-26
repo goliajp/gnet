@@ -1,7 +1,7 @@
 #!/bin/bash
 # Run every netns end-to-end test in sequence and print a pass/fail matrix.
 #
-# Each netns-*.sh builds gnetcli, stands up its own namespaces, runs its check,
+# Each netns-*.sh builds gnet, stands up its own namespaces, runs its check,
 # and tears the namespaces down via its own `cleanup` trap. This runner judges
 # each by exit code (0 = PASS) and, on failure, prints the tail of its output so
 # a regression is visible in one place. Ordered cheap → expensive so a basic
@@ -9,7 +9,7 @@
 #
 # Linux + root (the scripts create namespaces and iptables rules):
 #
-#   sudo bash crates/gnetcli/scripts/netns-all.sh
+#   sudo bash crates/gnet/scripts/netns-all.sh
 set -u
 cd "$(dirname "$0")" || exit 1
 

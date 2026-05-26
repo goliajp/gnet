@@ -5,11 +5,11 @@
 # the transport is address-family-agnostic: nothing in the data path or config
 # assumes IPv4 for the underlay. Zero external deps.
 #
-#   sudo bash crates/gnetcli/scripts/netns-underlay-v6.sh
+#   sudo bash crates/gnet/scripts/netns-underlay-v6.sh
 set -u
 
-cargo build -p gnetcli 2>&1 | tail -1 || exit 1
-BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnetcli"
+cargo build -p gnet 2>&1 | tail -1 || exit 1
+BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/gnet"
 TMP=$(mktemp -d)
 
 cleanup() {
