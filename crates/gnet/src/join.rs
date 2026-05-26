@@ -11,13 +11,19 @@
 //! known response schema only — not a general-purpose parser.
 
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use gnet::keys;
 use gnet_hex as hex;
 
+use crate::hosts;
+
 const LISTEN_DEFAULT: &str = "0.0.0.0:51820";
+/// Default hosts file. The same path on macOS and Linux — we splice a
+/// marker block into it rather than running our own DNS server, to
+/// keep system resolution unaffected when the gnet daemon is down.
+const HOSTS_DEFAULT: &str = "/etc/hosts";
 
 /// Entry point for the `gnet join` subcommand.
 pub fn run(args: &[String]) -> io::Result<()> {
@@ -69,6 +75,9 @@ pub fn run(args: &[String]) -> io::Result<()> {
     conf.push_str(&format!("address  {overlay_v4}\n"));
     conf.push_str(&format!("address6 {overlay_v6}\n"));
     conf.push_str(&format!("listen   {LISTEN_DEFAULT}\n"));
+    // Peer entries pulled out as we build the conf, so we can also
+    // hand them to the /etc/hosts splice below without re-parsing.
+    let mut peer_hosts: Vec<hosts::Entry> = Vec::with_capacity(peer_objs.len());
     for obj in &peer_objs {
         let p_pk = extract_string(obj, "x25519Pubkey")
             .ok_or_else(|| io::Error::other("peer missing x25519Pubkey"))?;
@@ -79,27 +88,119 @@ pub fn run(args: &[String]) -> io::Result<()> {
         // overlayV6 is optional on the wire only as a defensive guard; the
         // server always emits it in v0.1 since both stacks are dual-stack.
         let p_vip6 = extract_string(obj, "overlayV6");
+        let p_alias =
+            extract_string(obj, "alias").ok_or_else(|| io::Error::other("peer missing alias"))?;
         let vip_token = match &p_vip6 {
             Some(v6) if !v6.is_empty() => format!("{p_vip4},{v6}"),
-            _ => p_vip4,
+            _ => p_vip4.clone(),
         };
         let endpoint = extract_string(obj, "endpoint");
-        match endpoint {
+        match &endpoint {
             Some(ep) if !ep.is_empty() => {
                 conf.push_str(&format!("peer {p_pk} {p_ek} {vip_token} {ep}\n"));
             }
             _ => conf.push_str(&format!("peer {p_pk} {p_ek} {vip_token}\n")),
         }
+        peer_hosts.push(hosts::Entry {
+            alias: p_alias,
+            v4: Some(p_vip4),
+            v6: p_vip6.filter(|s| !s.is_empty()),
+        });
     }
 
-    // 5. Write atomically.
+    // 5. Write conf atomically — failure here is fatal, the daemon
+    //    can't run without it.
     write_conf_atomic(&opts.out, &conf)?;
+
+    // 6. Splice the hosts block (best-effort).
+    //    `no_hosts` is the opt-out; otherwise we update the chosen
+    //    hosts path so that `ssh gnet-<alias>` resolves through the
+    //    overlay. A failure here NEVER aborts join — DNS resolution
+    //    is advisory; the conf is already on disk and the daemon can
+    //    start.
+    let hosts_path = opts
+        .hosts
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(HOSTS_DEFAULT));
+    let hosts_status = if opts.no_hosts {
+        "skipped (--no-hosts)".to_string()
+    } else {
+        let self_entry = hosts::Entry {
+            alias: alias.clone(),
+            v4: Some(overlay_v4.clone()),
+            v6: Some(overlay_v6.clone()).filter(|s| !s.is_empty()),
+        };
+        match splice_hosts_atomic(&hosts_path, &self_entry, &peer_hosts) {
+            Ok(()) => format!("{}", hosts_path.display()),
+            Err(e) => {
+                eprintln!(
+                    "warning: could not update {}: {e} — `ssh gnet-<alias>` will not resolve until you splice the block manually or re-run with sufficient privileges",
+                    hosts_path.display()
+                );
+                format!("FAILED ({})", hosts_path.display())
+            }
+        }
+    };
+
     println!("device_id  {device_id}");
     println!("alias      {alias}");
     println!("overlay_v4 {overlay_v4}");
     println!("overlay_v6 {overlay_v6}");
     println!("peers      {}", peer_objs.len());
     println!("conf       {} ({} bytes)", opts.out.display(), conf.len());
+    println!("hosts      {hosts_status}");
+    Ok(())
+}
+
+/// Splice the gnet-managed marker block into `path`. The block is
+/// idempotent: a subsequent join replaces the old block in place rather
+/// than accumulating duplicates. Uses the same atomic write+rename
+/// pattern as `write_conf_atomic`, but never touches file permissions:
+/// `/etc/hosts` is world-readable and must stay that way for the
+/// system resolver to read it.
+fn splice_hosts_atomic(
+    path: &Path,
+    self_e: &hosts::Entry,
+    peers: &[hosts::Entry],
+) -> io::Result<()> {
+    let existing = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        // missing hosts file: treat as empty so we still write our block
+        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
+    let body = hosts::format_block(self_e, peers);
+    let next = hosts::splice_block(&existing, &body);
+    if next == existing {
+        // already in the desired state — skip the rename entirely so
+        // we don't race with other readers of the file for no reason
+        return Ok(());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other(format!("invalid hosts path: {}", path.display())))?;
+    let final_name = path
+        .file_name()
+        .ok_or_else(|| io::Error::other("hosts path has no filename component"))?
+        .to_string_lossy()
+        .into_owned();
+    let mut tmp = path.to_path_buf();
+    tmp.set_file_name(format!(".{final_name}.gnet.tmp"));
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&tmp)?;
+        if !parent.as_os_str().is_empty() {
+            // best-effort: leave perms to the system umask
+            let _ = parent;
+        }
+        f.write_all(next.as_bytes())?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)?;
     Ok(())
 }
 
@@ -110,6 +211,12 @@ struct Options {
     hostname: Option<String>,
     endpoint: Option<String>,
     out: PathBuf,
+    /// Opt-out of writing the /etc/hosts marker block.
+    no_hosts: bool,
+    /// Override target for the hosts splice; defaults to `/etc/hosts`.
+    /// Useful for sysadmins who want to splice into a sidecar file
+    /// (e.g. `/etc/hosts.d/gnet`) that they include from dnsmasq.
+    hosts: Option<PathBuf>,
 }
 
 impl Options {
@@ -119,6 +226,8 @@ impl Options {
         let mut hostname = None;
         let mut endpoint = None;
         let mut out = default_conf_path();
+        let mut no_hosts = false;
+        let mut hosts: Option<PathBuf> = None;
         let mut i = 2;
         while i < args.len() {
             let flag = args[i].as_str();
@@ -148,9 +257,17 @@ impl Options {
                     out = PathBuf::from(val_at(i + 1, "--out")?);
                     i += 2;
                 }
+                "--no-hosts" => {
+                    no_hosts = true;
+                    i += 1;
+                }
+                "--hosts" => {
+                    hosts = Some(PathBuf::from(val_at(i + 1, "--hosts")?));
+                    i += 2;
+                }
                 other => {
                     return Err(io::Error::other(format!(
-                        "unknown argument `{other}`; expected --token/--coordinator/--hostname/--endpoint/--out"
+                        "unknown argument `{other}`; expected --token/--coordinator/--hostname/--endpoint/--out/--no-hosts/--hosts"
                     )));
                 }
             }
@@ -166,6 +283,8 @@ impl Options {
             hostname,
             endpoint,
             out,
+            no_hosts,
+            hosts,
         })
     }
 }
@@ -672,6 +791,8 @@ mod tests {
             "1.2.3.4:51820".into(),
             "--out".into(),
             "/tmp/x.conf".into(),
+            "--hosts".into(),
+            "/tmp/x.hosts".into(),
         ];
         let opts = Options::parse(&argv).unwrap();
         assert_eq!(opts.token, "tsk-1");
@@ -680,6 +801,70 @@ mod tests {
         assert_eq!(opts.hostname.as_deref(), Some("mini"));
         assert_eq!(opts.endpoint.as_deref(), Some("1.2.3.4:51820"));
         assert_eq!(opts.out, PathBuf::from("/tmp/x.conf"));
+        assert_eq!(opts.hosts, Some(PathBuf::from("/tmp/x.hosts")));
+        assert!(!opts.no_hosts, "default off when flag absent");
+    }
+
+    #[test]
+    fn options_parse_no_hosts_flag() {
+        let argv = vec![
+            "gnet".into(),
+            "join".into(),
+            "--token".into(),
+            "t".into(),
+            "--coordinator".into(),
+            "u".into(),
+            "--no-hosts".into(),
+        ];
+        let opts = Options::parse(&argv).unwrap();
+        assert!(opts.no_hosts);
+        assert_eq!(opts.hosts, None);
+    }
+
+    #[test]
+    fn splice_hosts_atomic_writes_and_replaces_block() {
+        // drives the same atomic-splice path used by `run`, without
+        // standing up a real coordinator. Round-trips the file through
+        // a real tmpfile rename so we exercise the rename step too.
+        let tmpdir = std::env::temp_dir().join(format!(
+            "gnet-hosts-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmpdir).unwrap();
+        let path = tmpdir.join("hosts");
+        std::fs::write(&path, "127.0.0.1\tlocalhost\n").unwrap();
+
+        let self_e = hosts::Entry {
+            alias: "gnet-self".into(),
+            v4: Some("10.42.42.1".into()),
+            v6: Some("fd8d::1".into()),
+        };
+        let peer = hosts::Entry {
+            alias: "gnet-peer".into(),
+            v4: Some("10.42.42.2".into()),
+            v6: Some("fd8d::2".into()),
+        };
+        // first splice: appends the block
+        splice_hosts_atomic(&path, &self_e, &[peer]).unwrap();
+        let contents_1 = std::fs::read_to_string(&path).unwrap();
+        assert!(contents_1.contains("# ---BEGIN gnet---"));
+        assert!(contents_1.contains("10.42.42.1\tgnet-self"));
+        assert!(contents_1.contains("fd8d::2\tgnet-peer"));
+
+        // second splice with same data: idempotent (no rename needed)
+        splice_hosts_atomic(&path, &self_e, &[]).unwrap();
+        let contents_2 = std::fs::read_to_string(&path).unwrap();
+        // peer dropped → block now smaller; markers still exactly one pair
+        assert_eq!(contents_2.matches("# ---BEGIN gnet---").count(), 1);
+        assert!(!contents_2.contains("gnet-peer"));
+        // original hand-written line untouched
+        assert!(contents_2.starts_with("127.0.0.1\tlocalhost\n"));
+
+        std::fs::remove_dir_all(&tmpdir).ok();
     }
 
     #[test]

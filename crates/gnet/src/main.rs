@@ -16,6 +16,7 @@ use std::process::ExitCode;
 use gnet::{channel, keys};
 use gnet_hex as hex;
 
+mod hosts;
 mod join;
 
 fn main() -> ExitCode {
@@ -28,6 +29,7 @@ fn main() -> ExitCode {
         Some("tunnel-connect") => cmd_tunnel_connect(&args),
         Some("up") => cmd_up(&args),
         Some("join") => join::run(&args),
+        Some("purge-hosts") => cmd_purge_hosts(&args),
         _ => {
             eprintln!("usage:");
             eprintln!("  gnet keygen");
@@ -39,8 +41,9 @@ fn main() -> ExitCode {
             );
             eprintln!("  gnet up <config_path>            (static multi-peer node)");
             eprintln!(
-                "  gnet join --token <T> --coordinator <URL> [--hostname H] [--endpoint EP] [--out PATH]"
+                "  gnet join --token <T> --coordinator <URL> [--hostname H] [--endpoint EP] [--out PATH] [--no-hosts] [--hosts PATH]"
             );
+            eprintln!("  gnet purge-hosts [--hosts PATH]  (remove the gnet block from /etc/hosts)");
             return ExitCode::FAILURE;
         }
     };
@@ -59,6 +62,67 @@ fn cmd_keygen() -> io::Result<()> {
     println!("private {}", hex::encode(&sk));
     println!("public  {}", hex::encode(&pk));
     println!("mlkem-public {}", hex::encode(&mlkem_ek));
+    Ok(())
+}
+
+/// Remove the gnet-managed marker block from a hosts file. Idempotent:
+/// running against a hosts file that has no block exits 0 with no
+/// changes. Atomic via tmp-file + rename.
+fn cmd_purge_hosts(args: &[String]) -> io::Result<()> {
+    let mut hosts_path = std::path::PathBuf::from("/etc/hosts");
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--hosts" => {
+                hosts_path = std::path::PathBuf::from(
+                    args.get(i + 1)
+                        .ok_or_else(|| io::Error::other("missing value for --hosts"))?,
+                );
+                i += 2;
+            }
+            other => {
+                return Err(io::Error::other(format!(
+                    "unknown argument `{other}`; expected --hosts"
+                )));
+            }
+        }
+    }
+    let existing = match std::fs::read_to_string(&hosts_path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            println!("hosts {} (no file)", hosts_path.display());
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
+    let next = hosts::remove_block(&existing);
+    if next == existing {
+        println!("hosts {} (no gnet block)", hosts_path.display());
+        return Ok(());
+    }
+    let parent = hosts_path
+        .parent()
+        .ok_or_else(|| io::Error::other(format!("invalid hosts path: {}", hosts_path.display())))?;
+    let final_name = hosts_path
+        .file_name()
+        .ok_or_else(|| io::Error::other("hosts path has no filename component"))?
+        .to_string_lossy()
+        .into_owned();
+    let mut tmp = hosts_path.clone();
+    tmp.set_file_name(format!(".{final_name}.gnet.tmp"));
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&tmp)?;
+        let _ = parent;
+        f.write_all(next.as_bytes())?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, &hosts_path)?;
+    println!("hosts {} (gnet block removed)", hosts_path.display());
     Ok(())
 }
 
