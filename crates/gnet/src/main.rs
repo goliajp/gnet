@@ -18,6 +18,7 @@ use gnet_hex as hex;
 
 mod hosts;
 mod join;
+mod status;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -29,6 +30,7 @@ fn main() -> ExitCode {
         Some("tunnel-connect") => cmd_tunnel_connect(&args),
         Some("up") => cmd_up(&args),
         Some("join") => join::run(&args),
+        Some("status") => status::run(&args),
         Some("purge-hosts") => cmd_purge_hosts(&args),
         _ => {
             eprintln!("usage:");
@@ -43,6 +45,7 @@ fn main() -> ExitCode {
             eprintln!(
                 "  gnet join --token <T> --coordinator <URL> [--endpoint EP] [--out PATH] [--no-hosts] [--hosts PATH]"
             );
+            eprintln!("  gnet status [--conf PATH]        (self + coordinator-side peer view)");
             eprintln!("  gnet purge-hosts [--hosts PATH]  (remove the gnet block from /etc/hosts)");
             return ExitCode::FAILURE;
         }
