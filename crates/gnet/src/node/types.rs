@@ -105,6 +105,10 @@ pub(super) struct Peer {
     /// set: the coordinator we tripped through, or — when we learn the peer is
     /// relaying to *us* — the relay a relayed datagram arrived from (reciprocal).
     pub(super) relay_endpoint: Option<SocketAddr>,
+    /// Coordinator-side hint: this peer is a preferred relay candidate (e.g.
+    /// always-on public host). `Node::coordinator_endpoint` filters on this
+    /// first, then falls back to any peer with a known endpoint.
+    pub(super) relay_eligible: bool,
 }
 
 /// Shared node state (our keys + peers), guarded by one `Mutex`.
@@ -372,6 +376,7 @@ mod tests {
             punch_failures: 0,
             relay: false,
             relay_endpoint: None,
+            relay_eligible: false,
         }
     }
 

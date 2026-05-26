@@ -3,6 +3,7 @@
 //! Endpoints:
 //! - `GET  /healthz`            — unauth liveness probe.
 //! - `POST   /admin/enrol`            — admin Bearer; creates pending row + returns join token.
+//! - `PATCH  /admin/devices/<alias>`  — admin Bearer; mutate device flags (e.g. relay_eligible).
 //! - `DELETE /admin/devices/<alias>`  — admin Bearer; removes device + any pending token.
 //! - `POST   /join`                   — `x-join-token` header; finalises row, returns
 //!   conf JSON including a long-lived `device_token`.
@@ -33,6 +34,11 @@ pub fn handler() -> Handler<AppState> {
                 && let Some(alias) = req.path.strip_prefix("/admin/devices/")
             {
                 return admin_delete_device(state, &req, alias).await;
+            }
+            if req.method == "PATCH"
+                && let Some(alias) = req.path.strip_prefix("/admin/devices/")
+            {
+                return admin_patch_device(state, &req, alias).await;
             }
             match (req.method.as_str(), req.path.as_str()) {
                 ("GET", "/healthz") => Response::text(200, "OK", "ok"),
@@ -157,6 +163,7 @@ struct PeerView {
     overlay_v4: String,
     overlay_v6: String,
     endpoint: Option<String>,
+    relay_eligible: bool,
 }
 
 async fn join(state: Arc<AppState>, req: Request) -> Response {
@@ -194,6 +201,7 @@ async fn join(state: Arc<AppState>, req: Request) -> Response {
         overlay_v6: pending.overlay_v6.clone(),
         endpoint: body.endpoint,
         device_token: device_token.clone(),
+        relay_eligible: false,
         created_at: now_rfc3339(),
     };
     let alias = device.alias.clone();
@@ -227,6 +235,51 @@ async fn join(state: Arc<AppState>, req: Request) -> Response {
         device_token,
         peers,
     })
+}
+
+// ── admin patch device ────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct PatchDeviceReq {
+    /// Set true to mark this device as a preferred relay candidate; false to
+    /// clear. Omitting the field leaves the flag unchanged.
+    relay_eligible: Option<bool>,
+}
+
+async fn admin_patch_device(state: Arc<AppState>, req: &Request, alias: &str) -> Response {
+    let token_ok = bearer(req)
+        .map(|t| admin_token_matches(&state.config.admin_token, t))
+        .unwrap_or(false);
+    if !token_ok {
+        return Response::text(401, "Unauthorized", "bad or missing admin token");
+    }
+    if !valid_alias(alias) {
+        return Response::text(400, "Bad Request", "invalid alias");
+    }
+    let body: PatchDeviceReq = match serde_json::from_slice(&req.body) {
+        Ok(b) => b,
+        Err(_) => return Response::text(400, "Bad Request", "invalid json"),
+    };
+    let snapshot = state.store.snapshot().await;
+    if !snapshot.devices.iter().any(|d| d.alias == alias) {
+        return Response::text(404, "Not Found", "no such device");
+    }
+    let target = alias.to_string();
+    let want_relay = body.relay_eligible;
+    let persist = state
+        .store
+        .mutate(move |st| {
+            if let Some(d) = st.devices.iter_mut().find(|d| d.alias == target)
+                && let Some(v) = want_relay
+            {
+                d.relay_eligible = v;
+            }
+        })
+        .await;
+    if persist.is_err() {
+        return Response::text(500, "Internal Server Error", "persist failed");
+    }
+    Response::text(200, "OK", "patched")
 }
 
 // ── admin delete device ───────────────────────────────────────
@@ -342,6 +395,7 @@ fn peer_view(d: &Device) -> PeerView {
         overlay_v4: d.overlay_v4.clone(),
         overlay_v6: d.overlay_v6.clone(),
         endpoint: d.endpoint.clone(),
+        relay_eligible: d.relay_eligible,
     }
 }
 
@@ -666,6 +720,73 @@ mod tests {
         let _ = raw(addr, &delete_device_req("ghost", "test-token-1234567890")).await;
         // now re-enrol works
         let (st, _) = raw(addr, &enrol_req("ghost", "test-token-1234567890")).await;
+        assert_eq!(st, 200);
+    }
+
+    fn patch_device_req(alias: &str, admin_token: &str, body: &str) -> Vec<u8> {
+        format!(
+            "PATCH /admin/devices/{alias} HTTP/1.1\r\nhost: x\r\nauthorization: Bearer {admin_token}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    }
+
+    #[tokio::test]
+    async fn admin_patch_relay_eligible_visible_in_peers() {
+        let (addr, _t) = spawn_test_server().await;
+        let pk = "a".repeat(64);
+        let _ = enrol_and_join(addr, "alpha", &pk, &"aa".repeat(32)).await;
+
+        // initially relay_eligible is false in /peers (from a 2nd device's view)
+        let pk_other = "b".repeat(64);
+        let _ = enrol_and_join(addr, "beta", &pk_other, &"bb".repeat(32)).await;
+        let probe = format!("GET /peers HTTP/1.1\r\nhost: x\r\nx-device-pubkey: {pk_other}\r\n\r\n");
+        let (_, body) = raw(addr, probe.as_bytes()).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let alpha = v.as_array().unwrap().iter().find(|p| p["alias"] == "alpha").unwrap();
+        assert_eq!(alpha["relay_eligible"], false);
+
+        // PATCH alpha → relay_eligible: true
+        let (st, _) = raw(
+            addr,
+            &patch_device_req("alpha", "test-token-1234567890", r#"{"relay_eligible":true}"#),
+        )
+        .await;
+        assert_eq!(st, 200);
+
+        // /peers now shows it true
+        let (_, body) = raw(addr, probe.as_bytes()).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let alpha = v.as_array().unwrap().iter().find(|p| p["alias"] == "alpha").unwrap();
+        assert_eq!(alpha["relay_eligible"], true);
+    }
+
+    #[tokio::test]
+    async fn admin_patch_unknown_device_404() {
+        let (addr, _t) = spawn_test_server().await;
+        let (st, _) = raw(
+            addr,
+            &patch_device_req("nobody", "test-token-1234567890", r#"{"relay_eligible":true}"#),
+        )
+        .await;
+        assert_eq!(st, 404);
+    }
+
+    #[tokio::test]
+    async fn admin_patch_rejects_bad_token() {
+        let (addr, _t) = spawn_test_server().await;
+        let (st, _) =
+            raw(addr, &patch_device_req("alpha", "wrong", r#"{"relay_eligible":true}"#)).await;
+        assert_eq!(st, 401);
+    }
+
+    #[tokio::test]
+    async fn admin_patch_no_field_is_noop() {
+        let (addr, _t) = spawn_test_server().await;
+        let pk = "a".repeat(64);
+        let _ = enrol_and_join(addr, "alpha", &pk, &"aa".repeat(32)).await;
+        // empty body {} is valid (all fields optional); should not change state
+        let (st, _) = raw(addr, &patch_device_req("alpha", "test-token-1234567890", "{}")).await;
         assert_eq!(st, 200);
     }
 

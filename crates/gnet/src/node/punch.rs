@@ -29,14 +29,21 @@ impl Node {
         Some((coordinator, wire::frame(Kind::PunchConnect, &body)))
     }
 
-    /// A coordinator endpoint to relay rendezvous through: any peer other than
-    /// `exclude` that we already reach directly (has a known endpoint).
+    /// A coordinator endpoint to relay rendezvous through: prefer peers
+    /// explicitly marked `relay_eligible` by the operator (always-on public
+    /// hosts), fall back to any peer other than `exclude` with a known endpoint
+    /// so a deployment that has not yet flagged anyone still works.
     pub(super) fn coordinator_endpoint(&self, exclude: usize) -> Option<SocketAddr> {
-        self.peers
-            .iter()
-            .enumerate()
-            .filter(|(j, _)| *j != exclude)
-            .find_map(|(_, p)| p.endpoint)
+        let reachable = || {
+            self.peers
+                .iter()
+                .enumerate()
+                .filter(|(j, p)| *j != exclude && p.endpoint.is_some())
+        };
+        reachable()
+            .find(|(_, p)| p.relay_eligible)
+            .or_else(|| reachable().next())
+            .and_then(|(_, p)| p.endpoint)
     }
 
     /// Handle an inbound PunchConnect that arrived from `from`. Three cases:
@@ -197,6 +204,7 @@ mod tests {
             punch_failures: 0,
             relay: false,
             relay_endpoint: None,
+            relay_eligible: false,
         }
     }
 

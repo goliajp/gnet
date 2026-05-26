@@ -164,6 +164,7 @@ mod tests {
                 punch_failures: 0,
                 relay: false,
                 relay_endpoint: None,
+                relay_eligible: false,
             }],
             reflexive: None,
             probe_txid: 0,

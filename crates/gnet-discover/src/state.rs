@@ -35,6 +35,14 @@ pub struct Device {
     /// patched on next mutation (see `Store::patch_missing_device_tokens`).
     #[serde(default)]
     pub device_token: String,
+    /// When true, other daemons prefer this device as the relay candidate when
+    /// their direct hole-punch to a peer fails. Defaults to false on join;
+    /// operators flip it true on public, always-on hosts (typically the same
+    /// hosts that run gnet-discover). Daemons fall back to any peer with a
+    /// known endpoint if no `relay_eligible` peer is available, so this is a
+    /// preference, not a hard requirement.
+    #[serde(default)]
+    pub relay_eligible: bool,
     /// RFC 3339 UTC string, second resolution. See [`crate::time`].
     pub created_at: String,
 }
@@ -115,6 +123,7 @@ mod tests {
             overlay_v6: format!("fd8d:f090:2ebb::{last_octet:x}"),
             endpoint: None,
             device_token: format!("dt-{alias}"),
+            relay_eligible: false,
             created_at: now_rfc3339(),
         }
     }
