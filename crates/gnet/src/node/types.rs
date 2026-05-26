@@ -191,11 +191,18 @@ impl Node {
                 && started.elapsed() > timeout
             {
                 p.session = Session::Idle;
-                // a punch-originated attempt that timed out is a punch failure;
-                // enough consecutive failures trip the peer to relay fallback.
-                if p.punched {
+                // Any handshake give-up against a peer with no relay yet is a
+                // direct-path failure: count toward `PUNCH_ATTEMPTS` so that
+                // PUNCH_ATTEMPTS consecutive give-ups trip to relay fallback.
+                // This covers both
+                //   - punch-originated paths (the original `punched` case), and
+                //   - direct-init paths where the peer's endpoint is reflexive
+                //     and the cold-start NAT-NAT first packet can't punch on
+                //     its own (the v0.3 endpoint-report regression made every
+                //     NAT peer look directly-reachable, shadowing the punch).
+                if !p.relay {
                     p.punch_failures += 1;
-                    if p.punch_failures >= PUNCH_ATTEMPTS && !p.relay {
+                    if p.punch_failures >= PUNCH_ATTEMPTS {
                         tripped.push(i);
                     }
                 }
@@ -532,9 +539,12 @@ mod tests {
 
     #[test]
     fn punch_failures_trip_relay_after_attempts() {
-        // a punch-originated initiation that keeps timing out trips the peer to
-        // relay after PUNCH_ATTEMPTS consecutive give-ups; a direct (configured-
-        // endpoint) initiation never counts toward relay.
+        // Any handshake initiation that keeps timing out trips the peer to
+        // relay after PUNCH_ATTEMPTS consecutive give-ups. v0.4.3 widened the
+        // counter to cover direct-init paths too — previously only `punched`
+        // peers accrued, which masked the cold-start NAT↔NAT case where both
+        // sides looked reachable (endpoint via reflexive-report) but neither
+        // NAT had a return mapping yet.
         let (ek, _dk) = keys::derive_mlkem(&[9u8; 32]);
         let new_ini = || HybridInitiator::new([1u8; 32], [2u8; 32], &ek, [3u8; 32], [4u8; 32]);
         let stale = || Session::Initiating {
@@ -551,16 +561,16 @@ mod tests {
         for expected in 1..PUNCH_ATTEMPTS {
             node.expire_handshakes(Duration::from_secs(3));
             assert_eq!(node.peers[0].punch_failures, expected);
+            assert_eq!(node.peers[1].punch_failures, expected, "direct-init paths now count too");
             assert!(!node.peers[0].relay, "not yet at threshold");
-            node.peers[0].session = stale(); // re-arm for the next give-up
+            assert!(!node.peers[1].relay);
+            node.peers[0].session = stale();
+            node.peers[1].session = stale();
         }
-        // the PUNCH_ATTEMPTS-th give-up trips relay
+        // PUNCH_ATTEMPTS-th give-up trips relay on BOTH peers
         node.expire_handshakes(Duration::from_secs(3));
-        assert_eq!(node.peers[0].punch_failures, PUNCH_ATTEMPTS);
-        assert!(node.peers[0].relay, "tripped to relay at PUNCH_ATTEMPTS");
-        // the direct peer expired too, but never accrued punch failures
-        assert_eq!(node.peers[1].punch_failures, 0);
-        assert!(!node.peers[1].relay);
+        assert!(node.peers[0].relay, "punched peer tripped at threshold");
+        assert!(node.peers[1].relay, "direct peer also tripped (cold-start NAT-NAT recovery)");
     }
 
     #[test]
