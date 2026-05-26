@@ -5,14 +5,15 @@
 //! Text format (one directive per line; `#` and blank lines ignored):
 //!
 //! ```text
-//! private <64-hex>            # our static private key (ML-KEM key derived from it)
-//! address <ip>               # our virtual (overlay) IP — the TUN address
-//! listen  <bind_addr>        # UDP socket to bind, e.g. 0.0.0.0:7777
+//! private  <64-hex>          # our static private key (ML-KEM key derived from it)
+//! address  <ip>              # our IPv4 virtual (overlay) IP — the TUN address
+//! address6 <ip6>             # optional: our IPv6 virtual (overlay) IP
+//! listen   <bind_addr>       # UDP socket to bind, e.g. 0.0.0.0:7777
 //! keepalive <secs>           # optional: send an empty transport packet to each
 //!                            # established peer every <secs> to hold NAT mappings
 //!                            # open (0 disables); absent = disabled
-//! peer <pubkey-64hex> <mlkem-ek-hex> <ip> [endpoint]
-//! peer <pubkey-64hex> <mlkem-ek-hex> <ip> [endpoint]
+//! peer <pubkey-64hex> <mlkem-ek-hex> <vip4>[,<vip6>] [endpoint]
+//! peer <pubkey-64hex> <mlkem-ek-hex> <vip4>[,<vip6>] [endpoint]
 //! ```
 //!
 //! `mlkem-ek-hex` is the peer's (public) ML-KEM-768 encapsulation key, printed
@@ -41,8 +42,11 @@ pub struct PeerConfig {
     /// Boxed fixed-size array: the length is part of the type, so a malformed
     /// length is rejected at parse rather than carried as a runtime invariant.
     pub mlkem_ek: Box<[u8; mlkem::EK_LEN]>,
-    /// Peer's virtual (overlay) IP — routes to this peer.
+    /// Peer's IPv4 virtual (overlay) IP — routes to this peer.
     pub vip: IpAddr,
+    /// Peer's IPv6 virtual (overlay) IP, when dual-stack. `None` keeps the
+    /// peer v4-only.
+    pub vip6: Option<IpAddr>,
     /// Where to reach the peer over UDP. `None` means we only ever respond to
     /// this peer (we learn its endpoint from its handshake).
     pub endpoint: Option<SocketAddr>,
@@ -53,8 +57,11 @@ pub struct PeerConfig {
 pub struct Config {
     /// Our static private key.
     pub private: [u8; 32],
-    /// Our virtual (overlay) IP — the TUN address.
+    /// Our IPv4 virtual (overlay) IP — the TUN address.
     pub address: IpAddr,
+    /// Our IPv6 virtual (overlay) IP — added to the TUN when set. `None`
+    /// keeps the node v4-only.
+    pub address6: Option<IpAddr>,
     /// UDP socket to bind.
     pub listen: SocketAddr,
     /// Persistent-keepalive interval. When set, an empty transport packet is
@@ -69,6 +76,7 @@ pub struct Config {
 pub fn parse(text: &str) -> Result<Config, String> {
     let mut private: Option<[u8; 32]> = None;
     let mut address: Option<IpAddr> = None;
+    let mut address6: Option<IpAddr> = None;
     let mut listen: Option<SocketAddr> = None;
     let mut keepalive: Option<Duration> = None;
     let mut peers = Vec::new();
@@ -90,6 +98,14 @@ pub fn parse(text: &str) -> Result<Config, String> {
                 let a = t.next().ok_or_else(|| err("address: missing ip"))?;
                 address = Some(a.parse().map_err(|_| err("address: bad ip"))?);
             }
+            "address6" => {
+                let a = t.next().ok_or_else(|| err("address6: missing ip"))?;
+                let v: IpAddr = a.parse().map_err(|_| err("address6: bad ip"))?;
+                if !matches!(v, IpAddr::V6(_)) {
+                    return Err(err("address6: must be IPv6"));
+                }
+                address6 = Some(v);
+            }
             "listen" => {
                 let a = t.next().ok_or_else(|| err("listen: missing addr"))?;
                 listen = Some(a.parse().map_err(|_| err("listen: bad socket addr"))?);
@@ -107,8 +123,27 @@ pub fn parse(text: &str) -> Result<Config, String> {
                 let mlkem_ek: Box<[u8; mlkem::EK_LEN]> = hex::decode(ek_hex)
                     .and_then(|e| e.into_boxed_slice().try_into().ok())
                     .ok_or_else(|| err("peer: bad mlkem ek"))?;
-                let vip_s = t.next().ok_or_else(|| err("peer: missing vip"))?;
-                let vip = vip_s.parse().map_err(|_| err("peer: bad vip"))?;
+                let vip_token = t.next().ok_or_else(|| err("peer: missing vip"))?;
+                let (vip_s, vip6_s) = match vip_token.split_once(',') {
+                    Some((a, b)) => (a, Some(b)),
+                    None => (vip_token, None),
+                };
+                let vip: IpAddr = vip_s.parse().map_err(|_| err("peer: bad vip"))?;
+                if !matches!(vip, IpAddr::V4(_)) {
+                    return Err(err(
+                        "peer: vip must be IPv4 (use `<v4>,<v6>` for dual-stack)",
+                    ));
+                }
+                let vip6 = match vip6_s {
+                    Some(s) => {
+                        let v: IpAddr = s.parse().map_err(|_| err("peer: bad vip6"))?;
+                        if !matches!(v, IpAddr::V6(_)) {
+                            return Err(err("peer: vip6 must be IPv6"));
+                        }
+                        Some(v)
+                    }
+                    None => None,
+                };
                 let endpoint = match t.next() {
                     Some(e) => Some(e.parse().map_err(|_| err("peer: bad endpoint"))?),
                     None => None,
@@ -117,6 +152,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
                     public,
                     mlkem_ek,
                     vip,
+                    vip6,
                     endpoint,
                 });
             }
@@ -127,6 +163,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
     Ok(Config {
         private: private.ok_or("missing `private`")?,
         address: address.ok_or("missing `address`")?,
+        address6,
         listen: listen.ok_or("missing `listen`")?,
         keepalive,
         peers,
@@ -232,6 +269,72 @@ peer 0000000000000000000000000000000000000000000000000000000000000003 {ek3} 10.8
     }
 
     #[test]
+    fn parses_dual_stack_self_and_peer() {
+        let ek = ek_hex(0x22);
+        let text = format!(
+            "private 0000000000000000000000000000000000000000000000000000000000000001\n\
+             address  10.42.42.7\n\
+             address6 fd8d:f090:2ebb::7\n\
+             listen 0.0.0.0:51820\n\
+             peer 0000000000000000000000000000000000000000000000000000000000000002 \
+                  {ek} 10.42.42.8,fd8d:f090:2ebb::8 192.168.1.5:51820\n\
+             peer 0000000000000000000000000000000000000000000000000000000000000003 \
+                  {ek} 10.42.42.9\n"
+        );
+        let c = parse(&text).expect("parse");
+        assert_eq!(c.address, "10.42.42.7".parse::<IpAddr>().unwrap());
+        assert_eq!(c.address6, Some("fd8d:f090:2ebb::7".parse().unwrap()));
+        assert_eq!(c.peers.len(), 2);
+        // dual-stack peer
+        assert_eq!(c.peers[0].vip, "10.42.42.8".parse::<IpAddr>().unwrap());
+        assert_eq!(c.peers[0].vip6, Some("fd8d:f090:2ebb::8".parse().unwrap()));
+        assert_eq!(
+            c.peers[0].endpoint,
+            Some("192.168.1.5:51820".parse().unwrap())
+        );
+        // v4-only peer round-trips with vip6 = None
+        assert_eq!(c.peers[1].vip, "10.42.42.9".parse::<IpAddr>().unwrap());
+        assert_eq!(c.peers[1].vip6, None);
+    }
+
+    #[test]
+    fn address6_default_none_when_absent() {
+        let text = "private 0000000000000000000000000000000000000000000000000000000000000001\n\
+                    address 10.42.42.7\n\
+                    listen 0.0.0.0:51820\n";
+        let c = parse(text).expect("parse");
+        assert_eq!(c.address6, None);
+    }
+
+    #[test]
+    fn address6_must_be_ipv6() {
+        // v4 in address6 slot → reject
+        let text = "private 0000000000000000000000000000000000000000000000000000000000000001\n\
+                    address 10.42.42.7\n\
+                    address6 10.0.0.1\n\
+                    listen 0.0.0.0:51820\n";
+        assert!(parse(text).is_err());
+    }
+
+    #[test]
+    fn peer_vip_family_enforced() {
+        let ek = ek_hex(0x22);
+        let pk = "0000000000000000000000000000000000000000000000000000000000000002";
+        let base = "private 0000000000000000000000000000000000000000000000000000000000000001\n\
+                    address 10.42.42.7\n\
+                    listen 0.0.0.0:51820\n";
+        // v6 in vip4 slot (no comma)
+        let t1 = format!("{base}peer {pk} {ek} fd00::1\n");
+        assert!(parse(&t1).is_err());
+        // v4 in vip6 slot (after comma)
+        let t2 = format!("{base}peer {pk} {ek} 10.0.0.2,10.0.0.3\n");
+        assert!(parse(&t2).is_err());
+        // bad vip6 token
+        let t3 = format!("{base}peer {pk} {ek} 10.0.0.2,not-an-ip\n");
+        assert!(parse(&t3).is_err());
+    }
+
+    #[test]
     fn parses_ipv6_underlay() {
         let ek = ek_hex(0x22);
         let text = format!(
@@ -297,6 +400,7 @@ peer 0000000000000000000000000000000000000000000000000000000000000003 {ek3} 10.8
                     public,
                     mlkem_ek: Box::new(ek),
                     vip: IpAddr::V4(vip),
+                    vip6: None,
                     endpoint,
                 });
             }

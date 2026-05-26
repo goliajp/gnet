@@ -125,10 +125,19 @@ pub fn run(config: Config) -> io::Result<()> {
     let socket = Arc::new(UdpSocket::bind(config.listen)?);
     let tun = Arc::new(Tun::open()?);
     configure(tun.name(), config.address)?;
+    // Dual-stack: when an IPv6 overlay address is configured, attach it to the
+    // same TUN so the kernel routes the v6 overlay subnet (/64) here too.
+    if let Some(v6) = config.address6 {
+        configure(tun.name(), v6)?;
+    }
     eprintln!(
-        "node up on {} ({}) with {} peer(s)",
+        "node up on {} ({}{}) with {} peer(s)",
         tun.name(),
         config.address,
+        config
+            .address6
+            .map(|v| format!(" + {v}"))
+            .unwrap_or_default(),
         config.peers.len()
     );
 
@@ -140,6 +149,7 @@ pub fn run(config: Config) -> io::Result<()> {
             public: p.public,
             mlkem_ek: p.mlkem_ek,
             vip: p.vip,
+            vip6: p.vip6,
             endpoint: p.endpoint,
             rx_index: 0,
             tx_index: 0,
