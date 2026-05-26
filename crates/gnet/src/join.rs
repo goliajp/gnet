@@ -64,6 +64,8 @@ pub fn run(args: &[String]) -> io::Result<()> {
     conf.push_str(&format!("address  {overlay_v4}\n"));
     conf.push_str(&format!("address6 {overlay_v6}\n"));
     conf.push_str(&format!("listen   {LISTEN_DEFAULT}\n"));
+    // The daemon's discovery thread polls this URL for peer-list refreshes.
+    conf.push_str(&format!("coordinator {}\n", opts.coordinator));
     // Peer entries pulled out as we build the conf, so we can also
     // hand them to the /etc/hosts splice below without re-parsing.
     let mut peer_hosts: Vec<hosts::Entry> = Vec::with_capacity(peer_objs.len());

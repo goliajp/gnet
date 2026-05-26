@@ -16,6 +16,7 @@
 //!
 //! [`wire`]: gnet_wire
 
+mod discovery;
 mod handshake;
 mod pump;
 mod punch;
@@ -142,6 +143,7 @@ pub fn run(config: Config) -> io::Result<()> {
     );
 
     let keepalive = config.keepalive;
+    let coordinator = config.coordinator.clone();
     let peers = config
         .peers
         .into_iter()
@@ -247,6 +249,12 @@ pub fn run(config: Config) -> io::Result<()> {
                 g = dial_wake.wait_timeout(lock, wait).expect("dial wake").0;
             }
         });
+    }
+
+    // start the discovery thread if a coordinator URL is configured —
+    // it polls /peers and hot-adds newly-joined peers to `Node.peers`.
+    if let Some(url) = coordinator.clone() {
+        discovery::spawn(node.clone(), url);
     }
 
     let up = pump::uplink(tun.clone(), socket.clone(), node.clone());
