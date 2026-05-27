@@ -38,8 +38,14 @@
 mod mul;
 mod serde;
 
+#[cfg(target_arch = "aarch64")]
+mod mul_neon;
+
 pub(super) use mul::{fmul, fsqr, fsqr_n};
 pub(super) use serde::{pack, unpack};
+
+#[cfg(target_arch = "aarch64")]
+pub(super) use mul_neon::fmul_pair_neon;
 
 /// Field element in radix 2^25.5 — ten 25/26-bit signed limbs.
 pub(super) type Fe2255 = [i32; 10];
@@ -394,6 +400,147 @@ mod tests {
             let inv2255 = finvert(&a2255);
             assert_eq!(pack5(&inv5), pack(&inv2255), "finvert mismatch trial {trial}");
         }
+    }
+
+    /// Informational microbench — Fe2255 scalar fmul vs Fe5 scalar fmul.
+    /// Captures the radix-change overhead before any NEON work in S2.
+    #[test]
+    #[ignore = "informational microbench"]
+    fn fmul_scalar_speed_vs_fe5() {
+        use std::time::Instant;
+        let mut rng = Rng::new(0x5eed_b00b_face_5a5a);
+        let a_bytes = rng.arr32();
+        let b_bytes = rng.arr32();
+        let a5 = unpack5(&a_bytes);
+        let b5 = unpack5(&b_bytes);
+        let a2255 = unpack(&a_bytes);
+        let b2255 = unpack(&b_bytes);
+
+        for _ in 0..2_000 {
+            let _ = std::hint::black_box(fmul(&a2255, &b2255));
+            let _ = std::hint::black_box(super::super::field::fmul(&a5, &b5));
+        }
+        let iters = 200_000u32;
+
+        let start = Instant::now();
+        for _ in 0..iters {
+            let _ = std::hint::black_box(fmul(
+                std::hint::black_box(&a2255),
+                std::hint::black_box(&b2255),
+            ));
+        }
+        let ns_2255 = start.elapsed().as_nanos() as u64 / iters as u64;
+
+        let start = Instant::now();
+        for _ in 0..iters {
+            let _ = std::hint::black_box(super::super::field::fmul(
+                std::hint::black_box(&a5),
+                std::hint::black_box(&b5),
+            ));
+        }
+        let ns_5 = start.elapsed().as_nanos() as u64 / iters as u64;
+
+        eprintln!("Fe2255 scalar fmul: {ns_2255} ns");
+        eprintln!("Fe5    scalar fmul: {ns_5} ns");
+        eprintln!("Fe2255 / Fe5 ratio: {:.2}×", ns_2255 as f64 / ns_5 as f64);
+    }
+
+    /// NEON 2-way pair fmul must be bit-identical to two serial scalar
+    /// `fmul` invocations on the same inputs — the load-bearing KAT for
+    /// `mul_neon.rs` and its `int32x2_t` packing.
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn fmul_pair_neon_matches_two_scalars() {
+        let mut rng = Rng::new(0xacac_5e5e_1010_2020);
+        for trial in 0..32 {
+            let a1_b = rng.arr32();
+            let b1_b = rng.arr32();
+            let a2_b = rng.arr32();
+            let b2_b = rng.arr32();
+            let a1 = unpack(&a1_b);
+            let b1 = unpack(&b1_b);
+            let a2 = unpack(&a2_b);
+            let b2 = unpack(&b2_b);
+
+            let (c1_neon, c2_neon) = fmul_pair_neon(&a1, &b1, &a2, &b2);
+            let c1_scalar = fmul(&a1, &b1);
+            let c2_scalar = fmul(&a2, &b2);
+
+            assert_eq!(
+                pack(&c1_neon),
+                pack(&c1_scalar),
+                "stream 1 mismatch trial {trial}"
+            );
+            assert_eq!(
+                pack(&c2_neon),
+                pack(&c2_scalar),
+                "stream 2 mismatch trial {trial}"
+            );
+        }
+    }
+
+    /// Informational microbench — the **decision-maker** for B2.
+    /// Compares NEON pair fmul vs **two serial Fe5 scalar fmul** (the
+    /// real baseline an x25519_base_pair caller pays today). If NEON
+    /// pair < 2× Fe5 scalar wall time, S3-S5 are worth landing.
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    #[ignore = "informational microbench"]
+    fn fmul_pair_neon_vs_2x_fe5_scalar() {
+        use std::time::Instant;
+        let mut rng = Rng::new(0xfeed_face_deca_beef);
+        let a1_b = rng.arr32();
+        let b1_b = rng.arr32();
+        let a2_b = rng.arr32();
+        let b2_b = rng.arr32();
+        let a1_2255 = unpack(&a1_b);
+        let b1_2255 = unpack(&b1_b);
+        let a2_2255 = unpack(&a2_b);
+        let b2_2255 = unpack(&b2_b);
+        let a1_5 = unpack5(&a1_b);
+        let b1_5 = unpack5(&b1_b);
+        let a2_5 = unpack5(&a2_b);
+        let b2_5 = unpack5(&b2_b);
+
+        for _ in 0..2_000 {
+            let _ = std::hint::black_box(fmul_pair_neon(
+                &a1_2255, &b1_2255, &a2_2255, &b2_2255,
+            ));
+            let _ = std::hint::black_box(super::super::field::fmul(&a1_5, &b1_5));
+            let _ = std::hint::black_box(super::super::field::fmul(&a2_5, &b2_5));
+        }
+        let iters = 200_000u32;
+
+        let start = Instant::now();
+        for _ in 0..iters {
+            let _ = std::hint::black_box(fmul_pair_neon(
+                std::hint::black_box(&a1_2255),
+                std::hint::black_box(&b1_2255),
+                std::hint::black_box(&a2_2255),
+                std::hint::black_box(&b2_2255),
+            ));
+        }
+        let neon_pair_ns = start.elapsed().as_nanos() as u64 / iters as u64;
+
+        let start = Instant::now();
+        for _ in 0..iters {
+            let _ = std::hint::black_box(super::super::field::fmul(
+                std::hint::black_box(&a1_5),
+                std::hint::black_box(&b1_5),
+            ));
+            let _ = std::hint::black_box(super::super::field::fmul(
+                std::hint::black_box(&a2_5),
+                std::hint::black_box(&b2_5),
+            ));
+        }
+        let two_fe5_ns = start.elapsed().as_nanos() as u64 / iters as u64;
+
+        eprintln!("NEON pair fmul (Fe2255):  {neon_pair_ns} ns");
+        eprintln!("2× scalar Fe5 fmul:        {two_fe5_ns} ns");
+        eprintln!(
+            "  speedup: {:.2}× (>1 means NEON wins)",
+            two_fe5_ns as f64 / neon_pair_ns as f64
+        );
     }
 
     /// Sanity: `a · a⁻¹ == 1` (mod p) for random non-zero `a`.
