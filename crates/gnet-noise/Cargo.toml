@@ -14,6 +14,11 @@ categories = ["cryptography", "network-programming"]
 [dependencies]
 gnet-crypto = { path = "../gnet-crypto" }
 
+# dev-only: the frozen hybrid-handshake KAT uses gnet-hex to dump expected
+# transcript bytes in a human-readable form. Not exposed to consumers.
+[dev-dependencies]
+gnet-hex = { path = "../gnet-hex" }
+
 [lints]
 workspace = true
 
