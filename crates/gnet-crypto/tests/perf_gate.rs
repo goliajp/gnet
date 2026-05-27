@@ -63,14 +63,16 @@ fn x25519_basepoint_derivation_within_budget() {
     }
     let per = start.elapsed() / iters;
 
-    // Release baseline target: ≤ 7 µs/op on Apple Silicon (NEON) — within
-    // ~1.5× of dalek's basepoint table (~5 µs). Debug runs ~50× slower for
-    // the same reasons as the AEAD gate; the budget tracks build mode.
-    // See BUDGETS.md "x25519_base" row for the calibrated baseline.
+    // Release baselines: Apple Silicon ~6.3 µs (NEON, within ~1.5× of
+    // dalek), lx64 (x86_64 AVX2) ~11.6 µs (same field code, ~2× slower
+    // on x86 like the rest of the X25519 path). Debug runs ~50× slower.
+    // See BUDGETS.md "x25519_base" row for calibration.
     let budget = if cfg!(debug_assertions) {
         Duration::from_micros(400)
-    } else {
+    } else if cfg!(target_arch = "aarch64") {
         Duration::from_micros(7)
+    } else {
+        Duration::from_micros(14)
     };
     eprintln!("x25519_base per call: {per:?} (budget {budget:?})");
     assert!(
