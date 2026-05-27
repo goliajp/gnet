@@ -133,6 +133,14 @@ pub(super) struct Node {
     pub(super) reflexive: Option<SocketAddr>,
     /// txid of the most recent EndpointProbe we sent, to match its reply.
     pub(super) probe_txid: u32,
+    /// Whether the reflexive endpoint's IP matches one of our local interface
+    /// IPs. `None` until reflexive is first learned and a local-IP scan runs.
+    /// `Some(false)` means we are behind a NAT that rewrote our source —
+    /// direct init to another NAT'd peer cold-starts unreliably, so pump
+    /// prefers `start_punch` (DCUtR) for peers we have no relay path to yet.
+    /// `Some(true)` means our reflexive equals a local interface IP; we are
+    /// effectively public and direct init works.
+    pub(super) self_is_nat: Option<bool>,
 }
 
 impl Node {
@@ -159,12 +167,26 @@ impl Node {
     /// Record a reflexive endpoint learned from an EndpointReply, but only if
     /// its `txid` matches the probe we sent (so a stray/forged reply with the
     /// wrong txid is ignored). Returns true if the reflexive endpoint changed.
+    /// On change, also (re)evaluates `self_is_nat` by scanning local interface
+    /// IPs — a daemon that moves networks (laptop suspend/resume) gets the
+    /// new path-selection answer on the next probe.
     pub(super) fn note_reflexive(&mut self, txid: u32, observed: SocketAddr) -> bool {
         if txid != self.probe_txid {
             return false;
         }
         let changed = self.reflexive != Some(observed);
         self.reflexive = Some(observed);
+        if changed {
+            let locals = crate::node::local_ips::list_local_ips();
+            let public = locals.iter().any(|ip| ip == &observed.ip());
+            self.self_is_nat = Some(!public);
+            eprintln!(
+                "self_is_nat = {} (reflexive {} {} local interface)",
+                !public,
+                observed.ip(),
+                if public { "matches a" } else { "does not match any" }
+            );
+        }
         changed
     }
 
@@ -403,6 +425,7 @@ mod tests {
             peers,
             reflexive: None,
             probe_txid: 0,
+            self_is_nat: None,
         }
     }
 

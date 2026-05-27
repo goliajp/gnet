@@ -182,6 +182,7 @@ mod tests {
             peers,
             reflexive,
             probe_txid: 0,
+            self_is_nat: None,
         }
     }
 
