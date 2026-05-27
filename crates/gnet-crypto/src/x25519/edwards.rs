@@ -205,20 +205,24 @@ pub(super) fn ct_eq_u8(a: u8, b: u8) -> u64 {
     nonzero.wrapping_sub(1)
 }
 
-/// Constant-time select of one cached point from a fixed table of 8.
+/// Constant-time select of one cached point from a fixed-size table.
 ///
-/// Caller passes `abs_d ∈ {0, 1, ..., 8}`. The table entries are
-/// `[1·X, 2·X, ..., 8·X]` for some `X = 16^i · B`. Result is the
-/// cached identity when `abs_d == 0`; otherwise `table[abs_d - 1]`.
+/// Caller passes `abs_d ∈ {0, 1, ..., N}`. The table entries are
+/// `[1·X, 2·X, ..., N·X]` for some `X = base^i · B` (with `base` = 16 at
+/// width 4 or 32 at width 5). Result is the cached identity when
+/// `abs_d == 0`; otherwise `table[abs_d - 1]`.
 ///
-/// All 8 entries are touched on every call, with the chosen one selected
-/// via mask XOR — no scalar-dependent branches, memory accesses, or
-/// timing.
-pub(super) fn ct_select_cached(table_i: &[CachedPoint; 8], abs_d: u8) -> CachedPoint {
+/// All `N` entries are touched on every call, with the chosen one
+/// selected via mask XOR — no scalar-dependent branches, memory
+/// accesses, or timing. Const-generic in `N` so width-4 (`N = 8`) and
+/// width-5 (`N = 16`) comb implementations share the same hot loop body.
+pub(super) fn ct_select_cached<const N: usize>(
+    table_i: &[CachedPoint; N],
+    abs_d: u8,
+) -> CachedPoint {
     let mut out = IDENTITY_CACHED;
-    for j in 0..8u8 {
-        let mask = ct_eq_u8(abs_d, j + 1);
-        let src = &table_i[j as usize];
+    for (j, src) in table_i.iter().enumerate() {
+        let mask = ct_eq_u8(abs_d, (j + 1) as u8);
         for k in 0..5 {
             out.y_minus_x[k] ^= mask & (out.y_minus_x[k] ^ src.y_minus_x[k]);
             out.y_plus_x[k] ^= mask & (out.y_plus_x[k] ^ src.y_plus_x[k]);
