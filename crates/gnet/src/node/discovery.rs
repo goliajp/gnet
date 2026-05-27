@@ -22,13 +22,14 @@ use std::net::{IpAddr, SocketAddr};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gnet_crypto::mlkem;
 use gnet_hex as hex;
 
 use gnet_punch::PunchState;
 
+use super::punch::DIRECT_UPGRADE_BASE;
 use super::types::{Node, Peer, Session};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(30);
@@ -281,6 +282,8 @@ pub(super) fn apply(node: &Mutex<Node>, views: &[PeerView]) -> (usize, usize) {
             relay: false,
             relay_endpoint: None,
             relay_eligible: v.relay_eligible,
+            direct_upgrade_at: Instant::now() + DIRECT_UPGRADE_BASE,
+            direct_upgrade_failures: 0,
         });
         added += 1;
     }
@@ -787,6 +790,8 @@ mod tests {
                 relay: false,
                 relay_endpoint: None,
                 relay_eligible: false,
+                direct_upgrade_at: Instant::now() + DIRECT_UPGRADE_BASE,
+                direct_upgrade_failures: 0,
             });
         }
         // coord view: rotated pubkey + alias
