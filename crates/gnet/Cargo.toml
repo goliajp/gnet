@@ -11,15 +11,15 @@ categories = ["command-line-utilities", "network-programming"]
 
 # only in-house path crates; no crates.io dependencies.
 [dependencies]
-gnet-config = { path = "../gnet-config" }
-gnet-crypto = { path = "../gnet-crypto" }
-gnet-hex = { path = "../gnet-hex" }
-gnet-noise = { path = "../gnet-noise" }
-gnet-punch = { path = "../gnet-punch" }
-gnet-rand = { path = "../gnet-rand" }
-gnet-relay = { path = "../gnet-relay" }
-gnet-tun = { path = "../gnet-tun" }
-gnet-wire = { path = "../gnet-wire" }
+gnet-config.workspace = true
+gnet-crypto.workspace = true
+gnet-hex.workspace = true
+gnet-noise.workspace = true
+gnet-punch.workspace = true
+gnet-rand.workspace = true
+gnet-relay.workspace = true
+gnet-tun.workspace = true
+gnet-wire.workspace = true
 
 [lints]
 workspace = true

@@ -22,5 +22,5 @@ serde_json.workspace = true
 httparse.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-gnet-rand = { path = "../gnet-rand" }
-gnet-hex = { path = "../gnet-hex" }
+gnet-rand.workspace = true
+gnet-hex.workspace = true

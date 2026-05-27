@@ -12,11 +12,12 @@ categories = ["config", "network-programming"]
 
 # only in-house path stones; no crates.io dependencies.
 [dependencies]
-gnet-crypto = { path = "../gnet-crypto" }
-gnet-hex = { path = "../gnet-hex" }
+gnet-crypto.workspace = true
+gnet-hex.workspace = true
 
 [dev-dependencies]
 # randomized config-roundtrip coverage via the sibling 0-dep RNG (no proptest).
+# Plain path dep (no `version`) so the uploaded manifest strips it.
 gnet-rand = { path = "../gnet-rand" }
 
 [lints]

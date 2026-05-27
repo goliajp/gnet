@@ -12,10 +12,11 @@ categories = ["network-programming", "no-std"]
 
 # only the in-house wire-framing stone; no crates.io dependencies.
 [dependencies]
-gnet-wire = { path = "../gnet-wire" }
+gnet-wire.workspace = true
 
 [dev-dependencies]
 # randomized/property coverage via the sibling 0-dep RNG (no proptest).
+# Plain path dep (no `version`) so the uploaded manifest strips it.
 gnet-rand = { path = "../gnet-rand" }
 
 [lints]
