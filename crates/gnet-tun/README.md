@@ -8,6 +8,12 @@ used for the device syscalls, each with a `// SAFETY:` note.
 - **macOS** (`utun`) — implemented.
 - **Linux** (`/dev/net/tun`) — planned.
 
+## Install
+
+```sh
+cargo add gnet-tun
+```
+
 ## Requires root
 
 Opening a TUN device needs elevated privileges, so this crate cannot be

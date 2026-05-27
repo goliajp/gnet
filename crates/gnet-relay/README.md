@@ -7,6 +7,12 @@ overlay network — and usable standalone.
 > guiding rule is **0 external dependencies, pure Rust** — we own the entire
 > network path. `[dependencies]` is empty.
 
+## Install
+
+```sh
+cargo add gnet-relay
+```
+
 ## What it is
 
 When two peers cannot hole-punch a direct path (symmetric NAT, CGNAT, hairpin),
@@ -57,6 +63,12 @@ let target = gnet_relay::dst_key(&buf[..n]).unwrap();
 
 // on the receiver: unwrap and re-dispatch the inner datagram
 let (from, _to, payload) = gnet_relay::decode(&buf[..n]).unwrap();
+```
+
+A runnable end-to-end demo lives at [`examples/envelope_demo.rs`](examples/envelope_demo.rs):
+
+```sh
+cargo run -p gnet-relay --example envelope_demo
 ```
 
 ## Design

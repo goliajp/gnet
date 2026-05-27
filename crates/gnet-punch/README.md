@@ -6,6 +6,33 @@ Zero-dependency **DCUtR-style synchronized hole-punch rendezvous** for the
 > Part of a from-scratch WireGuard/Tailscale-class encrypted overlay. 0 external
 > crates.io deps (only the sibling `gnet-wire` for the address codec).
 
+## Install
+
+```sh
+cargo add gnet-punch
+```
+
+## Example
+
+```rust
+use gnet_punch::{PunchState, encode_connect, decode_connect};
+
+let origin = [0x01u8; 32];
+let target = [0x02u8; 32];
+let reflexive: std::net::SocketAddr = "203.0.113.7:40000".parse().unwrap();
+
+let body = encode_connect(&origin, &target, reflexive);
+let (got_origin, got_target, got_refl) = decode_connect(&body).unwrap();
+assert_eq!((got_origin, got_target, got_refl), (origin, target, reflexive));
+```
+
+A runnable end-to-end demo (codec + state-machine walk) lives at
+[`examples/codec_demo.rs`](examples/codec_demo.rs):
+
+```sh
+cargo run -p gnet-punch --example codec_demo
+```
+
 ## What it is
 
 Two peers each behind their own NAT can't see each other's endpoint. They

@@ -7,6 +7,28 @@ network.
 > guiding rule is **0 external dependencies, pure Rust**. `[dependencies]` is
 > empty — only `std::net` is used.
 
+## Install
+
+```sh
+cargo add gnet-wire
+```
+
+## Example
+
+```rust
+use gnet_wire::{Kind, frame, parse};
+let dg = frame(Kind::HandshakeInit, b"msg1 bytes");
+let (kind, body) = parse(&dg).unwrap();
+assert_eq!(kind, Kind::HandshakeInit);
+assert_eq!(body, b"msg1 bytes");
+```
+
+A runnable end-to-end demo lives at [`examples/frame_parse.rs`](examples/frame_parse.rs):
+
+```sh
+cargo run -p gnet-wire --example frame_parse
+```
+
 ## What it is
 
 Every datagram on the wire starts with a one-byte **type tag** so a node can

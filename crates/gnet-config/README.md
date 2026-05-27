@@ -7,6 +7,30 @@ configuration: a node's static identity plus a table of peers.
 > sibling stones `gnet-hex` (key codec) and `gnet-crypto` (the `EK_LEN`
 > constant).
 
+## Install
+
+```sh
+cargo add gnet-config
+```
+
+## Example
+
+```rust
+let cfg = gnet_config::parse("\
+private  1111111111111111111111111111111111111111111111111111111111111111
+address  10.42.42.2
+listen   0.0.0.0:65432
+keepalive 25
+").unwrap();
+assert_eq!(cfg.keepalive, Some(std::time::Duration::from_secs(25)));
+```
+
+A runnable end-to-end demo lives at [`examples/parse_sample.rs`](examples/parse_sample.rs):
+
+```sh
+cargo run -p gnet-config --example parse_sample
+```
+
 ## Format
 
 One directive per line; `#` and blank lines are ignored.
