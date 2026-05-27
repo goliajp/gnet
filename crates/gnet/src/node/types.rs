@@ -211,22 +211,37 @@ impl Node {
     /// returning them to `Idle` so the next outbound packet re-initiates. The
     /// deadline is measured from `started`, not `retry_at`, so retransmits do
     /// not keep an unreachable peer in-flight forever.
+    ///
+    /// Also expires `PunchState::Connecting`: under symmetric NAT the DCUtR
+    /// reply path can disappear silently (target's reply via coord lands on
+    /// a different mini-side NAT mapping than the one mini opened to coord).
+    /// Without this branch, `peer.punch` would sit in Connecting forever and
+    /// the punch_failures counter would never advance to relay-fallback.
     pub(super) fn expire_handshakes(&mut self, timeout: Duration) {
         let mut tripped: Vec<usize> = Vec::new();
         for (i, p) in self.peers.iter_mut().enumerate() {
-            if let Session::Initiating { started, .. } = &p.session
-                && started.elapsed() > timeout
-            {
+            let timed_out_session = matches!(
+                &p.session,
+                Session::Initiating { started, .. } if started.elapsed() > timeout
+            );
+            let timed_out_punch = matches!(
+                &p.punch,
+                PunchState::Connecting { sent_at } if sent_at.elapsed() > timeout
+            );
+            if timed_out_session || timed_out_punch {
                 p.session = Session::Idle;
+                p.punch = PunchState::Idle;
                 // Any handshake give-up against a peer with no relay yet is a
                 // direct-path failure: count toward `PUNCH_ATTEMPTS` so that
                 // PUNCH_ATTEMPTS consecutive give-ups trip to relay fallback.
-                // This covers both
-                //   - punch-originated paths (the original `punched` case), and
+                // Covers three cases:
+                //   - punch-originated paths (the original `punched` case),
                 //   - direct-init paths where the peer's endpoint is reflexive
                 //     and the cold-start NAT-NAT first packet can't punch on
                 //     its own (the v0.3 endpoint-report regression made every
-                //     NAT peer look directly-reachable, shadowing the punch).
+                //     NAT peer look directly-reachable, shadowing the punch),
+                //   - DCUtR Connecting state that never got a reply
+                //     (symmetric-NAT mini-side mapping mismatch).
                 if !p.relay {
                     p.punch_failures += 1;
                     if p.punch_failures >= PUNCH_ATTEMPTS {
