@@ -86,16 +86,46 @@ pub(super) fn uplink(
                             }
                         }
                     } else if matches!(g.peers[i].session, Session::Idle) {
-                        if g.peers[i].relay || g.peers[i].endpoint.is_some() {
-                            // a known endpoint (or a relay path) → initiate a
-                            // handshake; this packet is dropped (the app/OS
-                            // retransmits once the session is up). initiate routes
-                            // through the relay when the peer has tripped to it.
+                        // Path-selection ordered by cheapest-correct-first:
+                        //
+                        // 1. Already on a relay path (post-PUNCH_ATTEMPTS trip
+                        //    or reciprocally-learned): wrap the init through
+                        //    the relay. `initiate` handles route_dg internally.
+                        //
+                        // 2. We are NAT'd (self_is_nat == Some(true)) AND the
+                        //    peer has an endpoint (reflexive-or-static):
+                        //    direct init cold-starts only by accidental NAT-
+                        //    mapping alignment (was a real bug in v0.3..v0.4.2
+                        //    after endpoint-report made every peer look
+                        //    directly-reachable). Use coordinator-mediated
+                        //    DCUtR — its simultaneous-open works for any NAT
+                        //    flavour, and for public peers the dial just
+                        //    succeeds on first attempt.
+                        //
+                        // 3. We are public OR self-NAT-status unknown (no
+                        //    reflexive learned yet at startup), with a known
+                        //    peer endpoint: direct init works without the
+                        //    coordinator round-trip.
+                        //
+                        // 4. No endpoint AND punch idle: start_punch (the
+                        //    original v0.2 path when endpoint really is None).
+                        if g.peers[i].relay {
+                            init_dg = g.initiate(i);
+                        } else if matches!(g.self_is_nat, Some(true))
+                            && g.peers[i].endpoint.is_some()
+                        {
+                            if matches!(g.peers[i].punch, PunchState::Idle) {
+                                // start_punch may return None if reflexive was
+                                // unset between the self_is_nat read and the
+                                // dial — fall back to direct init in that case
+                                // so we never deadlock the packet.
+                                init_dg =
+                                    g.start_punch(i).or_else(|| g.initiate(i));
+                            }
+                            // else: punch already in flight, drop this packet
+                        } else if g.peers[i].endpoint.is_some() {
                             init_dg = g.initiate(i);
                         } else if matches!(g.peers[i].punch, PunchState::Idle) {
-                            // no direct path → begin a coordinator-synchronized
-                            // hole punch (idempotent). This packet is dropped; the
-                            // session comes up once the rendezvous dials.
                             init_dg = g.start_punch(i);
                         }
                     }

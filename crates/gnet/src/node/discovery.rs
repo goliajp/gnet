@@ -536,6 +536,7 @@ mod tests {
             peers: Vec::new(),
             reflexive: None,
             probe_txid: 0,
+            self_is_nat: None,
         }))
     }
 

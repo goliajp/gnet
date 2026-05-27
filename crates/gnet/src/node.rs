@@ -18,6 +18,7 @@
 
 mod discovery;
 mod handshake;
+mod local_ips;
 mod pump;
 mod punch;
 mod types;
@@ -181,6 +182,7 @@ pub fn run(config: Config) -> io::Result<()> {
         peers,
         reflexive: None,
         probe_txid: 0,
+        self_is_nat: None,
     }));
 
     // condvar the punch-dial poller blocks on; downlink notifies it when a
