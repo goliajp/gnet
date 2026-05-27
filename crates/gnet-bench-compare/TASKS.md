@@ -84,10 +84,19 @@ the entire 53µs gap.
 
 ## Phase 2 — ML-KEM-768 polish (highest absolute ROI)
 
-**Current state**: 1.7× – 1.9× slower than RustCrypto on keygen / encaps;
-1.07× – 1.31× on decaps. ML-KEM dominates handshake cost
-(`gnet hybrid handshake` ~356 µs of which ~140 µs is ML-KEM today). Half
-the gap = ~70 µs off every handshake.
+**Current state (2026-05-27 after T-2.1/T-2.4 + sha3 batched squeeze)**:
+- decaps: ~1.03 (was 1.17) — essentially at parity, cap ratchetted to 1.15
+- encaps: ~1.55 (was 1.62) — marginal, cap ratchetted to 1.75
+- keygen: ~1.85 (was 1.88) — marginal, cap ratchetted to 2.10
+
+T-2.2/T-2.3 (precomputed ZETAS, Montgomery/Barrett reductions) were
+already implemented from day one — verified against FIPS 203 reference
+and KAT'd by `ntt_mul_matches_schoolbook`. The remaining encaps / keygen
+gap is dominated by **Keccak-f1600 throughput in matrix generation**: 9
+`sample_ntt` calls × ~3 Keccak permutations each = 27 Keccak/keygen, all
+in the scalar path. RustCrypto's `ml-kem` uses platform-tuned Keccak
+(potentially Keccak-x4 / Keccak-x2 batching the matrix's parallel
+streams). Closing the rest needs T-2.5 (SIMD NTT + batched Keccak).
 
 ### T-2.1 Audit current mlkem layout
 
@@ -123,19 +132,27 @@ the gap = ~70 µs off every handshake.
   intermediate `Vec`.
 - Acceptance: encaps + decaps ratios drop 10%+.
 
-### T-2.5 (Stretch) SIMD layout for k=3 modulus polynomial matrix
+### T-2.5 (Stretch) Keccak-x4 NEON / NTT SIMD
 
-- ML-KEM-768 uses a 3×3 matrix of polynomials. Reorganise the matrix
-  storage so the 256-coefficient polynomial body is 32-byte aligned;
-  enables future autovec / explicit SIMD.
-- Acceptance: keygen + encaps ratios drop 15%+.
+- File: `crates/gnet-crypto/src/sha3.rs` + new `sha3/neon_x4.rs`
+- ML-KEM-768 matrix generation can run 4 SHAKE128 streams in parallel
+  (the i,j seeds are independent). With NEON we keep four 25-lane Keccak
+  states in `uint64x2_t` pairs and run the 24 rounds 4-way.
+- Reference (technique only): pqcrystals-kyber-aarch64-neon, FIPS 202.
+  Re-derive ours; the permutation arithmetic is the same.
+- Acceptance: keygen ratio drops 30%+ (target < 1.30); encaps drops
+  25%+ (target < 1.20).
+
+For NTT SIMD (separate sub-task): NEON 8-way i16 ops on the butterfly
+inner loop. Acceptance: decaps + encaps drop another 15%+.
 
 ### Tighten gates
 
-After T-2.5: edit hardgate
-→ `mlkem_keygen_hardgate` `max_ratio` `2.5` → `1.05`.
-→ `mlkem_encaps_hardgate` `max_ratio` `2.2` → `1.05`.
-→ `mlkem_decaps_hardgate` `max_ratio` `1.7` → `1.05`.
+- After T-2.4 lands: ratchet to current observed +noise margin
+  → `mlkem_keygen_hardgate` `max_ratio` `2.5` → `2.10`
+  → `mlkem_encaps_hardgate` `max_ratio` `2.2` → `1.75`
+  → `mlkem_decaps_hardgate` `max_ratio` `1.7` → `1.15`.
+- After T-2.5 lands: ratchet all three to `1.05` (or below).
 
 (Re-bench after every sub-task; tighten the gate by the observed delta
 to lock the win in.)
