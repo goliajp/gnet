@@ -9,7 +9,6 @@ mod base;
 mod base_table;
 mod edwards;
 mod field;
-mod field2255;
 mod scalar;
 
 pub use base::{x25519_base, x25519_base_pair};
