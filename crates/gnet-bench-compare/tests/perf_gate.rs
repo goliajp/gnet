@@ -44,7 +44,7 @@ const ITERS_HEX: u32 = 200_000;
 /// competitor pick their own min independently on the same hardware,
 /// so the ratio still cancels architecture noise but no longer carries
 /// state-dependent stretching.
-const BEST_OF: usize = 10;
+const BEST_OF: usize = 20;
 
 /// Time a closure over `iters` iterations after `iters/4` warm-up calls.
 /// Returns the average ns per iteration of a single sample.
@@ -294,7 +294,14 @@ fn mlkem_encaps_hardgate() {
     // stably under 0.74 even in lx64's slow cluster, so the original
     // ratchet survives the noise envelope. See `mlkem_keygen` cap
     // comment for the wider bimodal context.
-    let cap = if cfg!(target_arch = "aarch64") { 0.65 } else { 0.85 };
+    //
+    // 2026-05-28 (v0.8 S1): x86_64 cap ratchetted 0.85 → 0.78 after AVX2
+    // 16-way NTT/invNTT landed. Typical ratio is 0.63-0.66 (~11% relative
+    // improvement from the SIMD butterflies covering layers len ∈
+    // {128, 64, 32, 16}), but the lx64 slow-cluster CPU-governor state
+    // can pull the ratio up to ~0.72 — cap 0.78 leaves a thin envelope
+    // for the slow cluster while still gating any real regression.
+    let cap = if cfg!(target_arch = "aarch64") { 0.65 } else { 0.78 };
     assert_ratio("ML-KEM encaps", gnet_ns, comp_ns, cap);
 }
 
@@ -337,7 +344,18 @@ fn mlkem_decaps_hardgate() {
     // 2026-05-28: x86_64 cap loosened 0.80 → 1.15 to absorb occasional
     // spikes (one decaps in ~5 lx64 runs measured 1.08×, the rest stable
     // at 0.66-0.67). Same bimodal-CPU rationale as `mlkem_keygen`.
-    let cap = if cfg!(target_arch = "aarch64") { 0.60 } else { 1.15 };
+    //
+    // 2026-05-28 (v0.8 S1): x86_64 cap ratchetted 1.15 → 1.05 after AVX2
+    // 16-way NTT/invNTT landed. Typical ratio is 0.57-0.58 (~13% relative
+    // improvement — decaps does two NTT roundtrips for the re-encrypt
+    // step), but the lx64 slow-cluster CPU-governor state stretches
+    // decaps to ~56 µs (vs ~32 µs fast) for several seconds at a stretch
+    // and reaches ~1.0 occasionally even under best-of-20. Cap 1.05
+    // catches any real regression (gnet ≥ 5% stably slower than
+    // competitor) while passing the slow-cluster envelope. The AVX2
+    // ratchet lives in the comment + commit history, not the numeric
+    // cap, until the lx64 governor / GH runner CPU stability improves.
+    let cap = if cfg!(target_arch = "aarch64") { 0.60 } else { 1.05 };
     assert_ratio("ML-KEM decaps", gnet_ns, comp_ns, cap);
 }
 
