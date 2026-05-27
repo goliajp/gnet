@@ -350,12 +350,14 @@ fn noise_ik_classic_hardgate() {
     });
 
     // Baseline 2026-05-27 was 1.22 (Apple) / 1.14 (Linux). After Phase 1
-    // (allocation-free Hasher + HKDF / single-Vec output) and T-1.4
-    // (X25519 Edwards-basepoint comb, ≈ 3× faster public-key derivation,
-    // applied 4× per handshake), gnet went from 1.24 → ~0.95 on Apple —
-    // a clear win over snow. Cap 1.05 to lock the win with run-to-run
-    // noise margin, matching the other winning categories.
-    assert_ratio("Noise_IK classic handshake", gnet_ns, comp_ns, 1.05);
+    // (allocation-free Hasher + HKDF / single-Vec output), T-1.4 (X25519
+    // Edwards-basepoint comb), the width-5 comb refinement, and the
+    // x25519_base_pair batch-inversion (one finvert shared across the
+    // static + ephemeral derivations in `Initiator::new` /
+    // `Responder::new`), gnet's median lands at ~0.91 on Apple / ~0.87
+    // on lx64. Cap 1.00 tightens the lock-the-win line — we should never
+    // again be slower than snow on either arch.
+    assert_ratio("Noise_IK classic handshake", gnet_ns, comp_ns, 1.00);
 }
 
 // ───── Hex codec ──────────────────────────────────────────────────────

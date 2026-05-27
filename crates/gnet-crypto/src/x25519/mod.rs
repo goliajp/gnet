@@ -11,7 +11,7 @@ mod edwards;
 mod field;
 mod scalar;
 
-pub use base::x25519_base;
+pub use base::{x25519_base, x25519_base_pair};
 pub use scalar::x25519;
 
 #[cfg(test)]

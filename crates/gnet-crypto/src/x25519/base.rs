@@ -17,7 +17,8 @@
 
 use super::base_table::{ENTRIES, TABLE, WINDOWS};
 use super::edwards::{
-    IDENTITY, ct_negate_cached, ct_select_cached, ed_mixed_add, ed_to_mont_u,
+    IDENTITY, Point, ct_negate_cached, ct_select_cached, ed_mixed_add, ed_to_mont_u,
+    ed_to_mont_u_pair,
 };
 use super::scalar::clamp;
 
@@ -31,6 +32,34 @@ const WINDOW_BITS: usize = 5;
 /// and runs ≈ 3.5× faster on the hot path. Use this for public-key
 /// derivation; the general [`super::x25519`] handles the DH step.
 pub fn x25519_base(scalar: &[u8; 32]) -> [u8; 32] {
+    let p = scalar_mult_basepoint(scalar);
+    ed_to_mont_u(&p)
+}
+
+/// X25519 fixed-base for two scalars at once, sharing one [`finvert`]
+/// (Curve25519's most expensive field op) across both via Montgomery's
+/// batch-inversion trick.
+///
+/// Bit-identical to `(x25519_base(s1), x25519_base(s2))` — verified by
+/// `x25519_base_pair_matches_two_singles` in the test module — but
+/// roughly 2 µs faster per call on Apple M-series (one finvert is
+/// ~2.1 µs; two independent calls would do two of them, batching does
+/// one). Use it when a single function naturally derives two public
+/// keys back-to-back, e.g. the Noise IK handshake's static + ephemeral
+/// pair in `Initiator::new` / `Responder::new`.
+pub fn x25519_base_pair(scalars: [&[u8; 32]; 2]) -> [[u8; 32]; 2] {
+    let p1 = scalar_mult_basepoint(scalars[0]);
+    let p2 = scalar_mult_basepoint(scalars[1]);
+    let (u1, u2) = ed_to_mont_u_pair(&p1, &p2);
+    [u1, u2]
+}
+
+/// Internal: comb-driven scalar multiplication of the Ed25519 basepoint,
+/// returning the extended-coords result. Shared by [`x25519_base`] and
+/// [`x25519_base_pair`] so both pay the same `clamp` + recode + 52 ×
+/// (select, negate, mixed-add) cost; only the final affine-projection
+/// step differs (single-inversion vs batched-inversion).
+fn scalar_mult_basepoint(scalar: &[u8; 32]) -> Point {
     let mut s = *scalar;
     clamp(&mut s);
     let digits = recode_signed_5bit(&s);
@@ -46,8 +75,7 @@ pub fn x25519_base(scalar: &[u8; 32]) -> [u8; 32] {
         ct_negate_cached(&mut p, neg_mask);
         acc = ed_mixed_add(&acc, &p);
     }
-
-    ed_to_mont_u(&acc)
+    acc
 }
 
 /// 5-bit signed-digit recoding of the (clamped) scalar.
@@ -165,6 +193,45 @@ mod tests {
         }
     }
 
+    /// Pair must be bit-identical to two independent x25519_base calls,
+    /// across every scalar pair. This is the load-bearing test for the
+    /// Montgomery batch-inversion shortcut in `ed_to_mont_u_pair`.
+    #[test]
+    fn x25519_base_pair_matches_two_singles() {
+        let mut state: u64 = 0xc0de_cafe_1337_4242;
+        let mut next_scalar = || {
+            let mut scalar = [0u8; 32];
+            for chunk in scalar.chunks_mut(8) {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                chunk.copy_from_slice(&state.to_le_bytes());
+            }
+            scalar
+        };
+        for _ in 0..32 {
+            let s1 = next_scalar();
+            let s2 = next_scalar();
+            let pair = x25519_base_pair([&s1, &s2]);
+            assert_eq!(pair[0], x25519_base(&s1));
+            assert_eq!(pair[1], x25519_base(&s2));
+        }
+    }
+
+    /// The pair entry-point must also match the Montgomery ladder
+    /// reference (i.e., the whole pair path — comb + batched projection
+    /// — is consistent with the canonical X25519 spec, not just
+    /// internally consistent with the single-comb path).
+    #[test]
+    fn x25519_base_pair_matches_montgomery_ladder() {
+        let basepoint = base_point();
+        let s1 = [0x42u8; 32];
+        let s2 = [0xa5u8; 32];
+        let pair = x25519_base_pair([&s1, &s2]);
+        assert_eq!(pair[0], x25519(&s1, &basepoint));
+        assert_eq!(pair[1], x25519(&s2, &basepoint));
+    }
+
     #[test]
     fn x25519_base_matches_ladder_for_all_zero_scalar() {
         let s = [0u8; 32];
@@ -175,6 +242,44 @@ mod tests {
     fn x25519_base_matches_ladder_for_all_ones_scalar() {
         let s = [0xffu8; 32];
         assert_eq!(x25519_base(&s), x25519(&s, &base_point()));
+    }
+
+    /// Microbench — x25519_base_pair vs two serial x25519_base calls.
+    /// The expected speedup is Σ(2 × finvert) / Σ(1 × finvert + 5 × fmul)
+    /// ≈ 2.1 µs saved out of ~10.7 µs serial = ~20 % per pair on Apple.
+    #[test]
+    #[ignore = "informational microbench"]
+    fn x25519_base_pair_speedup_microbench() {
+        use std::time::Instant;
+        let s1 = [0x77u8; 32];
+        let s2 = [0xa5u8; 32];
+
+        for _ in 0..200 {
+            let _ = x25519_base_pair([&s1, &s2]);
+            let _ = x25519_base(&s1);
+            let _ = x25519_base(&s2);
+        }
+        let iters = 5_000u32;
+
+        let start = Instant::now();
+        for _ in 0..iters {
+            let _ = std::hint::black_box(x25519_base_pair([
+                std::hint::black_box(&s1),
+                std::hint::black_box(&s2),
+            ]));
+        }
+        let pair_ns = start.elapsed().as_nanos() / u128::from(iters);
+
+        let start = Instant::now();
+        for _ in 0..iters {
+            let _ = std::hint::black_box(x25519_base(std::hint::black_box(&s1)));
+            let _ = std::hint::black_box(x25519_base(std::hint::black_box(&s2)));
+        }
+        let serial_ns = start.elapsed().as_nanos() / u128::from(iters);
+
+        eprintln!("x25519_base_pair: {pair_ns} ns");
+        eprintln!("2× x25519_base:   {serial_ns} ns");
+        eprintln!("  speedup: {:.2}×", serial_ns as f64 / pair_ns as f64);
     }
 
     /// Informational breakdown of x25519_base cost. Run with

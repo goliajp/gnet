@@ -76,6 +76,11 @@ fn dh(secret: &[u8; 32], public: &[u8; 32]) -> [u8; 32] {
     x25519::x25519(secret, public)
 }
 
+/// Test-only single-key derivation helper. The production code paths
+/// (`Initiator::new` / `Responder::new`) call
+/// [`x25519::x25519_base_pair`] to amortize one shared field inversion
+/// across the static + ephemeral pair.
+#[cfg(test)]
 #[inline]
 fn public_of(secret: &[u8; 32]) -> [u8; 32] {
     x25519::x25519_base(secret)
@@ -102,9 +107,12 @@ impl Initiator {
         let mut sym = SymmetricState::new(PROTOCOL_NAME);
         sym.mix_hash(&[]); // empty prologue
         sym.mix_hash(&responder_static_pub); // pre-message `s`
+        // One shared finvert across both derivations — see
+        // gnet_crypto::x25519::x25519_base_pair.
+        let [s_pub, e_pub] = x25519::x25519_base_pair([&static_priv, &ephemeral_priv]);
         Self {
-            s_pub: public_of(&static_priv),
-            e_pub: public_of(&ephemeral_priv),
+            s_pub,
+            e_pub,
             s_priv: static_priv,
             e_priv: ephemeral_priv,
             rs: responder_static_pub,
@@ -189,13 +197,14 @@ impl Responder {
     /// Create a responder with its static private key and an injected
     /// ephemeral private key.
     pub fn new(static_priv: [u8; 32], ephemeral_priv: [u8; 32]) -> Self {
-        let s_pub = public_of(&static_priv);
+        // One shared finvert across both derivations.
+        let [s_pub, e_pub] = x25519::x25519_base_pair([&static_priv, &ephemeral_priv]);
         let mut sym = SymmetricState::new(PROTOCOL_NAME);
         sym.mix_hash(&[]); // empty prologue
         sym.mix_hash(&s_pub); // pre-message `s` (our own static)
         Self {
             s_priv: static_priv,
-            e_pub: public_of(&ephemeral_priv),
+            e_pub,
             e_priv: ephemeral_priv,
             sym,
             initiator_ephemeral: None,

@@ -24,6 +24,9 @@ fn dh(secret: &[u8; 32], public: &[u8; 32]) -> [u8; 32] {
     x25519::x25519(secret, public)
 }
 
+/// Test-only single-key derivation helper. Production paths use
+/// [`x25519::x25519_base_pair`] for the static + ephemeral pair.
+#[cfg(test)]
 #[inline]
 fn public_of(secret: &[u8; 32]) -> [u8; 32] {
     x25519::x25519_base(secret)
@@ -57,10 +60,12 @@ impl HybridInitiator {
         sym.mix_hash(&[]); // prologue
         sym.mix_hash(&responder_static_pub); // pre-message: responder X25519 static
         sym.mix_hash(responder_mlkem_ek); // pre-message: responder ML-KEM ek
+        // One shared finvert across both X25519 derivations.
+        let [s_pub, e_pub] = x25519::x25519_base_pair([&static_priv, &ephemeral_priv]);
         Self {
             sym,
-            s_pub: public_of(&static_priv),
-            e_pub: public_of(&ephemeral_priv),
+            s_pub,
+            e_pub,
             s_priv: static_priv,
             e_priv: ephemeral_priv,
             rs: responder_static_pub,
@@ -159,7 +164,8 @@ impl HybridResponder {
         mlkem_dk: &[u8],
         ephemeral_priv: [u8; 32],
     ) -> Self {
-        let s_pub = public_of(&static_priv);
+        // One shared finvert across both X25519 derivations.
+        let [s_pub, e_pub] = x25519::x25519_base_pair([&static_priv, &ephemeral_priv]);
         let mut sym = SymmetricState::new(PROTOCOL_NAME);
         sym.mix_hash(&[]); // prologue
         sym.mix_hash(&s_pub); // pre-message: our X25519 static
@@ -167,7 +173,7 @@ impl HybridResponder {
         Self {
             s_priv: static_priv,
             mlkem_dk: mlkem_dk.to_vec(),
-            e_pub: public_of(&ephemeral_priv),
+            e_pub,
             e_priv: ephemeral_priv,
             sym,
             initiator_ephemeral: None,
