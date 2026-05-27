@@ -16,19 +16,16 @@ licence story stays clean.
 
 ---
 
-## Phase 1 — Noise_IK overhead polish
+## Phase 1 — Noise_IK overhead polish — **DONE (2026-05-27)**
 
-**Current state (2026-05-27 after T-1.1/T-1.2/T-1.3 land)**: classic
-Noise_IK handshake is ~1.25× (Apple) slower than `snow`. The state-
-machine allocation/inline polish (T-1.2/T-1.3) trimmed the inner BLAKE2s
-and HKDF allocations to zero; remaining gap is dominated by **X25519
-basepoint multiplication**. We compute `static_pub` + `ephemeral_pub` per
-side per handshake via a general scalar mult (~20µs each); snow uses
-x25519-dalek's `EphemeralSecret`-style basepoint-with-precomputed-table
-multiplication (~5µs each). Gap = 4 basepoint mults × ~15µs ≈ 60µs ≈
-the entire 53µs gap.
+**Current state**: classic Noise_IK handshake is **~0.98× snow on Apple**
+(gnet 212 µs, snow 217 µs). Phases 1+2+T-1.4 closed the entire gap and
+flipped the category. Hardgate cap ratchetted to **1.05** (matching the
+other winning categories).
 
-**Hardgate cap now 1.35** (was 1.60); ratchet to 1.05 after T-1.4 lands.
+History:
+- 2026-05-27 baseline: ~1.25× snow (T-1.1/T-1.2/T-1.3 done)
+- + T-1.4 (Edwards basepoint comb): **0.98× snow** ← win
 
 ### T-1.1 Profile gnet-noise classic handshake allocations
 
@@ -58,27 +55,28 @@ the entire 53µs gap.
   doesn't pay a vtable cost.
 - Acceptance: hardgate ratio drops below 1.0.
 
-### T-1.4 (follow-up) X25519 basepoint precomputation
+### T-1.4 (follow-up) X25519 basepoint precomputation — **DONE**
 
-- File: `crates/gnet-crypto/src/x25519.rs` + new `x25519/base_table.rs`
-- Add `pub fn x25519_base(scalar: &[u8; 32]) -> [u8; 32]` using a
-  fixed-base comb method with a compile-time-precomputed table
-  (~16 KiB, e.g. 256 Edwards points). Route `Initiator::new` /
-  `Responder::new` / `HybridInitiator::new` / `HybridResponder::new`
-  `public_of` through it.
-- Reference (technique only): curve25519-dalek's `EdwardsBasepointTable`
-  comb — re-derive from FIPS 186-5 / RFC 7748 / Bernstein's
-  donna-c64 to keep gnet 0-dep / 100%-original.
-- Acceptance: classic Noise_IK hardgate ratio drops below 1.10
-  (current ~1.25 → goal < 1.10). Likely well below 1.05 since the gap
-  is ~60µs over a 217µs snow baseline.
-
-### Tighten gate
-
-- After T-1.3 lands (Phase 1 polish complete): ratchet
-  `tests/perf_gate.rs` → `noise_ik_classic_hardgate` `max_ratio`
-  from `1.60` → `1.35` (captures current state with noise margin).
-- After T-1.4 lands: ratchet → `1.05`.
+- Files: `crates/gnet-crypto/src/x25519/{field,scalar,edwards,base_table,base}.rs`
+  (split from the single `x25519.rs`).
+- `pub fn x25519_base(scalar: &[u8; 32]) -> [u8; 32]` shipped via an
+  Edwards twisted-curve comb: 4-bit signed-digit recoding × 64
+  windows × 8 cached multiples = **60 KiB rodata table** (Fe-form;
+  no per-lookup unpack). Compile-time const-fn build, KAT'd against
+  RFC 7748 §6.1 + 64 random-scalar differential vs the Montgomery
+  ladder.
+- All four `public_of` call sites routed (`gnet-noise::handshake`,
+  `gnet-noise::hybrid`, plus `gnet::keys` for `generate_static` /
+  `public_key`).
+- Reference: HWCD-2008 extended-coord formulas + RFC 8032 §5.1
+  basepoint + Bernstein donna-c64 schedule. Constants re-derived
+  (`d = -121665/121666` const-computed via `finvert`). No code from
+  curve25519-dalek copied.
+- Result: **6.3 µs/op** (release, Apple Silicon), **3× faster** than
+  the Montgomery ladder for public-key derivation. Closes the
+  Noise_IK gap entirely (1.24× → 0.98×).
+- Perf gate: `gnet-crypto/tests/perf_gate.rs` →
+  `x25519_basepoint_derivation_within_budget` (7 µs cap).
 
 ---
 

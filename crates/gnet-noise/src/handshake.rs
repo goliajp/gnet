@@ -22,13 +22,6 @@ use gnet_crypto::x25519;
 const PROTOCOL_NAME: &[u8] = b"Noise_IK_25519_ChaChaPoly_BLAKE2s";
 const TAG_LEN: usize = 16;
 
-/// Curve25519 base point (`u = 9`).
-const BASE_POINT: [u8; 32] = {
-    let mut b = [0u8; 32];
-    b[0] = 9;
-    b
-};
-
 /// A completed handshake's transport cipher states, plus anti-replay state for
 /// the receive direction.
 pub struct Transport {
@@ -85,7 +78,7 @@ fn dh(secret: &[u8; 32], public: &[u8; 32]) -> [u8; 32] {
 
 #[inline]
 fn public_of(secret: &[u8; 32]) -> [u8; 32] {
-    x25519::x25519(secret, &BASE_POINT)
+    x25519::x25519_base(secret)
 }
 
 /// The handshake initiator. Knows the responder's static public key.
