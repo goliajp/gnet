@@ -6,6 +6,12 @@ system, for the **gnet** overlay — and usable standalone. Reads
 
 Used to generate Noise ephemeral and static private keys.
 
+## Install
+
+```sh
+cargo add gnet-rand
+```
+
 ## Platforms
 
 Unix (Linux, macOS, the BSDs) via `/dev/urandom`. Windows support (via a CSP
@@ -19,6 +25,12 @@ assert_ne!(sk, [0u8; 32]);
 
 let mut nonce = [0u8; 12];
 gnet_rand::fill(&mut nonce);
+```
+
+A runnable end-to-end demo lives at [`examples/random_32.rs`](examples/random_32.rs):
+
+```sh
+cargo run -p gnet-rand --example random_32
 ```
 
 ## API

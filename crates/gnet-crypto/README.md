@@ -9,6 +9,12 @@ vectors**; nothing is pulled from crates.io.
 > guiding rule is **0 external dependencies, pure Rust** — we own the entire
 > network path, crypto included.
 
+## Install
+
+```sh
+cargo add gnet-crypto
+```
+
 ## Primitives
 
 | Module | Primitive | Spec | Notes |
@@ -52,6 +58,12 @@ let nonce = [0u8; 12];
 let (ciphertext, tag) = aead::seal(&shared, &nonce, b"header", b"secret message");
 let plaintext = aead::open(&shared, &nonce, b"header", &ciphertext, &tag).unwrap();
 assert_eq!(plaintext, b"secret message".to_vec());
+```
+
+A runnable end-to-end demo lives at [`examples/aead_roundtrip.rs`](examples/aead_roundtrip.rs):
+
+```sh
+cargo run -p gnet-crypto --example aead_roundtrip
 ```
 
 ## Testing & benchmarks

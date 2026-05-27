@@ -6,6 +6,27 @@ the CLI and in config files.
 > Part of a from-scratch, 0-external-dependency overlay. `[dependencies]` is
 > empty.
 
+## Install
+
+```sh
+cargo add gnet-hex
+```
+
+## Example
+
+```rust
+let key: [u8; 32] = [0xAB; 32];
+let s = gnet_hex::encode(&key);
+assert_eq!(s, "ab".repeat(32));
+assert_eq!(gnet_hex::decode_32(&s), Some(key));
+```
+
+A runnable end-to-end demo lives at [`examples/roundtrip.rs`](examples/roundtrip.rs):
+
+```sh
+cargo run -p gnet-hex --example roundtrip
+```
+
 ## API
 
 - `encode(&[u8]) -> String` — lowercase hex.

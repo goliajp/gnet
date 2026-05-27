@@ -7,6 +7,16 @@ ChaCha20-Poly1305, BLAKE2s, HKDF); nothing comes from crates.io.
 
 > Part of a from-scratch WireGuard/Tailscale-class encrypted overlay.
 
+The post-quantum hybrid variant (Noise_IK + ML-KEM-768) is in the
+`hybrid` module — see [`HYBRID.md`](HYBRID.md) for the construction's
+design rationale + paper anchors and the frozen byte-exact KAT.
+
+## Install
+
+```sh
+cargo add gnet-noise
+```
+
 ## What it does
 
 `IK` lets an initiator that already knows the responder's static public key
@@ -59,6 +69,12 @@ let (mut initiator_tp, _payload) = initiator.read_message_2(&msg2).unwrap();
 // bidirectional transport
 let ct = initiator_tp.send.encrypt_with_ad(b"", b"ping");
 assert_eq!(responder_tp.recv.decrypt_with_ad(b"", &ct).unwrap(), b"ping".to_vec());
+```
+
+A runnable end-to-end demo lives at [`examples/handshake_classic.rs`](examples/handshake_classic.rs):
+
+```sh
+cargo run -p gnet-noise --example handshake_classic
 ```
 
 ## Testing
