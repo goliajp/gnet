@@ -1,13 +1,13 @@
 //! Fixed-base X25519: `scalar · 9` (Montgomery basepoint) via an Edwards
-//! comb table. ~4× faster than [`super::scalar::x25519`] for the
+//! comb table. ~3.5× faster than [`super::scalar::x25519`] for the
 //! public-key-derivation case while preserving the same 32-byte LE
 //! input / output API.
 //!
 //! Algorithm
 //! 1. RFC 7748 §5 clamp.
-//! 2. 4-bit signed-digit recoding of the 256-bit scalar into 64 digits
-//!    in `[-7, 8]`. The recoding is branch-free over scalar bits; the
-//!    carry-out is always 0 for a clamped scalar (top nibble + carry ≤ 8).
+//! 2. 5-bit signed-digit recoding of the 256-bit scalar into 52 digits
+//!    in `[-15, 16]`. The recoding is branch-free over scalar bits; the
+//!    carry chain is bounded by the clamp (bit 254 set, bit 255 clear).
 //! 3. For each window `i`, constant-time select of the `|d_i|`-th cached
 //!    Edwards multiple from [`super::base_table::TABLE`]`[i]`, conditional
 //!    negate by `sign(d_i)`, and `ed_mixed_add` into the running
@@ -15,22 +15,25 @@
 //! 4. Project the result back to the Curve25519 u-axis via the birational
 //!    map `u = (Z + Y) / (Z - Y)` and serialize little-endian.
 
-use super::base_table::{TABLE, WINDOWS};
+use super::base_table::{ENTRIES, TABLE, WINDOWS};
 use super::edwards::{
     IDENTITY, ct_negate_cached, ct_select_cached, ed_mixed_add, ed_to_mont_u,
 };
 use super::scalar::clamp;
 
+/// Bits per comb window (must match the radix of the table).
+const WINDOW_BITS: usize = 5;
+
 /// X25519 fixed-base: `scalar · 9` on the Curve25519 u-axis.
 ///
 /// Equivalent to `x25519(scalar, &[9, 0, ..., 0])` but uses a
-/// compile-time-precomputed Edwards basepoint comb (~60 KiB `.rodata`)
-/// and runs ≈ 4× faster on the hot path. Use this for public-key
+/// compile-time-precomputed Edwards basepoint comb (~97 KiB `.rodata`)
+/// and runs ≈ 3.5× faster on the hot path. Use this for public-key
 /// derivation; the general [`super::x25519`] handles the DH step.
 pub fn x25519_base(scalar: &[u8; 32]) -> [u8; 32] {
     let mut s = *scalar;
     clamp(&mut s);
-    let digits = recode_signed_4bit(&s);
+    let digits = recode_signed_5bit(&s);
 
     let mut acc = IDENTITY;
     for i in 0..WINDOWS {
@@ -39,7 +42,7 @@ pub fn x25519_base(scalar: &[u8; 32]) -> [u8; 32] {
         // neg_mask: 0 if d >= 0, u64::MAX if d < 0. Branch-free via the
         // sign extension of the i64 cast.
         let neg_mask = (i64::from(d) >> 63) as u64;
-        let mut p = ct_select_cached(&TABLE[i], abs_d);
+        let mut p = ct_select_cached::<ENTRIES>(&TABLE[i], abs_d);
         ct_negate_cached(&mut p, neg_mask);
         acc = ed_mixed_add(&acc, &p);
     }
@@ -47,26 +50,52 @@ pub fn x25519_base(scalar: &[u8; 32]) -> [u8; 32] {
     ed_to_mont_u(&acc)
 }
 
-/// 4-bit signed-digit recoding of the (clamped) scalar.
+/// 5-bit signed-digit recoding of the (clamped) scalar.
 ///
-/// Splits the 256-bit input into 64 four-bit nibbles low-to-high, then
-/// folds carries so each emitted digit lies in `[-7, 8]`. All operations
-/// are data-flow (no conditional branches on scalar bits), so the
-/// recoding does not leak secret bits through timing.
-fn recode_signed_4bit(s: &[u8; 32]) -> [i8; 64] {
-    let mut digits = [0i8; 64];
+/// The recoding walks the 256-bit input in 5-bit windows low-to-high and
+/// folds carries so each emitted digit lies in `[-15, 16]`. Each window
+/// pulls 5 bits from the scalar byte stream (which doesn't align to byte
+/// boundaries — handled by a sliding `u64` reservoir below).
+///
+/// The output `[i8; 52]` covers `52 * 5 = 260` bits, 4 bits more than the
+/// 256-bit scalar — enough headroom for the carry to terminate cleanly
+/// (a clamped scalar has bit 254 set + bit 255 clear, so the high windows
+/// won't run away).
+///
+/// All operations are data-flow (no conditional branches on scalar
+/// bits), so the recoding does not leak secret bits through timing.
+fn recode_signed_5bit(s: &[u8; 32]) -> [i8; 52] {
+    // Sliding 64-bit reservoir of unconsumed scalar bits. `bits_in_buf`
+    // tracks how many bits are currently in `buf`. We refill from the
+    // byte stream whenever the buffer would underflow a 5-bit pull.
+    let mut buf: u64 = 0;
+    let mut bits_in_buf: u32 = 0;
+    let mut byte_idx: usize = 0;
+
+    let mut digits = [0i8; 52];
     let mut carry: i8 = 0;
-    for i in 0..64 {
-        let nibble_raw = (s[i / 2] >> (((i as u8) & 1) * 4)) & 0x0f;
-        let nibble = (nibble_raw as i8) + carry;
-        // If nibble >= 9 emit (nibble − 16) with carry 1; else keep.
-        // Branch-free: `(nibble + 7) >> 4` is 0 for nibble ≤ 8, 1 for ≥ 9.
-        let carry_next = (nibble + 7) >> 4;
-        digits[i] = nibble - (carry_next << 4);
+
+    for digit in &mut digits {
+        // Top up the reservoir so it holds at least 5 unread bits.
+        while bits_in_buf < WINDOW_BITS as u32 && byte_idx < 32 {
+            buf |= u64::from(s[byte_idx]) << bits_in_buf;
+            bits_in_buf += 8;
+            byte_idx += 1;
+        }
+        let raw_5bit = (buf & 0x1f) as i8;
+        buf >>= WINDOW_BITS;
+        bits_in_buf = bits_in_buf.saturating_sub(WINDOW_BITS as u32);
+
+        let raw_with_carry = raw_5bit + carry;
+        // If raw_with_carry > 16, emit (raw_with_carry − 32) and carry 1.
+        // Branch-free: `(x + 15) >> 5` is 0 for x ≤ 16, 1 for x ≥ 17.
+        let carry_next = (raw_with_carry + 15) >> 5;
+        *digit = raw_with_carry - (carry_next << 5);
         carry = carry_next;
     }
-    // Clamped X25519 scalars (bit 254 set, bit 255 clear) cannot overflow
-    // past the 64th window: top nibble ∈ {4,5,6,7} + carry_in ∈ {0,1} ≤ 8.
+    // Clamped X25519 scalars cannot leave a non-zero carry past the 52nd
+    // window. 52 × 5 = 260 bits ≥ 255 + 5 headroom; the last few windows
+    // see zero scalar bits and just absorb any residual carry.
     debug_assert_eq!(carry, 0);
     digits
 }
@@ -148,39 +177,133 @@ mod tests {
         assert_eq!(x25519_base(&s), x25519(&s, &base_point()));
     }
 
+    /// Informational breakdown of x25519_base cost. Run with
+    ///   `cargo test --release -p gnet-crypto --lib x25519::base::tests::x25519_base_breakdown_microbench -- --ignored --nocapture`.
+    // Indexing both `digits` (by position) and `TABLE` (by window) inside
+    // the same loop body is cleaner with explicit indices than nested
+    // iterator pairs.
+    #[allow(clippy::needless_range_loop)]
+    #[test]
+    #[ignore = "informational microbench"]
+    fn x25519_base_breakdown_microbench() {
+        use std::time::Instant;
+        let s = [0x77u8; 32];
+
+        // warm
+        for _ in 0..200 {
+            let _ = x25519_base(&s);
+        }
+        let iters = 5_000u32;
+
+        // Whole-fn baseline
+        let start = Instant::now();
+        for _ in 0..iters {
+            let _ = std::hint::black_box(x25519_base(std::hint::black_box(&s)));
+        }
+        let total = start.elapsed().as_nanos() / u128::from(iters);
+
+        // Recoding-only
+        let mut clamped = s;
+        super::super::scalar::clamp(&mut clamped);
+        let start = Instant::now();
+        for _ in 0..iters {
+            let _ = std::hint::black_box(recode_signed_5bit(std::hint::black_box(&clamped)));
+        }
+        let recode = start.elapsed().as_nanos() / u128::from(iters);
+
+        // Select-loop only (no recode, no add, no project) — measures
+        // ct_select_cached + ct_negate_cached cost across 64 windows.
+        let digits = recode_signed_5bit(&clamped);
+        let start = Instant::now();
+        for _ in 0..iters {
+            for i in 0..WINDOWS {
+                let d = std::hint::black_box(digits[i]);
+                let abs_d = d.unsigned_abs();
+                let neg_mask = (i64::from(d) >> 63) as u64;
+                let mut p = ct_select_cached(&TABLE[i], abs_d);
+                ct_negate_cached(&mut p, neg_mask);
+                std::hint::black_box(p);
+            }
+        }
+        let select_only = start.elapsed().as_nanos() / u128::from(iters);
+
+        // Add-loop only — reads from TABLE directly (digit 0 of each window),
+        // measures 64 × ed_mixed_add cost.
+        let start = Instant::now();
+        for _ in 0..iters {
+            let mut acc = IDENTITY;
+            for i in 0..WINDOWS {
+                let p = std::hint::black_box(TABLE[i][0]);
+                acc = ed_mixed_add(&acc, &p);
+            }
+            std::hint::black_box(acc);
+        }
+        let add_only = start.elapsed().as_nanos() / u128::from(iters);
+
+        // Final projection only.
+        let mut acc = IDENTITY;
+        for i in 0..WINDOWS {
+            let p = TABLE[i][0];
+            acc = ed_mixed_add(&acc, &p);
+        }
+        let start = Instant::now();
+        for _ in 0..iters {
+            let _ = std::hint::black_box(ed_to_mont_u(std::hint::black_box(&acc)));
+        }
+        let project_only = start.elapsed().as_nanos() / u128::from(iters);
+
+        eprintln!("\nx25519_base breakdown ({iters} iters, ns/op):");
+        eprintln!("  total x25519_base       : {total} ns");
+        eprintln!("  recode_signed_5bit      : {recode} ns");
+        eprintln!("  {WINDOWS} × (select + negate)  : {select_only} ns");
+        eprintln!("  {WINDOWS} × ed_mixed_add       : {add_only} ns");
+        eprintln!("  ed_to_mont_u            : {project_only} ns");
+    }
+
     #[test]
     fn recoding_round_trip_arbitrary_scalar() {
-        // recode_signed_4bit operates on the raw scalar (no clamp). The
-        // signed-digit sum must equal the input scalar mod 2^256.
+        // recode_signed_5bit operates on the raw scalar. The signed-digit
+        // sum Σ d_i · 32^i must equal the input scalar mod 2^256.
+        //
+        // Reconstruct in a 33-byte signed accumulator (one byte of
+        // headroom). For each digit:
+        //   - compute bit_idx = i · 5
+        //   - shifted = digit << (bit_idx % 8)
+        //   - add `shifted` straddling bytes [bit_idx / 8 ..] with proper
+        //     sign-extension via i32 arithmetic.
         let s = [
             0x77, 0x07, 0x6d, 0x0a, 0x73, 0x18, 0xa5, 0x7d, 0x3c, 0x16, 0xc1, 0x72, 0x51, 0xb2,
             0x66, 0x45, 0xdf, 0x4c, 0x2f, 0x87, 0xeb, 0xc0, 0x99, 0x2a, 0xb1, 0x77, 0xfb, 0xa5,
             0x1d, 0xb9, 0x2c, 0x2a,
         ];
-        let digits = recode_signed_4bit(&s);
-        // Fold digits back: acc[byte] += d << shift; then propagate carries.
+        let digits = recode_signed_5bit(&s);
         let mut acc = [0i64; 33];
-        for (i, d) in digits.iter().enumerate() {
-            let byte_idx = i / 2;
-            let shift = (i & 1) * 4;
-            acc[byte_idx] += i64::from(*d) << shift;
+        for (i, &d) in digits.iter().enumerate() {
+            let bit_idx = i * WINDOW_BITS;
+            let byte_idx = bit_idx / 8;
+            let shift = bit_idx % 8;
+            // Digit ∈ [-15, 16], shifted by 0..=7 → value fits in i16.
+            // Decompose into bytes: low = bits 0..8, mid = bits 8..16.
+            let shifted = (i32::from(d)) << shift;
+            acc[byte_idx] += i64::from(shifted) & 0xff;
+            acc[byte_idx + 1] += i64::from(shifted >> 8);
         }
+        // Signed carry-propagate byte by byte.
         for k in 0..32 {
             let v = acc[k];
-            // signed carry-propagate one byte at a time
             let low = v.rem_euclid(256);
             let high = (v - low) / 256;
             acc[k] = low;
             acc[k + 1] += high;
         }
         let mut got = [0u8; 32];
-        for k in 0..32 {
+        for (k, byte) in got.iter_mut().enumerate() {
             assert!(
                 (0..256).contains(&acc[k]),
                 "carry leak at byte {k}: {:?}",
                 acc[k]
             );
-            got[k] = acc[k] as u8;
+            *byte = acc[k] as u8;
         }
         assert_eq!(got, s);
     }

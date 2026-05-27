@@ -39,7 +39,7 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
 | ML-KEM keygen | 11.7 µs | 22.0 µs (RustCrypto) | **1.82× faster** ← T-2.5 + serialize |
 | ML-KEM encaps |  9.9 µs | 18.0 µs (RustCrypto) | **1.82× faster** ← T-2.5 + serialize |
 | ML-KEM decaps | 10.9 µs | 24.2 µs (RustCrypto) | **2.22× faster** ← T-2.5 + serialize |
-| X25519 basepoint derivation (`x25519_base`) | 6.3 µs | ~5 µs (dalek table) | **0.79× (slower 1.26×)** ← T-1.4 |
+| X25519 basepoint derivation (`x25519_base`) | 5.4 µs | ~5 µs (dalek table) | **0.93× (slower 1.08×)** ← width-5 comb |
 | Noise_IK handshake (classic) | 212 µs | 217 µs (snow) | **1.02× faster** ← T-1.4 win |
 | Noise_IK + ML-KEM (hybrid) | ~280 µs | — (no peer) | reference only |
 | Hex encode 32 B | 32 ns | 58 ns (hex crate) | **1.82× faster** |
@@ -50,7 +50,7 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
 | Op | gnet | competitor | gnet vs SOTA |
 |----|-----:|-----------:|:------------:|
 | X25519 (one ECDH, Montgomery ladder) | 37.0 µs | 42.1 µs (dalek) | **1.14× faster** |
-| X25519 basepoint derivation (`x25519_base`) | 11.6 µs | — (no apples-to-apples in dalek's perf suite) | ← T-1.4 |
+| X25519 basepoint derivation (`x25519_base`) | 9.9 µs | — (no apples-to-apples in dalek's perf suite) | ← width-5 comb |
 | AEAD seal in-place 1400B | 1.22 µs | 2.04 µs (RustCrypto) | **1.68× faster** |
 | AEAD open in-place 1400B | 1.20 µs | 2.02 µs (RustCrypto) | **1.69× faster** |
 | ML-KEM keygen | 31.0 µs | 45.3 µs (RustCrypto) | **1.45× faster** ← T-2.5 + serialize |
@@ -95,16 +95,19 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
   Apple, **1.10× faster** on lx64 (was 1.24× / 1.14× slower at the
   2026-05-27 baseline). Phase 1 allocation polish trimmed the
   per-handshake overhead; T-1.4's Edwards basepoint comb cut
-  public-key derivation from ~20 µs (Montgomery ladder) to ~6 µs
-  on Apple / ~12 µs on lx64, saving ≈ 60 µs over the four
-  `public_of` calls in a hybrid handshake.
+  public-key derivation from ~20 µs (Montgomery ladder) to ~5.4 µs
+  on Apple / ~9.9 µs on lx64 (width-5 Edwards comb, T-1.4 + width-5
+  refinement), saving ≈ 65 µs over the four `public_of` calls in a
+  hybrid handshake.
 
-**Where gnet is still slower (1 category on Apple, in-spec):**
-- **X25519 basepoint derivation**: 1.26× slower than `x25519-dalek`'s
-  `EdwardsBasepointTable` (6.3 µs vs ~5 µs). We use a width-4 comb
-  with 60 KiB rodata; the remaining gap is in the constant-time
-  table-selection inner loop. Within the per-handshake budget
-  (≤ 7 µs gate); follow-up if it becomes the next bottleneck.
+**Where gnet is still marginally slower (1 category on Apple, near-parity):**
+- **X25519 basepoint derivation**: 1.08× slower than `x25519-dalek`'s
+  `EdwardsBasepointTable` (5.4 µs vs ~5 µs). We use a width-5 comb
+  with ~97 KiB rodata (52 windows × 16 entries). The remaining ~400 ns
+  gap is in the finvert chain inside `ed_to_mont_u` — a per-call
+  inversion that dalek also pays. Closing it further would require
+  batched inversion across multiple `x25519_base` calls in the same
+  handshake, which is invasive on the gnet-noise API surface.
 
 ## How to read the numbers operationally
 

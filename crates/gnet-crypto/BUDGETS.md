@@ -15,7 +15,7 @@ the yardstick we polish against and the basis for the regression gates in
 | AEAD seal_in_place 64K | 1722 MiB/s | 854 MiB/s | bulk |
 | **AEAD seal_in_place 1400B** | **1132 MiB/s · 9.2 Gbps · 1179 ns/pkt** | **913 MiB/s · 7.3 Gbps · 1462 ns/pkt** | **HOT (per packet)** |
 | X25519 scalarmult (variable point) | 27.3k ops/s · 36.6 µs | 52.1k ops/s · 19.2 µs | handshake |
-| **X25519 basepoint derivation (comb)** | tbd | **158k ops/s · 6.3 µs** | handshake (×4 / hybrid) |
+| **X25519 basepoint derivation (width-5 comb)** | **100k ops/s · 9.9 µs** | **185k ops/s · 5.4 µs** | handshake (×4 / hybrid) |
 | ML-KEM-768 keygen (pre-T-2.5) | 15.9k ops/s · 62.9 µs | 47.4k ops/s · 21.1 µs | handshake |
 | ML-KEM-768 encaps (pre-T-2.5) | 20.2k ops/s · 49.5 µs | 48.9k ops/s · 20.5 µs | handshake |
 | ML-KEM-768 decaps (pre-T-2.5) | 14.6k ops/s · 68.5 µs | 35.3k ops/s · 28.3 µs | handshake |

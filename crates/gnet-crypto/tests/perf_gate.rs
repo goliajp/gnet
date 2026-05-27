@@ -63,16 +63,18 @@ fn x25519_basepoint_derivation_within_budget() {
     }
     let per = start.elapsed() / iters;
 
-    // Release baselines: Apple Silicon ~6.3 µs (NEON, within ~1.5× of
-    // dalek), lx64 (x86_64 AVX2) ~11.6 µs (same field code, ~2× slower
-    // on x86 like the rest of the X25519 path). Debug runs ~50× slower.
+    // Release baselines (width-5 Edwards comb, 52 windows × 16 entries):
+    //   Apple Silicon  ~5.4 µs  (was ~6.3 µs at width-4)
+    //   lx64 (x86_64)  ~9.9 µs  (was ~11.6 µs at width-4)
+    // Both architectures dropped ~12–15 % from the width-5 table.
+    // Debug runs ~50× slower; budget tracks the build mode.
     // See BUDGETS.md "x25519_base" row for calibration.
     let budget = if cfg!(debug_assertions) {
         Duration::from_micros(400)
     } else if cfg!(target_arch = "aarch64") {
-        Duration::from_micros(7)
+        Duration::from_micros(6)
     } else {
-        Duration::from_micros(14)
+        Duration::from_micros(11)
     };
     eprintln!("x25519_base per call: {per:?} (budget {budget:?})");
     assert!(
