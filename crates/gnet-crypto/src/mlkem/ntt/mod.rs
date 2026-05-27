@@ -62,7 +62,18 @@ pub fn ntt(r: &mut [i16; 256]) {
     {
         ntt_neon(r);
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::is_x86_feature_detected!("avx2") {
+            // SAFETY: AVX2 just runtime-detected.
+            unsafe {
+                avx2::ntt_avx2(r);
+            }
+            return;
+        }
+        ntt_scalar(r);
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     {
         ntt_scalar(r);
     }
@@ -76,7 +87,18 @@ pub fn invntt(r: &mut [i16; 256]) {
     {
         invntt_neon(r);
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::is_x86_feature_detected!("avx2") {
+            // SAFETY: AVX2 just runtime-detected.
+            unsafe {
+                avx2::invntt_avx2(r);
+            }
+            return;
+        }
+        invntt_scalar(r);
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     {
         invntt_scalar(r);
     }
@@ -135,6 +157,9 @@ mod neon;
 
 #[cfg(target_arch = "aarch64")]
 use neon::{invntt_neon, ntt_mul_into_neon, ntt_neon};
+
+#[cfg(target_arch = "x86_64")]
+mod avx2;
 
 /// Multiply two degree-1 polynomials in `Z_q[X]/(X^2 - zeta)` (one NTT pair).
 #[inline(always)]
@@ -233,6 +258,37 @@ mod tests {
             for i in 0..256 {
                 assert_eq!(norm(prod[i]), norm(want[i]), "seed {seed} coeff {i}");
             }
+        }
+    }
+
+    /// On x86_64 with AVX2 the AVX2 forward / inverse NTT must match the
+    /// scalar reference on every coefficient — same contract as
+    /// `ntt_neon_matches_scalar` for the aarch64 path. Skipped at runtime
+    /// on x86_64 hosts without AVX2 (the dispatch falls back to scalar
+    /// anyway, so there's nothing to verify against itself).
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn ntt_avx2_matches_scalar() {
+        if !std::is_x86_feature_detected!("avx2") {
+            eprintln!("skipping: host has no AVX2");
+            return;
+        }
+        for seed in 0..32u64 {
+            let a = sample(seed);
+
+            let mut avx2_fwd = a;
+            // SAFETY: AVX2 just detected.
+            unsafe { super::avx2::ntt_avx2(&mut avx2_fwd) };
+            let mut scalar_fwd = a;
+            super::ntt_scalar(&mut scalar_fwd);
+            assert_eq!(avx2_fwd, scalar_fwd, "fwd ntt seed {seed}");
+
+            let mut avx2_inv = avx2_fwd;
+            // SAFETY: AVX2 just detected.
+            unsafe { super::avx2::invntt_avx2(&mut avx2_inv) };
+            let mut scalar_inv = scalar_fwd;
+            super::invntt_scalar(&mut scalar_inv);
+            assert_eq!(avx2_inv, scalar_inv, "inv ntt seed {seed}");
         }
     }
 
