@@ -157,11 +157,19 @@ fn fetch_peers(coordinator: &str, our_pk_hex: &str) -> io::Result<Vec<PeerView>>
 /// `(added, updated)` counts for telemetry. Self is filtered server-side, so
 /// any view here is a remote peer.
 ///
-/// Match order: pubkey first (the common case — endpoint/flag updates);
-/// alias second (key rotation: a peer whose pubkey changed but alias stayed
-/// the same). On alias-match with a different pubkey, the peer's identity
-/// is swapped in place and its session is reset to `Idle` so the next
-/// outbound packet re-handshakes with the new keys.
+/// Match order, in priority:
+///   1. by pubkey — the common case (endpoint/flag refresh)
+///   2. by alias  — key-rotation propagation (alias stays, pubkey moved)
+///   3. by overlay_v4 — catches static-conf peers whose alias is empty
+///      (conf `peer` lines have no alias field), and where the
+///      coordinator-side device for the same overlay IP has rotated keys
+///      since the conf was written. Without this, the static-conf row
+///      and the coordinator-discovered row coexist sharing an overlay IP
+///      — `by_vip` returns the older one, traffic uses the dead pubkey,
+///      and the relay sender silently drops because dst pubkey is
+///      unknown on the relay's peer table. Production fault, observed
+///      mini ↔ lx64 100% loss with stale static `peer` line in mini's
+///      conf.
 pub(super) fn apply(node: &Mutex<Node>, views: &[PeerView]) -> (usize, usize) {
     let mut g = node.lock().expect("node mutex");
     let mut added = 0usize;
@@ -218,7 +226,45 @@ pub(super) fn apply(node: &Mutex<Node>, views: &[PeerView]) -> (usize, usize) {
             updated += 1;
             continue;
         }
-        // 3. genuinely new peer.
+        // 3. overlay_v4 fallback — adopts a static-conf peer (its alias is
+        //    empty because conf `peer` lines carry no alias) by overlay IP,
+        //    fills in the alias from the coord view, and swaps the pubkey
+        //    if it has rotated since the conf was written.
+        if let Some(idx) = g.peers.iter().position(|p| {
+            p.alias.is_empty() && p.vip == v.overlay_v4
+        }) {
+            let p = &mut g.peers[idx];
+            let pubkey_changed = p.public != v.x25519_pubkey;
+            eprintln!(
+                "discovery: adopting static-conf peer at {} as alias={}{}",
+                p.vip,
+                v.alias,
+                if pubkey_changed {
+                    " (pubkey changed — resetting session)"
+                } else {
+                    ""
+                }
+            );
+            p.alias = v.alias.clone();
+            p.public = v.x25519_pubkey;
+            p.mlkem_ek = v.mlkem_ek.clone();
+            p.vip6 = v.overlay_v6;
+            p.endpoint = v.endpoint;
+            p.relay_eligible = v.relay_eligible;
+            if pubkey_changed {
+                p.session = Session::Idle;
+                p.punch = PunchState::Idle;
+                p.punched = false;
+                p.punch_failures = 0;
+                p.relay = false;
+                p.relay_endpoint = None;
+                p.rx_index = 0;
+                p.tx_index = 0;
+            }
+            updated += 1;
+            continue;
+        }
+        // 4. genuinely new peer.
         g.peers.push(Peer {
             alias: v.alias.clone(),
             public: v.x25519_pubkey,
@@ -711,6 +757,57 @@ mod tests {
         assert!(!g.peers[0].relay, "relay state cleared");
         assert_eq!(g.peers[0].relay_endpoint, None);
         assert_eq!(g.peers[0].endpoint.unwrap().to_string(), "2.2.2.2:51820");
+    }
+
+    #[test]
+    fn apply_adopts_static_conf_peer_by_overlay_v4() {
+        // mini's conf has a static `peer` line with the ORIGINAL lx64 pubkey
+        // and alias="" (conf doesn't carry alias). After lx64 rotates, the
+        // coordinator returns a different pubkey + alias="lx64" for the same
+        // overlay IP. v0.5.2 fix: discovery adopts the static-conf row by
+        // overlay_v4, filling in the alias and swapping the rotated pubkey,
+        // so no duplicate peer-table row coexists at 10.42.42.5.
+        let node = make_node_with_self_key([0xcd; 32]);
+        // simulate the static-conf seed (alias empty, original pubkey).
+        {
+            let mut g = node.lock().unwrap();
+            g.peers.push(Peer {
+                alias: String::new(),
+                public: fake_pk(0xab), // ORIGINAL key
+                mlkem_ek: fake_ek(),
+                vip: "10.42.42.5".parse().unwrap(),
+                vip6: None,
+                endpoint: Some("1.1.1.1:65432".parse().unwrap()),
+                rx_index: 0,
+                tx_index: 0,
+                session: Session::Idle,
+                punch: PunchState::Idle,
+                punched: false,
+                punch_failures: 0,
+                relay: false,
+                relay_endpoint: None,
+                relay_eligible: false,
+            });
+        }
+        // coord view: rotated pubkey + alias
+        let v = PeerView {
+            alias: "lx64".into(),
+            x25519_pubkey: fake_pk(0xee), // ROTATED key
+            mlkem_ek: Box::new([0x77; mlkem::EK_LEN]),
+            overlay_v4: "10.42.42.5".parse().unwrap(),
+            overlay_v6: None,
+            endpoint: Some("2.2.2.2:65432".parse().unwrap()),
+            relay_eligible: false,
+        };
+        let (added, updated) = apply(&node, &[v]);
+        assert_eq!(added, 0, "static-conf row must be adopted, not duplicated");
+        assert_eq!(updated, 1);
+        let g = node.lock().unwrap();
+        assert_eq!(g.peers.len(), 1, "single peer slot at 10.42.42.5");
+        assert_eq!(g.peers[0].alias, "lx64");
+        assert_eq!(g.peers[0].public, fake_pk(0xee));
+        assert_eq!(g.peers[0].mlkem_ek[0], 0x77);
+        assert_eq!(g.peers[0].endpoint.unwrap().to_string(), "2.2.2.2:65432");
     }
 
     #[test]
