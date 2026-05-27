@@ -55,8 +55,8 @@ fn assert_ratio(name: &str, gnet_ns: f64, comp_ns: f64, max_ratio: f64) {
 }
 
 // ───── X25519 ─────────────────────────────────────────────────────────
-// Baseline 2026-05-27: gnet 1.08-1.19× FASTER than dalek. Cap at 1.0 keeps
-// us winning; allow 0.1 noise margin → 1.10.
+// Baseline 2026-05-27: gnet 1.08-1.19× FASTER than dalek. Median ratio
+// stable at ~0.93. Cap ratchetted from 1.10 → 1.05 to lock in the win.
 
 #[test]
 fn x25519_must_not_lose_to_dalek() {
@@ -78,11 +78,12 @@ fn x25519_must_not_lose_to_dalek() {
         black_box(ss);
     });
 
-    assert_ratio("X25519 ECDH", gnet_ns, comp_ns, 1.10);
+    assert_ratio("X25519 ECDH", gnet_ns, comp_ns, 1.05);
 }
 
 // ───── AEAD ChaCha20-Poly1305 ─────────────────────────────────────────
-// Baseline 2026-05-27: gnet 1.5-1.7× FASTER. Cap 1.0 + 10% noise.
+// Baseline 2026-05-27: gnet 1.5-1.7× FASTER. Median seal ~0.66, open
+// ~0.65. Cap ratchetted from 1.10 → 1.05 to lock in the win.
 
 #[test]
 fn aead_seal_must_not_lose_to_rustcrypto() {
@@ -115,7 +116,7 @@ fn aead_seal_must_not_lose_to_rustcrypto() {
         black_box(&comp_buf);
     });
 
-    assert_ratio("AEAD seal 1400B", gnet_ns, comp_ns, 1.10);
+    assert_ratio("AEAD seal 1400B", gnet_ns, comp_ns, 1.05);
 }
 
 #[test]
@@ -156,7 +157,7 @@ fn aead_open_must_not_lose_to_rustcrypto() {
         black_box(&comp_open);
     });
 
-    assert_ratio("AEAD open 1400B", gnet_ns, comp_ns, 1.10);
+    assert_ratio("AEAD open 1400B", gnet_ns, comp_ns, 1.05);
 }
 
 // ───── ML-KEM-768 ─────────────────────────────────────────────────────
@@ -324,7 +325,8 @@ fn noise_ik_classic_hardgate() {
 }
 
 // ───── Hex codec ──────────────────────────────────────────────────────
-// Baseline 2026-05-27: gnet 1.08-2.89× FASTER. Cap 1.0 + noise margin.
+// Baseline 2026-05-27: gnet 1.08-2.89× FASTER. Median encode ~0.52,
+// decode ~0.78. Cap ratchetted from 1.20 → 1.05 to lock in the win.
 
 #[test]
 fn hex_encode_32_must_not_lose() {
@@ -337,7 +339,7 @@ fn hex_encode_32_must_not_lose() {
         let s = hex::encode(black_box(&key));
         black_box(s);
     });
-    assert_ratio("Hex encode 32B", gnet_ns, comp_ns, 1.20);
+    assert_ratio("Hex encode 32B", gnet_ns, comp_ns, 1.05);
 }
 
 #[test]
@@ -353,7 +355,7 @@ fn hex_decode_32_must_not_lose() {
         hex::decode_to_slice(black_box(&hex32), black_box(&mut out)).expect("decode");
         black_box(out);
     });
-    assert_ratio("Hex decode 32B", gnet_ns, comp_ns, 1.20);
+    assert_ratio("Hex decode 32B", gnet_ns, comp_ns, 1.05);
 }
 
 // ───── rand_core 0.6 shim so ml_kem can use gnet_rand ─────────────────
