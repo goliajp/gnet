@@ -12,7 +12,6 @@ use super::TAG_LEN;
 use super::handshake::{complete_initiation, handle_init};
 use super::types::{Node, Session};
 use crate::MTU_BUF;
-use gnet_punch::PunchState;
 use gnet_wire::{self as wire, Kind};
 
 /// Extract the destination IP from a raw IPv4/IPv6 packet, if well-formed.
@@ -86,47 +85,49 @@ pub(super) fn uplink(
                             }
                         }
                     } else if matches!(g.peers[i].session, Session::Idle) {
-                        // Path-selection ordered by cheapest-correct-first:
+                        // v0.5 path selection — Tailscale-style "DERP-first
+                        // for NAT-NAT, direct for anything involving a public
+                        // node". DCUtR's simultaneous-open is unreliable for
+                        // symmetric NAT (per-destination external ports break
+                        // the reply path), so we don't put it in the critical
+                        // path — direct upgrade can revisit later.
                         //
-                        // 1. Already on a relay path (post-PUNCH_ATTEMPTS trip
-                        //    or reciprocally-learned): wrap the init through
-                        //    the relay. `initiate` handles route_dg internally.
-                        //
-                        // 2. We are NAT'd (self_is_nat == Some(true)) AND the
-                        //    peer has an endpoint (reflexive-or-static):
-                        //    direct init cold-starts only by accidental NAT-
-                        //    mapping alignment (was a real bug in v0.3..v0.4.2
-                        //    after endpoint-report made every peer look
-                        //    directly-reachable). Use coordinator-mediated
-                        //    DCUtR — its simultaneous-open works for any NAT
-                        //    flavour, and for public peers the dial just
-                        //    succeeds on first attempt.
-                        //
-                        // 3. We are public OR self-NAT-status unknown (no
-                        //    reflexive learned yet at startup), with a known
-                        //    peer endpoint: direct init works without the
-                        //    coordinator round-trip.
-                        //
-                        // 4. No endpoint AND punch idle: start_punch (the
-                        //    original v0.2 path when endpoint really is None).
+                        // Decision tree:
+                        //   1. Peer already on relay → use it.
+                        //   2. We are public OR peer is operator-marked
+                        //      relay_eligible (treated as known-public): direct
+                        //      init to peer.endpoint works.
+                        //   3. Self NAT'd AND peer not known-public AND we can
+                        //      pick a relay candidate: promote to relay
+                        //      immediately, no probe. Pay one extra hop for
+                        //      "always works" — solid > fast.
+                        //   4. Peer endpoint known but no path resolution
+                        //      (e.g. self_is_nat == None pre-probe): best-
+                        //      effort direct init.
+                        //   5. No endpoint and no relay candidate: drop.
                         if g.peers[i].relay {
                             init_dg = g.initiate(i);
-                        } else if matches!(g.self_is_nat, Some(true))
-                            && g.peers[i].endpoint.is_some()
-                        {
-                            if matches!(g.peers[i].punch, PunchState::Idle) {
-                                // start_punch may return None if reflexive was
-                                // unset between the self_is_nat read and the
-                                // dial — fall back to direct init in that case
-                                // so we never deadlock the packet.
-                                init_dg =
-                                    g.start_punch(i).or_else(|| g.initiate(i));
+                        } else {
+                            let self_nat = matches!(g.self_is_nat, Some(true));
+                            let peer_known_public = g.peers[i].relay_eligible;
+                            if !self_nat || peer_known_public {
+                                // direct: at least one side is public-reachable
+                                if g.peers[i].endpoint.is_some() {
+                                    init_dg = g.initiate(i);
+                                }
+                            } else if let Some(relay_ep) = g.coordinator_endpoint(i) {
+                                // both presumed NAT'd → route via relay now.
+                                g.peers[i].relay = true;
+                                g.peers[i].relay_endpoint = Some(relay_ep);
+                                eprintln!(
+                                    "peer {i} routed via relay {relay_ep} (nat→nat, immediate)"
+                                );
+                                init_dg = g.initiate(i);
+                            } else if g.peers[i].endpoint.is_some() {
+                                // last-resort best-effort direct
+                                init_dg = g.initiate(i);
                             }
-                            // else: punch already in flight, drop this packet
-                        } else if g.peers[i].endpoint.is_some() {
-                            init_dg = g.initiate(i);
-                        } else if matches!(g.peers[i].punch, PunchState::Idle) {
-                            init_dg = g.start_punch(i);
+                            // else: no path. retry next outbound.
                         }
                     }
                 }
