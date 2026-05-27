@@ -15,3 +15,7 @@ categories = ["cryptography", "os"]
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "entropy"
+harness = false
