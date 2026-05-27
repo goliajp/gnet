@@ -18,6 +18,12 @@ impl Node {
     /// other peer we already reach directly) and enter `Connecting`. Returns
     /// the datagram to send with the lock released, or `None` if we have no
     /// reflexive endpoint yet or no coordinator to relay through.
+    ///
+    /// Not on the primary path in v0.5 — pump always-relays NAT↔NAT instead
+    /// of attempting DCUtR. Kept in tree as the seed of the future "direct
+    /// upgrade" path (periodically retry DCUtR on relayed peers to downgrade
+    /// the relay hop when both sides' NAT topology allows it).
+    #[allow(dead_code)]
     pub(super) fn start_punch(&mut self, i: usize) -> Option<(SocketAddr, Vec<u8>)> {
         let reflexive = self.reflexive?;
         let coordinator = self.coordinator_endpoint(i)?;
