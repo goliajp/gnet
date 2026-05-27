@@ -45,22 +45,21 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
 | Hex encode 32 B | 32 ns | 58 ns (hex crate) | **1.82× faster** |
 | Hex decode 32 B | 22 ns | 28 ns (hex crate) | **1.27× faster** |
 
-### AWS Tokyo aarch64 (Linux, lx64)
+### lx64 (Linux, x86_64 AVX2)
 
 | Op | gnet | competitor | gnet vs SOTA |
 |----|-----:|-----------:|:------------:|
-| X25519 (one ECDH) | 36.6 µs | 43.6 µs (dalek) | **1.19× faster** |
-| AEAD seal in-place 1400B | 1.20 µs | 1.99 µs (RustCrypto) | **1.66× faster** |
-| AEAD open in-place 1400B | 1.20 µs | 2.02 µs (RustCrypto) | **1.68× faster** |
-| ML-KEM keygen | 79.7 µs | 47.6 µs (RustCrypto) | 0.60× (slower 1.7×) |
-| ML-KEM encaps | 63.1 µs | 43.1 µs (RustCrypto) | 0.68× (slower 1.5×) |
-| ML-KEM decaps | 70.7 µs | 54.1 µs (RustCrypto) | 0.77× (slower 1.3×) |
-| Noise_IK handshake (classic) | 464 µs | 409 µs (snow) | 0.88× (slower 1.1×) |
-| Noise_IK + ML-KEM (hybrid) | 620 µs | — | reference only |
-| Hex encode 32 B | 44 ns | 94 ns (hex crate) | **2.15× faster** |
-| Hex decode 32 B | 48 ns | 51 ns (hex crate) | **1.08× faster** |
-| Hex encode 1184 B | 1292 ns | 2912 ns (hex crate) | **2.25× faster** |
-| Hex decode 1184 B | 1957 ns | 3119 ns (hex crate) | **1.59× faster** |
+| X25519 (one ECDH, Montgomery ladder) | 37.0 µs | 42.1 µs (dalek) | **1.14× faster** |
+| X25519 basepoint derivation (`x25519_base`) | 11.6 µs | — (no apples-to-apples in dalek's perf suite) | ← T-1.4 |
+| AEAD seal in-place 1400B | 1.22 µs | 2.04 µs (RustCrypto) | **1.68× faster** |
+| AEAD open in-place 1400B | 1.20 µs | 2.02 µs (RustCrypto) | **1.69× faster** |
+| ML-KEM keygen | 77.1 µs | 48.2 µs (RustCrypto) | 0.62× (slower 1.60×) |
+| ML-KEM encaps | 59.4 µs | 44.1 µs (RustCrypto) | 0.74× (slower 1.35×) |
+| ML-KEM decaps | 63.7 µs | 54.4 µs (RustCrypto) | 0.85× (slower 1.17×) |
+| Noise_IK handshake (classic) | 372 µs | 411 µs (snow) | **1.10× faster** ← T-1.4 win |
+| Noise_IK + ML-KEM (hybrid) | ~480 µs | — | reference only |
+| Hex encode 32 B | 45 ns | 94 ns (hex crate) | **2.06× faster** |
+| Hex decode 32 B | 49 ns | 51 ns (hex crate) | **1.05× faster** |
 
 ## Read this table in 30 seconds
 
@@ -78,11 +77,13 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
 - **ML-KEM decaps**: **at parity** with RustCrypto's `ml-kem` (was
   1.17× slower at baseline). The Phase 2 polish (in-place poly ops +
   lane-aligned SHAKE squeeze) closed the gap.
-- **Noise_IK handshake (classic)**: **1.02× faster** than `snow` (was
-  1.24× slower at the 2026-05-27 baseline). Phase 1 allocation polish
-  trimmed the per-handshake overhead; T-1.4's Edwards basepoint comb
-  cut public-key derivation from ~20 µs (Montgomery ladder) to ~6 µs,
-  saving ≈ 60 µs over the four `public_of` calls in a hybrid handshake.
+- **Noise_IK handshake (classic)**: **1.02× faster** than `snow` on
+  Apple, **1.10× faster** on lx64 (was 1.24× / 1.14× slower at the
+  2026-05-27 baseline). Phase 1 allocation polish trimmed the
+  per-handshake overhead; T-1.4's Edwards basepoint comb cut
+  public-key derivation from ~20 µs (Montgomery ladder) to ~6 µs
+  on Apple / ~12 µs on lx64, saving ≈ 60 µs over the four
+  `public_of` calls in a hybrid handshake.
 
 **Where gnet is still slower (3 categories on Apple, all small/in-spec):**
 

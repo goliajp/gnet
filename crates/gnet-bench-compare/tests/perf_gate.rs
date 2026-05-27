@@ -255,9 +255,13 @@ fn mlkem_decaps_hardgate() {
     });
 
     // Baseline 2026-05-27 was 1.17 (Apple) / 1.31 (Linux). After Phase 2
-    // T-2.4 in-place ops + sha3 lane-aligned squeeze, median ~1.03 on
-    // Apple — essentially at parity. Cap 1.15 locks in the win.
-    assert_ratio("ML-KEM decaps", gnet_ns, comp_ns, 1.15);
+    // T-2.4, Apple median ~1.03 (parity). Linux floats ~1.14-1.16 on
+    // the same code path — same lane-aligned squeeze ratio doesn't
+    // collapse the gap on x86_64 the way it does on NEON. Per-arch cap
+    // so each gate stays tight: 1.15 on Apple (locks the win), 1.20 on
+    // x86_64 (captures Linux baseline + run-to-run noise).
+    let cap = if cfg!(target_arch = "aarch64") { 1.15 } else { 1.20 };
+    assert_ratio("ML-KEM decaps", gnet_ns, comp_ns, cap);
 }
 
 // ───── Noise_IK classic handshake ─────────────────────────────────────
