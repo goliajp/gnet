@@ -244,6 +244,16 @@ impl Node {
             if timed_out_session || timed_out_punch {
                 p.session = Session::Idle;
                 p.punch = PunchState::Idle;
+                if timed_out_punch && p.relay {
+                    // A Connecting timeout on a peer already routed via relay
+                    // is a failed direct-upgrade attempt: bump the failure
+                    // count and roll the per-peer deadline forward by the new
+                    // backoff so the next attempt sits further out (30s →
+                    // 45s → 67s → … capped at 5 min).
+                    p.direct_upgrade_failures = p.direct_upgrade_failures.saturating_add(1);
+                    p.direct_upgrade_at =
+                        super::punch::next_direct_upgrade_at(p.direct_upgrade_failures);
+                }
                 // Any handshake give-up against a peer with no relay yet is a
                 // direct-path failure: count toward `PUNCH_ATTEMPTS` so that
                 // PUNCH_ATTEMPTS consecutive give-ups trip to relay fallback.
@@ -598,6 +608,81 @@ mod tests {
         let mut node = test_node(&ek, vec![test_peer(&ek, old_attempt, None)]);
         node.expire_handshakes(Duration::from_secs(3));
         assert!(matches!(node.peers[0].session, Session::Idle));
+    }
+
+    #[test]
+    fn expire_handshakes_extends_direct_upgrade_backoff_on_relay_connecting_timeout() {
+        // A punch upgrade that times out on a peer already routed via relay
+        // is a failed direct-upgrade attempt: failures + 1, deadline rolled
+        // forward by the new backoff. The session-side `punch_failures`
+        // counter must stay untouched — those are direct-init failures, a
+        // separate concern.
+        let (ek, _dk) = keys::derive_mlkem(&[9u8; 32]);
+        let relay_ep: SocketAddr = "203.0.113.9:7777".parse().unwrap();
+        let mut p = test_peer(&ek, Session::Idle, None);
+        p.relay = true;
+        p.relay_endpoint = Some(relay_ep);
+        p.direct_upgrade_failures = 1;
+        p.direct_upgrade_at = Instant::now() + Duration::from_secs(60);
+        p.punch = PunchState::Connecting {
+            sent_at: Instant::now() - Duration::from_secs(10),
+        };
+        let mut node = test_node(&ek, vec![p]);
+
+        let before = Instant::now();
+        node.expire_handshakes(Duration::from_secs(3));
+
+        assert_eq!(
+            node.peers[0].direct_upgrade_failures, 2,
+            "failure count bumped on relay-connecting timeout"
+        );
+        assert!(
+            matches!(node.peers[0].punch, PunchState::Idle),
+            "punch state reset after expire"
+        );
+        let advanced = node.peers[0].direct_upgrade_at;
+        // backoff(2) ≈ DIRECT_UPGRADE_BASE × 1.5² = 67.5s
+        assert!(
+            advanced > before + Duration::from_secs(60),
+            "deadline rolled past the previous slot"
+        );
+        assert!(
+            advanced < before + Duration::from_secs(75),
+            "deadline within the new backoff slot"
+        );
+        assert_eq!(
+            node.peers[0].punch_failures, 0,
+            "punch_failures untouched — relay peers do not accrue toward trip"
+        );
+    }
+
+    #[test]
+    fn expire_handshakes_leaves_direct_upgrade_alone_for_non_relay_peers() {
+        // A peer not on the relay path that fails its handshake walks the
+        // existing punch_failures path, not the direct_upgrade backoff.
+        let (ek, _dk) = keys::derive_mlkem(&[9u8; 32]);
+        let mut p = test_peer(&ek, Session::Idle, None);
+        p.direct_upgrade_failures = 1;
+        let initial_deadline = p.direct_upgrade_at;
+        p.punch = PunchState::Connecting {
+            sent_at: Instant::now() - Duration::from_secs(10),
+        };
+        let mut node = test_node(&ek, vec![p]);
+
+        node.expire_handshakes(Duration::from_secs(3));
+
+        assert_eq!(
+            node.peers[0].direct_upgrade_failures, 1,
+            "untouched — peer was not on the relay path"
+        );
+        assert_eq!(
+            node.peers[0].direct_upgrade_at, initial_deadline,
+            "deadline untouched"
+        );
+        assert_eq!(
+            node.peers[0].punch_failures, 1,
+            "ordinary punch-failure counter still increments"
+        );
     }
 
     #[test]
