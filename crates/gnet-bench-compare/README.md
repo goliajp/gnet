@@ -24,7 +24,7 @@ multiplier so you can read the table in seconds.
 | Noise_IK handshake | `gnet-noise::handshake` | `snow` (mcginty) |
 | Hex codec | `gnet-hex` | `hex` (rust-lang-deprecated, de-facto std) |
 
-## Baseline (2026-05-27)
+## Baseline (refreshed 2026-05-27 after Phase 1 + Phase 2 polish)
 
 Run: `cargo bench -p gnet-bench-compare`. Each line prints `ns/op` and a
 relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
@@ -33,18 +33,16 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
 
 | Op | gnet | competitor | gnet vs SOTA |
 |----|-----:|-----------:|:------------:|
-| X25519 (one ECDH) | 19.1 µs | 20.7 µs (dalek) | **1.08× faster** |
-| AEAD seal in-place 1400B | 1.49 µs | 2.25 µs (RustCrypto) | **1.51× faster** |
-| AEAD open in-place 1400B | 1.47 µs | 2.27 µs (RustCrypto) | **1.55× faster** |
-| ML-KEM keygen | 68.7 µs | 36.5 µs (RustCrypto) | 0.53× (slower 1.9×) |
-| ML-KEM encaps | 43.6 µs | 26.9 µs (RustCrypto) | 0.62× (slower 1.6×) |
-| ML-KEM decaps | 28.4 µs | 24.3 µs (RustCrypto) | 0.85× (slower 1.2×) |
-| Noise_IK handshake (classic) | 266 µs | 219 µs (snow) | 0.82× (slower 1.2×) |
-| Noise_IK + ML-KEM (hybrid) | 356 µs | — (no peer) | reference only |
-| Hex encode 32 B | 32 ns | 79 ns (hex crate) | **2.42× faster** |
-| Hex decode 32 B | 22 ns | 29 ns (hex crate) | **1.29× faster** |
-| Hex encode 1184 B (mlkem ek) | 798 ns | 1997 ns (hex crate) | **2.50× faster** |
-| Hex decode 1184 B (mlkem ek) | 1082 ns | 3128 ns (hex crate) | **2.89× faster** |
+| X25519 (one ECDH) | 19.2 µs | 20.5 µs (dalek) | **1.07× faster** |
+| AEAD seal in-place 1400B | 1.49 µs | 2.30 µs (RustCrypto) | **1.54× faster** |
+| AEAD open in-place 1400B | 1.47 µs | 2.30 µs (RustCrypto) | **1.56× faster** |
+| ML-KEM keygen | 69.2 µs | 39.4 µs (RustCrypto) | 0.57× (slower 1.76×) |
+| ML-KEM encaps | 43.0 µs | 27.6 µs (RustCrypto) | 0.64× (slower 1.55×) |
+| ML-KEM decaps | 24.7 µs | 23.9 µs (RustCrypto) | **0.97× (parity)** ← Phase 2 win |
+| Noise_IK handshake (classic) | 264 µs | 213 µs (snow) | 0.81× (slower 1.24×) |
+| Noise_IK + ML-KEM (hybrid) | ~340 µs | — (no peer) | reference only |
+| Hex encode 32 B | 32 ns | 58 ns (hex crate) | **1.82× faster** |
+| Hex decode 32 B | 22 ns | 28 ns (hex crate) | **1.27× faster** |
 
 ### AWS Tokyo aarch64 (Linux, lx64)
 
@@ -65,30 +63,33 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
 
 ## Read this table in 30 seconds
 
-**Where gnet beats the Rust SOTA (5 categories, both archs):**
+**Where gnet beats or matches the Rust SOTA (6 categories on Apple):**
 
-- **Hex codec**: 1.1×–2.9× faster than the `hex` crate, on both encode and
-  decode, both sizes. The `hex` crate has a generic API surface (multiple
-  decode targets, error types); gnet-hex is a single-purpose `Vec<u8>` /
-  `[u8; 32]` impl that the optimiser handles better.
+- **Hex codec**: 1.27×–1.82× faster than the `hex` crate. The `hex`
+  crate has a generic API surface (multiple decode targets, error
+  types); gnet-hex is a single-purpose `Vec<u8>` / `[u8; 32]` impl that
+  the optimiser handles better.
 - **AEAD seal / open**: 1.5×–1.7× faster than RustCrypto's
   `chacha20poly1305`. Both are constant-time pure Rust; gnet's impl
   uses a tighter Poly1305 inner loop and avoids the trait-object
   indirection RustCrypto layers add.
-- **X25519**: 1.08×–1.19× faster than `x25519-dalek`. Slim margin —
-  dalek is heavily optimised — but the hand-rolled scalar impl pulls
-  ahead on commodity hardware.
+- **X25519**: 1.07×–1.19× faster than `x25519-dalek` on general ECDH.
+- **ML-KEM decaps**: **at parity** with RustCrypto's `ml-kem` (was
+  1.17× slower at baseline). The Phase 2 polish (in-place poly ops +
+  lane-aligned SHAKE squeeze) closed the gap.
 
-**Where gnet is slower (2 categories):**
+**Where gnet is still slower (2 categories on Apple, room for T-1.4 /
+T-2.5):**
 
-- **ML-KEM-768**: 1.2×–1.9× slower than RustCrypto's `ml-kem`.
-  RustCrypto uses extensive precomputation tables and SIMD-friendly
-  matrix ops; gnet-crypto is a NIST FIPS 203 reference impl. This is
-  the single biggest opportunity for follow-up optimisation: ML-KEM
-  dominates handshake cost.
-- **Noise_IK handshake**: 1.1×–1.2× slower than `snow` on the classic
-  path. The gap is entirely amortised across the ML-KEM step on the
-  hybrid handshake (which has no peer to compare).
+- **ML-KEM keygen / encaps**: 1.55×–1.76× slower than RustCrypto's
+  `ml-kem`. Remaining bottleneck is the Keccak-f1600 cost in matrix
+  generation (27 permutations per keygen); RustCrypto uses batched
+  Keccak-x4. See `TASKS.md` → T-2.5.
+- **Noise_IK handshake (classic)**: 1.24× slower than `snow`. Phase 1
+  Hasher / HKDF / handshake polish closed most of the allocation
+  overhead; the remaining gap is **X25519 basepoint multiplication**
+  (we use the general Montgomery ladder ~20µs; dalek uses a
+  precomputed-table comb ~5µs). See `TASKS.md` → T-1.4.
 
 ## How to read the numbers operationally
 
