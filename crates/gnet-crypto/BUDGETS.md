@@ -16,9 +16,18 @@ the yardstick we polish against and the basis for the regression gates in
 | **AEAD seal_in_place 1400B** | **1132 MiB/s · 9.2 Gbps · 1179 ns/pkt** | **913 MiB/s · 7.3 Gbps · 1462 ns/pkt** | **HOT (per packet)** |
 | X25519 scalarmult (variable point) | 27.3k ops/s · 36.6 µs | 52.1k ops/s · 19.2 µs | handshake |
 | **X25519 basepoint derivation (comb)** | tbd | **158k ops/s · 6.3 µs** | handshake (×4 / hybrid) |
-| ML-KEM-768 keygen | 15.9k ops/s · 62.9 µs | 47.4k ops/s · 21.1 µs | handshake |
-| ML-KEM-768 encaps | 20.2k ops/s · 49.5 µs | 48.9k ops/s · 20.5 µs | handshake |
-| ML-KEM-768 decaps | 14.6k ops/s · 68.5 µs | 35.3k ops/s · 28.3 µs | handshake |
+| ML-KEM-768 keygen (pre-T-2.5) | 15.9k ops/s · 62.9 µs | 47.4k ops/s · 21.1 µs | handshake |
+| ML-KEM-768 encaps (pre-T-2.5) | 20.2k ops/s · 49.5 µs | 48.9k ops/s · 20.5 µs | handshake |
+| ML-KEM-768 decaps (pre-T-2.5) | 14.6k ops/s · 68.5 µs | 35.3k ops/s · 28.3 µs | handshake |
+| **ML-KEM-768 keygen** (T-2.5) | (unchanged: NEON path stubs to scalar) | **64.7 µs · 15.5k ops/s** | handshake |
+| **ML-KEM-768 encaps** (T-2.5) | (unchanged) | **39.5 µs · 25.3k ops/s** | handshake |
+| **ML-KEM-768 decaps** (T-2.5) | (unchanged) | **22.7 µs · 44.0k ops/s** | handshake |
+| Keccak-f[1600] scalar permutation | tbd | 185 ns/perm (M4 Pro) | SHA-3 / SHAKE base |
+| `sample_ntt` (scalar) | tbd | 643 ns/poly | ML-KEM matrix gen |
+| `sample_ntt_x4` (NEON 4-way) | (scalar) | 388 ns/poly (1.66× over 4× serial) | ML-KEM matrix gen |
+| `ntt` forward (NEON 8-way) | (scalar) | 110 ns vs 125 ns scalar (1.14×) | ML-KEM |
+| `invntt` (NEON 8-way + F-scale SIMD) | (scalar) | 190 ns vs 237 ns scalar (1.25×) | ML-KEM |
+| `ntt_mul_into` (NEON 8-way) | (scalar) | 55 ns vs 78 ns scalar (1.42×) | ML-KEM |
 
 ## Path taxonomy
 
