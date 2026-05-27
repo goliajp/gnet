@@ -306,8 +306,13 @@ fn noise_ik_classic_hardgate() {
         black_box(n2);
     });
 
-    // Baseline: 1.22 (Apple) / 1.14 (Linux). Cap 1.6.
-    assert_ratio("Noise_IK classic handshake", gnet_ns, comp_ns, 1.6);
+    // Baseline 2026-05-27 was 1.22 (Apple) / 1.14 (Linux); after Phase 1
+    // allocation-free Hasher + HKDF-Expand precomputed pads + handshake
+    // pre-sized output Vec, median is ~1.25 with ±0.05 run-to-run noise.
+    // Cap 1.35 captures "no regression past today + 10% noise margin". The
+    // hard goal of < 1.10 needs X25519 basepoint precomputation (see
+    // TASKS.md Phase 1 follow-up); ratchet again then.
+    assert_ratio("Noise_IK classic handshake", gnet_ns, comp_ns, 1.35);
 }
 
 // ───── Hex codec ──────────────────────────────────────────────────────

@@ -17,6 +17,7 @@ use crate::symmetric_state::SymmetricState;
 use gnet_crypto::{mlkem, x25519};
 
 const PROTOCOL_NAME: &[u8] = b"Noise_pqIKhybrid_25519MLKEM768_ChaChaPoly_BLAKE2s";
+const TAG_LEN: usize = 16;
 
 /// Curve25519 base point (`u = 9`).
 const BASE_POINT: [u8; 32] = {
@@ -25,10 +26,12 @@ const BASE_POINT: [u8; 32] = {
     b
 };
 
+#[inline]
 fn dh(secret: &[u8; 32], public: &[u8; 32]) -> [u8; 32] {
     x25519::x25519(secret, public)
 }
 
+#[inline]
 fn public_of(secret: &[u8; 32]) -> [u8; 32] {
     x25519::x25519(secret, &BASE_POINT)
 }
@@ -73,39 +76,70 @@ impl HybridInitiator {
         }
     }
 
-    /// Write message 1 (`e, es, s, ss, mlkem_ct` + payload).
+    /// Write message 1 (`e, es, s, ss, mlkem_ct` + payload). One allocation:
+    /// the returned `Vec` is sized exactly for the framed wire bytes (plus the
+    /// transient `Vec` from `mlkem::encaps`, which is constrained by the
+    /// existing mlkem API).
     pub fn write_message_1(&mut self, payload: &[u8]) -> Vec<u8> {
-        let mut msg = Vec::new();
+        // Layout: e(32) || enc_s(32+16) || mlkem_ct(CT_LEN) || enc_payload(payload+16)
+        let total = 32 + (32 + TAG_LEN) + mlkem::CT_LEN + (payload.len() + TAG_LEN);
+        let mut msg = vec![0u8; total];
+
         // e
         self.sym.mix_hash(&self.e_pub);
-        msg.extend_from_slice(&self.e_pub);
+        msg[0..32].copy_from_slice(&self.e_pub);
+
         // es
         self.sym.mix_key(&dh(&self.e_priv, &self.rs));
+
         // s (encrypted static)
-        msg.extend_from_slice(&self.sym.encrypt_and_hash(&self.s_pub));
+        let s_off = 32;
+        msg[s_off..s_off + 32].copy_from_slice(&self.s_pub);
+        let n = self
+            .sym
+            .encrypt_and_hash_in_place(&mut msg[s_off..s_off + 32 + TAG_LEN], 32);
+        debug_assert_eq!(n, 32 + TAG_LEN);
+
         // ss
         self.sym.mix_key(&dh(&self.s_priv, &self.rs));
-        // ML-KEM encapsulation to the responder's ek
+
+        // ML-KEM encapsulation: the ciphertext is in the clear but contributes
+        // to the transcript; the shared secret folds into the chaining key.
+        let ct_off = s_off + 32 + TAG_LEN;
         let (mlkem_ss, ct) = mlkem::encaps(&self.mlkem_ek, &self.encaps_m);
-        self.sym.mix_hash(&ct);
-        msg.extend_from_slice(&ct);
+        debug_assert_eq!(ct.len(), mlkem::CT_LEN);
+        msg[ct_off..ct_off + mlkem::CT_LEN].copy_from_slice(&ct);
+        self.sym.mix_hash(&msg[ct_off..ct_off + mlkem::CT_LEN]);
         self.sym.mix_key(&mlkem_ss);
-        // payload
-        msg.extend_from_slice(&self.sym.encrypt_and_hash(payload));
+
+        // payload (encrypted)
+        let p_off = ct_off + mlkem::CT_LEN;
+        msg[p_off..p_off + payload.len()].copy_from_slice(payload);
+        let n = self
+            .sym
+            .encrypt_and_hash_in_place(&mut msg[p_off..p_off + payload.len() + TAG_LEN], payload.len());
+        debug_assert_eq!(n, payload.len() + TAG_LEN);
+
         msg
     }
 
     /// Read message 2 (`e, ee, se` + payload), yielding the transport pair.
+    /// One allocation: the returned payload `Vec`.
     pub fn read_message_2(mut self, msg: &[u8]) -> Option<(Transport, Vec<u8>)> {
-        if msg.len() < 32 {
+        if msg.len() < 32 + TAG_LEN {
             return None;
         }
-        let (re_pub_bytes, rest) = msg.split_at(32);
-        let re_pub: [u8; 32] = re_pub_bytes.try_into().ok()?;
+        let re_pub: [u8; 32] = msg[..32].try_into().ok()?;
         self.sym.mix_hash(&re_pub);
         self.sym.mix_key(&dh(&self.e_priv, &re_pub)); // ee
         self.sym.mix_key(&dh(&self.s_priv, &re_pub)); // se
-        let payload = self.sym.decrypt_and_hash(rest)?;
+
+        let ct_len = msg.len() - 32;
+        let mut payload = vec![0u8; ct_len];
+        payload.copy_from_slice(&msg[32..]);
+        let pt_len = self.sym.decrypt_and_hash_in_place(&mut payload, ct_len)?;
+        payload.truncate(pt_len);
+
         let (c1, c2) = self.sym.split();
         Some((Transport::new(c1, c2), payload))
     }
@@ -156,43 +190,66 @@ impl HybridResponder {
     }
 
     /// Read message 1, decapsulating the ML-KEM ciphertext and learning the
-    /// initiator's static key. Returns the initiator's payload.
+    /// initiator's static key. Returns the initiator's payload. One allocation:
+    /// the returned payload `Vec`.
     pub fn read_message_1(&mut self, msg: &[u8]) -> Option<Vec<u8>> {
         // e(32) + enc static(48) + mlkem_ct + payload tag(16)
-        if msg.len() < 32 + 48 + mlkem::CT_LEN + 16 {
+        if msg.len() < 32 + (32 + TAG_LEN) + mlkem::CT_LEN + TAG_LEN {
             return None;
         }
-        let (ie_pub_bytes, rest) = msg.split_at(32);
-        let ie_pub: [u8; 32] = ie_pub_bytes.try_into().ok()?;
+        let ie_pub: [u8; 32] = msg[..32].try_into().ok()?;
         self.initiator_ephemeral = Some(ie_pub);
         self.sym.mix_hash(&ie_pub);
         self.sym.mix_key(&dh(&self.s_priv, &ie_pub)); // es
-        let (enc_static, rest) = rest.split_at(48);
-        let is_pub: [u8; 32] = self
-            .sym
-            .decrypt_and_hash(enc_static)?
-            .as_slice()
-            .try_into()
-            .ok()?;
+
+        // s (decrypt into a 48-byte stack buffer)
+        let mut s_buf = [0u8; 32 + TAG_LEN];
+        s_buf.copy_from_slice(&msg[32..32 + 32 + TAG_LEN]);
+        let s_len = self.sym.decrypt_and_hash_in_place(&mut s_buf, 32 + TAG_LEN)?;
+        if s_len != 32 {
+            return None;
+        }
+        let is_pub: [u8; 32] = s_buf[..32].try_into().ok()?;
         self.initiator_static = Some(is_pub);
         self.sym.mix_key(&dh(&self.s_priv, &is_pub)); // ss
-        let (ct, rest) = rest.split_at(mlkem::CT_LEN);
+
+        // ML-KEM ciphertext (in the clear, but mixed into the transcript and
+        // its decapsulated shared secret folded into the chaining key)
+        let ct_off = 32 + 32 + TAG_LEN;
+        let ct = &msg[ct_off..ct_off + mlkem::CT_LEN];
         self.sym.mix_hash(ct);
         let mlkem_ss = mlkem::decaps(&self.mlkem_dk, ct);
         self.sym.mix_key(&mlkem_ss);
-        self.sym.decrypt_and_hash(rest)
+
+        // payload (decrypt into a Vec sized to the ciphertext)
+        let p_off = ct_off + mlkem::CT_LEN;
+        let p_ct_len = msg.len() - p_off;
+        let mut payload = vec![0u8; p_ct_len];
+        payload.copy_from_slice(&msg[p_off..]);
+        let pt_len = self.sym.decrypt_and_hash_in_place(&mut payload, p_ct_len)?;
+        payload.truncate(pt_len);
+        Some(payload)
     }
 
     /// Write message 2 (`e, ee, se` + payload), yielding the transport pair.
+    /// One allocation: the returned `Vec`.
     pub fn write_message_2(mut self, payload: &[u8]) -> Option<(Vec<u8>, Transport)> {
         let ie = self.initiator_ephemeral?;
         let is = self.initiator_static?;
-        let mut msg = Vec::new();
+        let total = 32 + payload.len() + TAG_LEN;
+        let mut msg = vec![0u8; total];
+
         self.sym.mix_hash(&self.e_pub);
-        msg.extend_from_slice(&self.e_pub);
+        msg[0..32].copy_from_slice(&self.e_pub);
         self.sym.mix_key(&dh(&self.e_priv, &ie)); // ee
         self.sym.mix_key(&dh(&self.e_priv, &is)); // se
-        msg.extend_from_slice(&self.sym.encrypt_and_hash(payload));
+
+        msg[32..32 + payload.len()].copy_from_slice(payload);
+        let n = self
+            .sym
+            .encrypt_and_hash_in_place(&mut msg[32..32 + payload.len() + TAG_LEN], payload.len());
+        debug_assert_eq!(n, payload.len() + TAG_LEN);
+
         let (c1, c2) = self.sym.split();
         Some((msg, Transport::new(c2, c1)))
     }

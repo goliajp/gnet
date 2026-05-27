@@ -32,6 +32,7 @@ const SIGMA: [[usize; 16]; 10] = [
 ];
 
 /// The `G` mixing function (BLAKE2s rotations 16/12/8/7).
+#[inline(always)]
 fn g(v: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize, x: u32, y: u32) {
     v[a] = v[a].wrapping_add(v[b]).wrapping_add(x);
     v[d] = (v[d] ^ v[a]).rotate_right(16);
@@ -45,6 +46,7 @@ fn g(v: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize, x: u32, y: u32) 
 
 /// Compress one 64-byte block into the state. `t` is the byte counter
 /// including this block; `last` marks the final block.
+#[inline(always)]
 fn compress(h: &mut [u32; 8], block: &[u8; 64], t: u64, last: bool) {
     let mut m = [0u32; 16];
     for (i, w) in m.iter_mut().enumerate() {
@@ -73,13 +75,144 @@ fn compress(h: &mut [u32; 8], block: &[u8; 64], t: u64, last: bool) {
     }
 }
 
-/// Serialize the first `outlen` bytes of the state (little-endian).
-fn output(h: &[u32; 8], outlen: usize) -> Vec<u8> {
+/// Serialize the first `outlen` bytes of the state (little-endian) into `out`.
+#[inline(always)]
+fn output_into(h: &[u32; 8], out: &mut [u8]) {
+    debug_assert!(out.len() <= 32);
     let mut bytes = [0u8; 32];
     for (i, w) in h.iter().enumerate() {
         bytes[4 * i..4 * i + 4].copy_from_slice(&w.to_le_bytes());
     }
-    bytes[..outlen].to_vec()
+    out.copy_from_slice(&bytes[..out.len()]);
+}
+
+/// Streaming BLAKE2s. Allocation-free: caller can `update(..)` arbitrary
+/// data without intermediate Vecs, then `finalize_into(&mut [u8])` writes
+/// the digest into a caller-provided slice.
+///
+/// Invariants:
+/// - `t_done` is the byte counter for blocks already passed to `compress`
+///   (i.e. the `t` argument of the most recent compress call, or 0 if none).
+/// - `buf[..buf_len]` is data absorbed but not yet compressed. When
+///   `buf_len == 64`, the block is held back until either more data arrives
+///   (then compressed as non-last) or `finalize_into` is called (then
+///   compressed as last). Holding one block back is required because the
+///   `last` flag only goes on the final compress.
+pub struct Hasher {
+    h: [u32; 8],
+    outlen: usize,
+    t_done: u64,
+    buf: [u8; 64],
+    buf_len: usize,
+}
+
+impl Hasher {
+    /// Unkeyed BLAKE2s producing `outlen` bytes (1..=32).
+    #[inline]
+    pub fn new(outlen: usize) -> Self {
+        Self::new_keyed(outlen, &[])
+    }
+
+    /// Keyed BLAKE2s (MAC mode). `key.len()` must be 0..=32. If non-empty,
+    /// a zero-padded 64-byte key block is absorbed as the first message
+    /// block (with `t = 64`), as required by the parameter block convention.
+    pub fn new_keyed(outlen: usize, key: &[u8]) -> Self {
+        assert!((1..=32).contains(&outlen), "outlen must be 1..=32");
+        assert!(key.len() <= 32, "key must be <= 32 bytes");
+        let mut h = IV;
+        h[0] ^= 0x0101_0000 ^ ((key.len() as u32) << 8) ^ (outlen as u32);
+        let mut s = Self {
+            h,
+            outlen,
+            t_done: 0,
+            buf: [0u8; 64],
+            buf_len: 0,
+        };
+        if !key.is_empty() {
+            // Stash the zero-padded key block as a pending full buf. It
+            // contributes 64 bytes to the counter and will be compressed
+            // on the next update or finalize.
+            s.buf[..key.len()].copy_from_slice(key);
+            s.buf_len = 64;
+        }
+        s
+    }
+
+    /// Absorb `data` into the running state.
+    #[inline]
+    pub fn update(&mut self, mut data: &[u8]) {
+        if data.is_empty() {
+            return;
+        }
+        // If we have a pending full buf, compress it as non-last (we know
+        // more data is coming because `data.is_empty()` was checked above).
+        if self.buf_len == 64 {
+            self.t_done += 64;
+            let block = self.buf;
+            compress(&mut self.h, &block, self.t_done, false);
+            self.buf_len = 0;
+        }
+        // Fill any partial buf from `data`.
+        if self.buf_len > 0 {
+            let take = (64 - self.buf_len).min(data.len());
+            self.buf[self.buf_len..self.buf_len + take].copy_from_slice(&data[..take]);
+            self.buf_len += take;
+            data = &data[take..];
+            // If buf became full AND there's more data, compress it now.
+            // Otherwise (buf full and no more data, or buf still partial),
+            // leave it for the next update or finalize.
+            if self.buf_len == 64 && !data.is_empty() {
+                self.t_done += 64;
+                let block = self.buf;
+                compress(&mut self.h, &block, self.t_done, false);
+                self.buf_len = 0;
+            }
+        }
+        // Stream full blocks straight from `data`, but always keep at least
+        // one byte unprocessed so the final compress carries `last = true`.
+        while data.len() > 64 {
+            let block: &[u8; 64] = data[..64].try_into().unwrap();
+            self.t_done += 64;
+            compress(&mut self.h, block, self.t_done, false);
+            data = &data[64..];
+        }
+        // Stash the tail. `buf_len` is 0 here (we just compressed it) unless
+        // we never compressed at this call — in which case it's still < 64
+        // and there's room for the remainder.
+        if !data.is_empty() {
+            debug_assert!(self.buf_len + data.len() <= 64);
+            self.buf[self.buf_len..self.buf_len + data.len()].copy_from_slice(data);
+            self.buf_len += data.len();
+        }
+    }
+
+    /// Finalize and write the digest into `out`. `out.len()` must equal
+    /// the `outlen` configured at construction.
+    pub fn finalize_into(mut self, out: &mut [u8]) {
+        assert_eq!(
+            out.len(),
+            self.outlen,
+            "finalize_into: out length must equal outlen"
+        );
+        // Last block: zero-pad the remainder of `buf`. Counter advances by
+        // `buf_len` (which may be 0..=64; for a keyed-empty hash this is
+        // the 64-byte key block).
+        for b in &mut self.buf[self.buf_len..] {
+            *b = 0;
+        }
+        self.t_done += self.buf_len as u64;
+        let block = self.buf;
+        compress(&mut self.h, &block, self.t_done, true);
+        output_into(&self.h, out);
+    }
+}
+
+/// One-shot hash into a caller-provided slice. `out.len()` must be 1..=32.
+#[inline]
+pub fn hash_into(out: &mut [u8], msg: &[u8]) {
+    let mut hasher = Hasher::new(out.len());
+    hasher.update(msg);
+    hasher.finalize_into(out);
 }
 
 /// Core BLAKE2s: hash `msg` with optional `key`, producing `outlen` bytes.
@@ -87,47 +220,11 @@ fn output(h: &[u32; 8], outlen: usize) -> Vec<u8> {
 /// # Panics
 /// If `outlen` is not in `1..=32` or `key.len() > 32`.
 pub fn blake2s(outlen: usize, key: &[u8], msg: &[u8]) -> Vec<u8> {
-    assert!((1..=32).contains(&outlen), "outlen must be 1..=32");
-    assert!(key.len() <= 32, "key must be <= 32 bytes");
-
-    let mut h = IV;
-    h[0] ^= 0x0101_0000 ^ ((key.len() as u32) << 8) ^ (outlen as u32);
-    let mut t: u64 = 0;
-
-    if !key.is_empty() {
-        let mut kb = [0u8; 64];
-        kb[..key.len()].copy_from_slice(key);
-        if msg.is_empty() {
-            compress(&mut h, &kb, 64, true);
-            return output(&h, outlen);
-        }
-        t = 64;
-        compress(&mut h, &kb, t, false);
-    } else if msg.is_empty() {
-        compress(&mut h, &[0u8; 64], 0, true);
-        return output(&h, outlen);
-    }
-
-    // msg is non-empty here
-    let n = msg.len();
-    let full_end = if n.is_multiple_of(64) {
-        n - 64
-    } else {
-        n - (n % 64)
-    };
-    let mut off = 0;
-    while off < full_end {
-        let block: [u8; 64] = msg[off..off + 64].try_into().unwrap();
-        t += 64;
-        compress(&mut h, &block, t, false);
-        off += 64;
-    }
-    let rem = &msg[off..];
-    let mut block = [0u8; 64];
-    block[..rem.len()].copy_from_slice(rem);
-    t += rem.len() as u64;
-    compress(&mut h, &block, t, true);
-    output(&h, outlen)
+    let mut out = vec![0u8; outlen];
+    let mut hasher = Hasher::new_keyed(outlen, key);
+    hasher.update(msg);
+    hasher.finalize_into(&mut out);
+    out
 }
 
 /// Unkeyed BLAKE2s hash producing `out_len` bytes.
@@ -191,5 +288,56 @@ mod tests {
         assert_eq!(d.len(), 32);
         // recomputation is deterministic
         assert_eq!(d, hash(32, &msg));
+    }
+
+    /// The streaming Hasher must match the one-shot `hash` across boundary
+    /// cases (empty, sub-block, exact-block, multi-block, partial fills).
+    #[test]
+    fn streaming_matches_oneshot() {
+        for len in [0usize, 1, 31, 32, 63, 64, 65, 127, 128, 129, 200, 1000, 4096] {
+            let msg: Vec<u8> = (0..len).map(|i| (i as u8).wrapping_mul(7) ^ 0xa5).collect();
+            let one = hash(32, &msg);
+            let mut streamed = [0u8; 32];
+            let mut h = Hasher::new(32);
+            h.update(&msg);
+            h.finalize_into(&mut streamed);
+            assert_eq!(&streamed[..], &one[..], "mismatch at len {len}");
+        }
+    }
+
+    /// Chunked updates of various split sizes must equal a single update of
+    /// the concatenated input.
+    #[test]
+    fn streaming_chunked_updates_equal_single_update() {
+        let msg: Vec<u8> = (0..500).map(|i| i as u8).collect();
+        let mut ref_out = [0u8; 32];
+        let mut h_ref = Hasher::new(32);
+        h_ref.update(&msg);
+        h_ref.finalize_into(&mut ref_out);
+
+        for chunk in [1usize, 7, 31, 32, 33, 63, 64, 65, 100, 256] {
+            let mut h = Hasher::new(32);
+            let mut off = 0;
+            while off < msg.len() {
+                let end = (off + chunk).min(msg.len());
+                h.update(&msg[off..end]);
+                off = end;
+            }
+            let mut got = [0u8; 32];
+            h.finalize_into(&mut got);
+            assert_eq!(got, ref_out, "mismatch with chunk size {chunk}");
+        }
+    }
+
+    /// `hash_into` must equal `hash` for the same input.
+    #[test]
+    fn hash_into_matches_hash() {
+        let msg = b"the quick brown fox jumps over the lazy dog";
+        for outlen in [1usize, 8, 16, 20, 32] {
+            let v = hash(outlen, msg);
+            let mut buf = vec![0u8; outlen];
+            hash_into(&mut buf, msg);
+            assert_eq!(buf, v, "outlen {outlen}");
+        }
     }
 }

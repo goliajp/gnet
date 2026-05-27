@@ -20,6 +20,7 @@ use crate::symmetric_state::SymmetricState;
 use gnet_crypto::x25519;
 
 const PROTOCOL_NAME: &[u8] = b"Noise_IK_25519_ChaChaPoly_BLAKE2s";
+const TAG_LEN: usize = 16;
 
 /// Curve25519 base point (`u = 9`).
 const BASE_POINT: [u8; 32] = {
@@ -77,10 +78,12 @@ impl Transport {
     }
 }
 
+#[inline]
 fn dh(secret: &[u8; 32], public: &[u8; 32]) -> [u8; 32] {
     x25519::x25519(secret, public)
 }
 
+#[inline]
 fn public_of(secret: &[u8; 32]) -> [u8; 32] {
     x25519::x25519(secret, &BASE_POINT)
 }
@@ -116,39 +119,64 @@ impl Initiator {
         }
     }
 
-    /// Write handshake message 1 (`e, es, s, ss` + payload).
+    /// Write handshake message 1 (`e, es, s, ss` + payload). One allocation:
+    /// the returned `Vec` is sized exactly for the framed wire bytes.
     pub fn write_message_1(&mut self, payload: &[u8]) -> Vec<u8> {
-        let mut msg = Vec::new();
+        // Layout: e(32) || enc_s(32 + 16) || enc_payload(payload.len() + 16)
+        let total = 32 + (32 + TAG_LEN) + (payload.len() + TAG_LEN);
+        let mut msg = vec![0u8; total];
+
         // e
         self.sym.mix_hash(&self.e_pub);
-        msg.extend_from_slice(&self.e_pub);
+        msg[0..32].copy_from_slice(&self.e_pub);
+
         // es
         self.sym.mix_key(&dh(&self.e_priv, &self.rs));
+
         // s (encrypted static)
-        msg.extend_from_slice(&self.sym.encrypt_and_hash(&self.s_pub));
+        let s_off = 32;
+        msg[s_off..s_off + 32].copy_from_slice(&self.s_pub);
+        let n = self
+            .sym
+            .encrypt_and_hash_in_place(&mut msg[s_off..s_off + 32 + TAG_LEN], 32);
+        debug_assert_eq!(n, 32 + TAG_LEN);
+
         // ss
         self.sym.mix_key(&dh(&self.s_priv, &self.rs));
-        // payload
-        msg.extend_from_slice(&self.sym.encrypt_and_hash(payload));
+
+        // payload (encrypted)
+        let p_off = s_off + 32 + TAG_LEN;
+        msg[p_off..p_off + payload.len()].copy_from_slice(payload);
+        let n = self
+            .sym
+            .encrypt_and_hash_in_place(&mut msg[p_off..p_off + payload.len() + TAG_LEN], payload.len());
+        debug_assert_eq!(n, payload.len() + TAG_LEN);
+
         msg
     }
 
     /// Read handshake message 2 (`e, ee, se` + payload), consuming the
     /// handshake and yielding the transport pair plus the responder payload.
+    /// One allocation: the returned payload `Vec`.
     pub fn read_message_2(mut self, msg: &[u8]) -> Option<(Transport, Vec<u8>)> {
-        if msg.len() < 32 {
+        if msg.len() < 32 + TAG_LEN {
             return None;
         }
-        let (re_pub_bytes, rest) = msg.split_at(32);
-        let re_pub: [u8; 32] = re_pub_bytes.try_into().ok()?;
+        let re_pub: [u8; 32] = msg[..32].try_into().ok()?;
         // e
         self.sym.mix_hash(&re_pub);
         // ee
         self.sym.mix_key(&dh(&self.e_priv, &re_pub));
         // se = DH(initiator static, responder ephemeral)
         self.sym.mix_key(&dh(&self.s_priv, &re_pub));
-        // payload
-        let payload = self.sym.decrypt_and_hash(rest)?;
+
+        // payload (in-place decrypt into a Vec sized to the ciphertext)
+        let ct_len = msg.len() - 32;
+        let mut payload = vec![0u8; ct_len];
+        payload.copy_from_slice(&msg[32..]);
+        let pt_len = self.sym.decrypt_and_hash_in_place(&mut payload, ct_len)?;
+        payload.truncate(pt_len);
+
         let (c1, c2) = self.sym.split();
         Some((Transport::new(c1, c2), payload))
     }
@@ -191,49 +219,64 @@ impl Responder {
     }
 
     /// Read handshake message 1 (`e, es, s, ss` + payload), returning the
-    /// initiator's payload. Learns the initiator's static key.
+    /// initiator's payload. Learns the initiator's static key. One allocation:
+    /// the returned payload `Vec`.
     pub fn read_message_1(&mut self, msg: &[u8]) -> Option<Vec<u8>> {
         // e(32) + encrypted static(32+16) + payload(>=16 tag)
-        if msg.len() < 32 + 48 + 16 {
+        if msg.len() < 32 + (32 + TAG_LEN) + TAG_LEN {
             return None;
         }
-        let (ie_pub_bytes, rest) = msg.split_at(32);
-        let ie_pub: [u8; 32] = ie_pub_bytes.try_into().ok()?;
+        let ie_pub: [u8; 32] = msg[..32].try_into().ok()?;
         self.initiator_ephemeral = Some(ie_pub);
         // e
         self.sym.mix_hash(&ie_pub);
         // es
         self.sym.mix_key(&dh(&self.s_priv, &ie_pub));
-        // s
-        let (enc_static, rest2) = rest.split_at(48);
-        let is_pub: [u8; 32] = self
-            .sym
-            .decrypt_and_hash(enc_static)?
-            .as_slice()
-            .try_into()
-            .ok()?;
+        // s (decrypt into a 48-byte stack buffer)
+        let mut s_buf = [0u8; 32 + TAG_LEN];
+        s_buf.copy_from_slice(&msg[32..32 + 32 + TAG_LEN]);
+        let s_len = self.sym.decrypt_and_hash_in_place(&mut s_buf, 32 + TAG_LEN)?;
+        if s_len != 32 {
+            return None;
+        }
+        let is_pub: [u8; 32] = s_buf[..32].try_into().ok()?;
         self.initiator_static = Some(is_pub);
         // ss
         self.sym.mix_key(&dh(&self.s_priv, &is_pub));
-        // payload
-        self.sym.decrypt_and_hash(rest2)
+        // payload (decrypt into a Vec sized to the ciphertext)
+        let p_off = 32 + 32 + TAG_LEN;
+        let p_ct_len = msg.len() - p_off;
+        let mut payload = vec![0u8; p_ct_len];
+        payload.copy_from_slice(&msg[p_off..]);
+        let pt_len = self.sym.decrypt_and_hash_in_place(&mut payload, p_ct_len)?;
+        payload.truncate(pt_len);
+        Some(payload)
     }
 
     /// Write handshake message 2 (`e, ee, se` + payload), consuming the
     /// handshake and yielding the outgoing message plus the transport pair.
+    /// One allocation: the returned `Vec`.
     pub fn write_message_2(mut self, payload: &[u8]) -> Option<(Vec<u8>, Transport)> {
         let ie = self.initiator_ephemeral?;
         let is = self.initiator_static?;
-        let mut msg = Vec::new();
+        // Layout: e(32) || enc_payload(payload.len() + 16)
+        let total = 32 + payload.len() + TAG_LEN;
+        let mut msg = vec![0u8; total];
+
         // e
         self.sym.mix_hash(&self.e_pub);
-        msg.extend_from_slice(&self.e_pub);
+        msg[0..32].copy_from_slice(&self.e_pub);
         // ee
         self.sym.mix_key(&dh(&self.e_priv, &ie));
         // se = DH(initiator static, responder ephemeral)
         self.sym.mix_key(&dh(&self.e_priv, &is));
         // payload
-        msg.extend_from_slice(&self.sym.encrypt_and_hash(payload));
+        msg[32..32 + payload.len()].copy_from_slice(payload);
+        let n = self
+            .sym
+            .encrypt_and_hash_in_place(&mut msg[32..32 + payload.len() + TAG_LEN], payload.len());
+        debug_assert_eq!(n, payload.len() + TAG_LEN);
+
         let (c1, c2) = self.sym.split();
         // responder sends on the responder→initiator cipher (c2).
         Some((msg, Transport::new(c2, c1)))
