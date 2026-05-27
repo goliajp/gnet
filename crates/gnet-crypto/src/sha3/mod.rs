@@ -1,4 +1,4 @@
-//! SHA-3 and SHAKE (FIPS 202) over the Keccak-f[1600] permutation.
+//! SHA-3 and SHAKE (FIPS 202) over the Keccak-f\[1600\] permutation.
 //!
 //! Zero-dependency and constant-time by construction (the permutation is pure
 //! word logic — rotates, xor, and/not — with no data-dependent branches or
@@ -7,9 +7,9 @@
 //! the hash primitives required by ML-KEM (FIPS 203).
 //!
 //! Internal structure:
-//! - [`scalar`] — portable scalar Keccak-f[1600] + sponge. The correctness
+//! - `scalar` — portable scalar Keccak-f\[1600\] + sponge. The correctness
 //!   reference, always available.
-//! - [`neon_x4`] — aarch64 NEON 4-way Keccak-f[1600] and SHAKE128 used by
+//! - `neon_x4` — aarch64 NEON 4-way Keccak-f\[1600\] and SHAKE128 used by
 //!   ML-KEM matrix sampling (9 independent SHAKE128 streams per matrix). On
 //!   non-aarch64 the 4-way wrappers route to four serial scalar calls.
 
@@ -49,7 +49,7 @@ pub fn shake256(input: &[u8], out: &mut [u8]) {
 }
 
 /// SHAKE128 of four independent seeds in parallel. On aarch64 uses a single
-/// NEON 4-way Keccak-f[1600], packing four 25-lane states into `uint64x2_t`
+/// NEON 4-way Keccak-f\[1600\], packing four 25-lane states into `uint64x2_t`
 /// pairs (one register holds two states' lane). On other architectures
 /// degrades to four serial scalar [`shake128`] calls — same output bit-for-bit,
 /// just no SIMD win.

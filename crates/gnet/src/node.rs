@@ -11,8 +11,8 @@
 //! `Mutex`; the lock is held only for in-memory routing/crypto, never across
 //! an I/O syscall.
 //!
-//! Submodules: [`types`] (session state + `Node` helpers), [`pump`] (the
-//! TUN↔UDP threads), [`handshake`] (inbound handshake handling).
+//! Submodules: `types` (session state + `Node` helpers), `pump` (the
+//! TUN↔UDP threads), `handshake` (inbound handshake handling).
 //!
 //! [`wire`]: gnet_wire
 
