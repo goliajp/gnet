@@ -294,6 +294,93 @@ mod tests {
         ([0x11; 32], [0x22; 32], [0x33; 32], [0x44; 32])
     }
 
+    /// Profile-driven exploration of where Noise_IK handshake spends time.
+    /// Splits the full handshake into the obvious phases (Initiator::new,
+    /// write_message_1, Responder::new, read_message_1, write_message_2,
+    /// read_message_2) and times each in isolation. Used to confirm
+    /// whether the crypto kernel is at hardware ceiling or has a hidden
+    /// hot spot like the byte_encode case in ML-KEM.
+    ///
+    /// Run: `cargo test --release -p gnet-noise --lib handshake::tests::ik_handshake_breakdown_microbench -- --ignored --nocapture`
+    #[test]
+    #[ignore = "informational microbench"]
+    fn ik_handshake_breakdown_microbench() {
+        use std::time::Instant;
+        let (is, rs, ie, re) = keys();
+        let rs_pub = public_of(&rs);
+
+        // warm
+        for _ in 0..50 {
+            let mut ini = Initiator::new(is, rs_pub, ie);
+            let m1 = ini.write_message_1(b"");
+            let mut resp = Responder::new(rs, re);
+            resp.read_message_1(&m1).unwrap();
+            let (m2, _) = resp.write_message_2(b"").unwrap();
+            let _ = ini.read_message_2(&m2).unwrap();
+        }
+        let iters = 5_000u32;
+
+        let mut t_ini_new = 0u128;
+        let mut t_w1 = 0u128;
+        let mut t_resp_new = 0u128;
+        let mut t_r1 = 0u128;
+        let mut t_w2 = 0u128;
+        let mut t_r2 = 0u128;
+        let mut t_total = 0u128;
+
+        for _ in 0..iters {
+            let s_total = Instant::now();
+
+            let s = Instant::now();
+            let mut ini = Initiator::new(is, rs_pub, ie);
+            t_ini_new += s.elapsed().as_nanos();
+
+            let s = Instant::now();
+            let m1 = ini.write_message_1(b"");
+            t_w1 += s.elapsed().as_nanos();
+
+            let s = Instant::now();
+            let mut resp = Responder::new(rs, re);
+            t_resp_new += s.elapsed().as_nanos();
+
+            let s = Instant::now();
+            resp.read_message_1(&m1).unwrap();
+            t_r1 += s.elapsed().as_nanos();
+
+            let s = Instant::now();
+            let (m2, _) = resp.write_message_2(b"").unwrap();
+            t_w2 += s.elapsed().as_nanos();
+
+            let s = Instant::now();
+            let _ = ini.read_message_2(&m2).unwrap();
+            t_r2 += s.elapsed().as_nanos();
+
+            t_total += s_total.elapsed().as_nanos();
+        }
+
+        let n = u128::from(iters);
+        eprintln!("\nNoise_IK handshake breakdown ({iters} iters, ns/op):");
+        eprintln!("  Initiator::new (2× x25519_base)  : {} ns", t_ini_new / n);
+        eprintln!("  write_message_1 (1 DH + mix + AEAD): {} ns", t_w1 / n);
+        eprintln!("  Responder::new  (2× x25519_base)  : {} ns", t_resp_new / n);
+        eprintln!(
+            "  read_message_1  (2 DH + AEAD decrypt + mix): {} ns",
+            t_r1 / n
+        );
+        eprintln!(
+            "  write_message_2 (2 DH + AEAD encrypt + mix): {} ns",
+            t_w2 / n
+        );
+        eprintln!("  read_message_2  (2 DH + AEAD decrypt + mix): {} ns", t_r2 / n);
+        eprintln!("  TOTAL handshake                  : {} ns", t_total / n);
+        eprintln!(
+            "  (sum of phases / total)          : {:.1}% (rest = Instant + flow overhead)",
+            (t_ini_new + t_w1 + t_resp_new + t_r1 + t_w2 + t_r2) as f64
+                / (t_total as f64)
+                * 100.0
+        );
+    }
+
     #[test]
     fn ik_roundtrip_and_bidirectional_transport() {
         let (is, rs, ie, re) = keys();
