@@ -16,6 +16,10 @@
 //! device_token <hex>         # optional: long-lived secret returned by `/join`;
 //!                            # the daemon uses it as Bearer auth on
 //!                            # `POST /endpoint-report` (reflexive endpoint updates)
+//! behind_nat <true|false>    # optional: force the daemon's NAT-detection answer.
+//!                            # Absent = auto-detect (reflexive vs. local IFs).
+//!                            # Set false on AWS / 1:1-NAT hosts where the
+//!                            # heuristic would mis-classify as NAT'd.
 //! peer <pubkey-64hex> <mlkem-ek-hex> <vip4>[,<vip6>] [endpoint]
 //! peer <pubkey-64hex> <mlkem-ek-hex> <vip4>[,<vip6>] [endpoint]
 //! ```
@@ -84,6 +88,13 @@ pub struct Config {
     /// the daemon read-only against the coordinator (legacy joins or
     /// always-public peers that never need to report a reflexive endpoint).
     pub device_token: Option<String>,
+    /// Operator override for the NAT-detection heuristic. `None` keeps the
+    /// daemon's auto-detection (compare reflexive endpoint to local interface
+    /// IPs). Set to `Some(false)` on AWS / 1:1-NAT / port-forwarded hosts
+    /// whose reflexive IP is reachable from anywhere but does not appear as a
+    /// local interface IP — the auto-detection would mis-classify them as
+    /// NAT'd and pay the DCUtR coordinator round-trip needlessly.
+    pub behind_nat: Option<bool>,
     /// Configured peers.
     pub peers: Vec<PeerConfig>,
 }
@@ -97,6 +108,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
     let mut keepalive: Option<Duration> = None;
     let mut coordinator: Option<String> = None;
     let mut device_token: Option<String> = None;
+    let mut behind_nat: Option<bool> = None;
     let mut peers = Vec::new();
 
     for (lineno, raw) in text.lines().enumerate() {
@@ -147,6 +159,14 @@ pub fn parse(text: &str) -> Result<Config, String> {
                     return Err(err("device_token: must be non-empty hex"));
                 }
                 device_token = Some(tok.to_string());
+            }
+            "behind_nat" => {
+                let v = t.next().ok_or_else(|| err("behind_nat: missing value"))?;
+                behind_nat = Some(match v {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err(err("behind_nat: must be `true` or `false`")),
+                });
             }
             "peer" => {
                 let pk = t.next().ok_or_else(|| err("peer: missing public key"))?;
@@ -200,6 +220,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
         keepalive,
         coordinator,
         device_token,
+        behind_nat,
         peers,
     })
 }
@@ -319,6 +340,16 @@ peer 0000000000000000000000000000000000000000000000000000000000000003 {ek3} 10.8
         // explicit assertion below to document the policy.
         let c = parse(&format!("{base}device_token ABCDEF0123")).unwrap();
         assert_eq!(c.device_token.as_deref(), Some("ABCDEF0123"));
+    }
+
+    #[test]
+    fn behind_nat_directive() {
+        let base = "private 0000000000000000000000000000000000000000000000000000000000000001\naddress 10.0.0.1\nlisten 0.0.0.0:1\n";
+        assert_eq!(parse(base).unwrap().behind_nat, None);
+        assert_eq!(parse(&format!("{base}behind_nat true")).unwrap().behind_nat, Some(true));
+        assert_eq!(parse(&format!("{base}behind_nat false")).unwrap().behind_nat, Some(false));
+        assert!(parse(&format!("{base}behind_nat maybe")).is_err());
+        assert!(parse(&format!("{base}behind_nat")).is_err());
     }
 
     #[test]

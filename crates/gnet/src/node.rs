@@ -174,6 +174,11 @@ pub fn run(config: Config) -> io::Result<()> {
         .collect();
     // our own ML-KEM key pair is derived from our X25519 private key.
     let (mlkem_ek, mlkem_dk) = keys::derive_mlkem(&config.private);
+    // Operator's `behind_nat` directive wins over runtime auto-detect when
+    // present — covers AWS-style 1:1 NAT where reflexive ≠ any local IF IP
+    // but the host is effectively public (DCUtR would be wasted overhead).
+    let self_is_nat = config.behind_nat;
+    let nat_override = config.behind_nat.is_some();
     let node = Arc::new(Mutex::new(Node {
         private: config.private,
         public: keys::public_key(&config.private),
@@ -182,7 +187,8 @@ pub fn run(config: Config) -> io::Result<()> {
         peers,
         reflexive: None,
         probe_txid: 0,
-        self_is_nat: None,
+        self_is_nat,
+        nat_override,
     }));
 
     // condvar the punch-dial poller blocks on; downlink notifies it when a

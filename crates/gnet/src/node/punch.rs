@@ -183,6 +183,7 @@ mod tests {
             reflexive,
             probe_txid: 0,
             self_is_nat: None,
+            nat_override: false,
         }
     }
 
