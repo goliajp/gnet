@@ -35,6 +35,7 @@ use gnet_tun::Tun;
 use crate::keys;
 use gnet_config::Config;
 use gnet_punch::PunchState;
+use punch::DIRECT_UPGRADE_BASE;
 use types::{Node, Peer, Session};
 
 /// AEAD tag length appended to every transport frame (Poly1305).
@@ -170,6 +171,10 @@ pub fn run(config: Config) -> io::Result<()> {
             // static conf has no relay_eligible directive yet — coordinator
             // is the source of truth and pushes the flag via /peers polling.
             relay_eligible: false,
+            // grace period before the first direct-upgrade attempt: let
+            // sessions establish over relay before we try to upgrade them.
+            direct_upgrade_at: Instant::now() + DIRECT_UPGRADE_BASE,
+            direct_upgrade_failures: 0,
         })
         .collect();
     // our own ML-KEM key pair is derived from our X25519 private key.
@@ -220,6 +225,12 @@ pub fn run(config: Config) -> io::Result<()> {
                     // completion without depending on more app traffic.
                     g.expire_handshakes(HANDSHAKE_TIMEOUT);
                     let mut sends = g.retransmit_initiations();
+                    // attempt direct-path upgrades on any relayed peer whose
+                    // per-peer deadline has come due — this is the warm-path
+                    // companion to pump's cold-start "always relay first"
+                    // rule, restoring a direct hop once both sides' NAT
+                    // topology cooperates.
+                    sends.extend(g.poll_direct_upgrades());
                     if last_probe.elapsed() >= PROBE_INTERVAL {
                         last_probe = Instant::now();
                         probe = g.make_probe();

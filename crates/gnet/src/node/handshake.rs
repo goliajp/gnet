@@ -166,6 +166,8 @@ mod tests {
                 relay: false,
                 relay_endpoint: None,
                 relay_eligible: false,
+                direct_upgrade_at: Instant::now() + super::super::punch::DIRECT_UPGRADE_BASE,
+                direct_upgrade_failures: 0,
             }],
             reflexive: None,
             probe_txid: 0,

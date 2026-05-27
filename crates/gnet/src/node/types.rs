@@ -115,6 +115,19 @@ pub(super) struct Peer {
     /// always-on public host). `Node::coordinator_endpoint` filters on this
     /// first, then falls back to any peer with a known endpoint.
     pub(super) relay_eligible: bool,
+    /// Earliest instant at which this peer is eligible for a direct-path
+    /// upgrade attempt while routed via a relay. Only consulted when
+    /// `relay` is true; [`Node::poll_direct_upgrades`] rolls it forward by
+    /// the current backoff after each attempt. Initialised to
+    /// `Instant::now() + DIRECT_UPGRADE_BASE` so a freshly-relayed peer
+    /// first retries after a grace period rather than at startup.
+    pub(super) direct_upgrade_at: Instant,
+    /// Consecutive direct-upgrade attempt failures since the last successful
+    /// upgrade. Drives the 1.5×-per-failure backoff inside
+    /// [`super::punch::next_direct_upgrade_at`], capped at
+    /// `DIRECT_UPGRADE_MAX`. Reset to 0 when a punch dial completes (peer
+    /// is back on the direct path).
+    pub(super) direct_upgrade_failures: u32,
 }
 
 /// Shared node state (our keys + peers), guarded by one `Mutex`.
@@ -385,35 +398,39 @@ impl Node {
     }
 }
 
+/// Run a full hybrid handshake and return the established (initiator,
+/// responder) transports so transport-path behaviour can be unit tested.
+/// Hoisted out of `mod tests` so sibling submodules' tests (`punch::tests`)
+/// can build `Session::Established` peers without re-deriving the handshake.
+#[cfg(test)]
+pub(super) fn established_pair() -> (Transport, Transport) {
+    use gnet_noise::hybrid::HybridResponder;
+
+    let ini_priv = [11u8; 32];
+    let resp_priv = [22u8; 32];
+    let resp_pub = crate::keys::public_key(&resp_priv);
+    let (resp_ek, resp_dk) = crate::keys::derive_mlkem(&resp_priv);
+
+    let mut ini = HybridInitiator::new(
+        ini_priv,
+        resp_pub,
+        &resp_ek,
+        gnet_rand::random_32(),
+        gnet_rand::random_32(),
+    );
+    let msg1 = ini.write_message_1(&[]);
+    let mut resp = HybridResponder::new(resp_priv, &resp_ek, &resp_dk, gnet_rand::random_32());
+    resp.read_message_1(&msg1).expect("read msg1");
+    let (msg2, resp_t) = resp.write_message_2(&[]).expect("write msg2");
+    let (ini_t, _) = ini.read_message_2(&msg2).expect("read msg2");
+    (ini_t, resp_t)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::keys;
-    use gnet_noise::hybrid::HybridResponder;
     use std::net::Ipv4Addr;
-
-    /// Run a full hybrid handshake and return the established (initiator,
-    /// responder) transports so transport-path behaviour can be unit tested.
-    pub(super) fn established_pair() -> (Transport, Transport) {
-        let ini_priv = [11u8; 32];
-        let resp_priv = [22u8; 32];
-        let resp_pub = keys::public_key(&resp_priv);
-        let (resp_ek, resp_dk) = keys::derive_mlkem(&resp_priv);
-
-        let mut ini = HybridInitiator::new(
-            ini_priv,
-            resp_pub,
-            &resp_ek,
-            gnet_rand::random_32(),
-            gnet_rand::random_32(),
-        );
-        let msg1 = ini.write_message_1(&[]);
-        let mut resp = HybridResponder::new(resp_priv, &resp_ek, &resp_dk, gnet_rand::random_32());
-        resp.read_message_1(&msg1).expect("read msg1");
-        let (msg2, resp_t) = resp.write_message_2(&[]).expect("write msg2");
-        let (ini_t, _) = ini.read_message_2(&msg2).expect("read msg2");
-        (ini_t, resp_t)
-    }
 
     pub(super) fn test_peer(ek: &[u8], session: Session, endpoint: Option<SocketAddr>) -> Peer {
         Peer {
@@ -433,6 +450,8 @@ mod tests {
             relay: false,
             relay_endpoint: None,
             relay_eligible: false,
+            direct_upgrade_at: Instant::now() + super::super::punch::DIRECT_UPGRADE_BASE,
+            direct_upgrade_failures: 0,
         }
     }
 

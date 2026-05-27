@@ -5,12 +5,42 @@
 //! live in the [`gnet_punch`] crate; this module owns only the `Node` glue.
 
 use std::net::SocketAddr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gnet_punch::{PunchState, decode_connect, decode_sync, encode_connect, encode_sync};
 use gnet_wire::{self as wire, Kind};
 
-use super::types::Node;
+use super::types::{Node, Session};
+
+/// Initial backoff between direct-path upgrade attempts on a relayed peer.
+/// Tailscale's DERP→direct upgrade and libp2p's hole-punch retry both sit
+/// in the 30-second neighbourhood: short enough that a transient relay
+/// route is replaced quickly, long enough not to flood the rendezvous
+/// coordinator with retries.
+pub(super) const DIRECT_UPGRADE_BASE: Duration = Duration::from_secs(30);
+
+/// Maximum backoff after repeated upgrade failures; growth caps at five
+/// minutes so a peer behind an un-punchable symmetric NAT does not retry
+/// every few seconds forever, while a network change (laptop roaming)
+/// still recovers within bounded time without an operator nudge.
+pub(super) const DIRECT_UPGRADE_MAX: Duration = Duration::from_secs(300);
+
+/// Next direct-upgrade attempt deadline: `now + DIRECT_UPGRADE_BASE × 1.5^failures`
+/// clamped to `DIRECT_UPGRADE_MAX`. The 1.5× step is realised as `× 3 / 2`
+/// on `Duration` so the precision tracks `Instant`'s nanosecond units
+/// without floating-point. The exponent is bounded at 20 iterations
+/// purely to keep the helper bounded — the cap kicks in well before that.
+pub(super) fn next_direct_upgrade_at(failures: u32) -> Instant {
+    let mut delay = DIRECT_UPGRADE_BASE;
+    for _ in 0..failures.min(20) {
+        delay = (delay * 3) / 2;
+        if delay >= DIRECT_UPGRADE_MAX {
+            delay = DIRECT_UPGRADE_MAX;
+            break;
+        }
+    }
+    Instant::now() + delay
+}
 
 impl Node {
     /// Begin a synchronized punch to peer `i` as the origin: relay a
@@ -19,11 +49,11 @@ impl Node {
     /// the datagram to send with the lock released, or `None` if we have no
     /// reflexive endpoint yet or no coordinator to relay through.
     ///
-    /// Not on the primary path in v0.5 — pump always-relays NAT↔NAT instead
-    /// of attempting DCUtR. Kept in tree as the seed of the future "direct
-    /// upgrade" path (periodically retry DCUtR on relayed peers to downgrade
-    /// the relay hop when both sides' NAT topology allows it).
-    #[allow(dead_code)]
+    /// Driven by [`Self::poll_direct_upgrades`]: periodically retries DCUtR
+    /// on relayed peers so a relay hop drops back to a direct path when both
+    /// sides' NAT topology allows it. Pump's v0.5 path selection still keeps
+    /// the relay route as the always-works cold start; this is the warm-path
+    /// upgrade that runs on top.
     pub(super) fn start_punch(&mut self, i: usize) -> Option<(SocketAddr, Vec<u8>)> {
         let reflexive = self.reflexive?;
         let coordinator = self.coordinator_endpoint(i)?;
@@ -144,6 +174,49 @@ impl Node {
             .min()
     }
 
+    /// Maintenance sweep: for each peer routed via a relay whose session is
+    /// up and whose `direct_upgrade_at` deadline has arrived, kick off a
+    /// hole-punch upgrade to the direct path. The per-peer deadline is rolled
+    /// forward by the current failure backoff *before* the attempt fires so
+    /// the next try sits at the next backoff slot regardless of whether the
+    /// punch succeeds — failure bookkeeping (clearing relay on success,
+    /// incrementing `direct_upgrade_failures` on timeout) is owned by
+    /// `dial` / `expire_handshakes` on completion. Returns the connect
+    /// datagrams to send with the lock released.
+    ///
+    /// Skipped for any peer whose punch is already in flight (`PunchState`
+    /// other than `Idle`): the active punch carries the upgrade to
+    /// completion on its own. Skipped wholesale when we have no reflexive
+    /// endpoint yet — without one [`Self::start_punch`] cannot encode a
+    /// coherent connect, so there is nothing useful to attempt.
+    pub(super) fn poll_direct_upgrades(&mut self) -> Vec<(SocketAddr, Vec<u8>)> {
+        if self.reflexive.is_none() {
+            return Vec::new();
+        }
+        let now = Instant::now();
+        let due: Vec<usize> = self
+            .peers
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| {
+                p.relay
+                    && matches!(p.session, Session::Established(_))
+                    && matches!(p.punch, PunchState::Idle)
+                    && p.direct_upgrade_at <= now
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let mut out = Vec::new();
+        for i in due {
+            let failures = self.peers[i].direct_upgrade_failures;
+            self.peers[i].direct_upgrade_at = next_direct_upgrade_at(failures);
+            if let Some(send) = self.start_punch(i) {
+                out.push(send);
+            }
+        }
+        out
+    }
+
     /// Dial a peer once rendezvous has aligned the timing: point the peer at
     /// `endpoint`, clear its punch state, and start the normal handshake (which
     /// the glare logic + jittered retransmit carry to completion). Marks the
@@ -171,10 +244,11 @@ impl Node {
 
 #[cfg(test)]
 mod tests {
-    use super::super::types::{Peer, Session};
+    use super::super::types::{Peer, Session, established_pair};
     use super::*;
     use crate::keys;
     use std::net::{IpAddr, Ipv4Addr};
+    use std::time::Duration;
 
     /// Build a node from our private key with the given peers and reflexive.
     fn node(my_priv: [u8; 32], peers: Vec<Peer>, reflexive: Option<SocketAddr>) -> Node {
@@ -214,6 +288,8 @@ mod tests {
             relay: false,
             relay_endpoint: None,
             relay_eligible: false,
+            direct_upgrade_at: Instant::now() + DIRECT_UPGRADE_BASE,
+            direct_upgrade_failures: 0,
         }
     }
 
@@ -404,5 +480,202 @@ mod tests {
         assert_eq!(dials[0].1[0], Kind::HandshakeInit as u8);
         assert!(matches!(o.peers[0].session, Session::Initiating { .. }));
         assert!(matches!(o.peers[0].punch, PunchState::Idle));
+    }
+
+    /// Build a `(Established + relay)` target peer plus a directly-reachable
+    /// coordinator. Callers set `direct_upgrade_at` / `punch` directly on
+    /// `peers[0]` for the specific scenario under test.
+    fn upgrade_fixture(
+        target_pub: [u8; 32],
+        target_ek: Vec<u8>,
+        coord_pub: [u8; 32],
+        coord_ek: Vec<u8>,
+        coord_ep: SocketAddr,
+        my_refl: Option<SocketAddr>,
+    ) -> Node {
+        let (ini_t, _resp_t) = established_pair();
+        let mut target = peer(target_pub, target_ek, None);
+        target.session = Session::Established(ini_t);
+        target.relay = true;
+        target.relay_endpoint = Some(coord_ep);
+        let coord = peer(coord_pub, coord_ek, Some(coord_ep));
+        node([1u8; 32], vec![target, coord], my_refl)
+    }
+
+    #[test]
+    fn poll_direct_upgrades_fires_when_relayed_session_is_due() {
+        let (target_pub, target_ek) = identity(6);
+        let (coord_pub, coord_ek) = identity(5);
+        let coord_ep: SocketAddr = "203.0.113.9:7777".parse().unwrap();
+        let my_refl: SocketAddr = "203.0.113.1:40000".parse().unwrap();
+
+        let mut n = upgrade_fixture(
+            target_pub,
+            target_ek,
+            coord_pub,
+            coord_ek,
+            coord_ep,
+            Some(my_refl),
+        );
+        n.peers[0].direct_upgrade_at = Instant::now() - Duration::from_secs(1);
+
+        let before = Instant::now();
+        let sends = n.poll_direct_upgrades();
+        assert_eq!(sends.len(), 1, "one connect emitted for the due upgrade");
+        assert_eq!(sends[0].0, coord_ep, "connect relayed via the coordinator");
+        assert_eq!(sends[0].1[0], Kind::PunchConnect as u8);
+        assert!(
+            matches!(n.peers[0].punch, PunchState::Connecting { .. }),
+            "peer now has an in-flight punch"
+        );
+        // deadline rolled forward by backoff(failures=0) = DIRECT_UPGRADE_BASE
+        let advanced = n.peers[0].direct_upgrade_at;
+        assert!(
+            advanced > before + Duration::from_secs(20),
+            "deadline rolled forward by ~30s base backoff"
+        );
+        assert!(
+            advanced < before + Duration::from_secs(35),
+            "deadline did not overshoot the base backoff"
+        );
+    }
+
+    #[test]
+    fn poll_direct_upgrades_skips_when_deadline_not_due() {
+        let (target_pub, target_ek) = identity(6);
+        let (coord_pub, coord_ek) = identity(5);
+        let coord_ep: SocketAddr = "203.0.113.9:7777".parse().unwrap();
+        let my_refl: SocketAddr = "203.0.113.1:40000".parse().unwrap();
+
+        let mut n = upgrade_fixture(
+            target_pub,
+            target_ek,
+            coord_pub,
+            coord_ek,
+            coord_ep,
+            Some(my_refl),
+        );
+        n.peers[0].direct_upgrade_at = Instant::now() + Duration::from_secs(60);
+        assert!(
+            n.poll_direct_upgrades().is_empty(),
+            "no upgrade before the deadline"
+        );
+        assert!(
+            matches!(n.peers[0].punch, PunchState::Idle),
+            "peer remains idle"
+        );
+    }
+
+    #[test]
+    fn poll_direct_upgrades_skips_when_punch_already_in_flight() {
+        let (target_pub, target_ek) = identity(6);
+        let (coord_pub, coord_ek) = identity(5);
+        let coord_ep: SocketAddr = "203.0.113.9:7777".parse().unwrap();
+        let my_refl: SocketAddr = "203.0.113.1:40000".parse().unwrap();
+
+        let mut n = upgrade_fixture(
+            target_pub,
+            target_ek,
+            coord_pub,
+            coord_ek,
+            coord_ep,
+            Some(my_refl),
+        );
+        n.peers[0].direct_upgrade_at = Instant::now() - Duration::from_secs(1);
+        // mimic a punch that another path already started
+        n.peers[0].punch = PunchState::Connecting {
+            sent_at: Instant::now(),
+        };
+        let before = n.peers[0].direct_upgrade_at;
+        assert!(
+            n.poll_direct_upgrades().is_empty(),
+            "an in-flight punch is not re-triggered"
+        );
+        assert_eq!(
+            n.peers[0].direct_upgrade_at, before,
+            "deadline is not rolled forward when nothing new fired"
+        );
+    }
+
+    #[test]
+    fn poll_direct_upgrades_skips_without_reflexive() {
+        let (target_pub, target_ek) = identity(6);
+        let (coord_pub, coord_ek) = identity(5);
+        let coord_ep: SocketAddr = "203.0.113.9:7777".parse().unwrap();
+
+        let mut n = upgrade_fixture(
+            target_pub,
+            target_ek,
+            coord_pub,
+            coord_ek,
+            coord_ep,
+            None, // no reflexive endpoint discovered yet
+        );
+        n.peers[0].direct_upgrade_at = Instant::now() - Duration::from_secs(1);
+        assert!(
+            n.poll_direct_upgrades().is_empty(),
+            "no reflexive → cannot encode a connect, so no upgrade attempt"
+        );
+    }
+
+    #[test]
+    fn poll_direct_upgrades_ignores_non_relay_and_unestablished_peers() {
+        let (a_pub, a_ek) = identity(6);
+        let (b_pub, b_ek) = identity(7);
+        let (coord_pub, coord_ek) = identity(5);
+        let coord_ep: SocketAddr = "203.0.113.9:7777".parse().unwrap();
+        let my_refl: SocketAddr = "203.0.113.1:40000".parse().unwrap();
+
+        // peer A: relay=false (already direct) but session=Established + deadline due
+        // → must not be re-punched.
+        let (a_t, _) = established_pair();
+        let mut direct = peer(a_pub, a_ek, Some(coord_ep));
+        direct.session = Session::Established(a_t);
+        direct.direct_upgrade_at = Instant::now() - Duration::from_secs(1);
+
+        // peer B: relay=true, deadline due, but session=Idle. We wait for the
+        // session to come up over the relay before attempting an upgrade so we
+        // do not race a cold-start handshake.
+        let mut not_yet = peer(b_pub, b_ek, None);
+        not_yet.relay = true;
+        not_yet.relay_endpoint = Some(coord_ep);
+        not_yet.direct_upgrade_at = Instant::now() - Duration::from_secs(1);
+
+        let mut n = node(
+            [1u8; 32],
+            vec![
+                direct,
+                not_yet,
+                peer(coord_pub, coord_ek, Some(coord_ep)),
+            ],
+            Some(my_refl),
+        );
+        assert!(
+            n.poll_direct_upgrades().is_empty(),
+            "neither candidate qualifies for an upgrade"
+        );
+    }
+
+    #[test]
+    fn next_direct_upgrade_at_backs_off_then_caps() {
+        // f=0 → ~base, f=1 → ~base * 1.5, f=2 → ~base * 2.25, etc., until cap.
+        let before = Instant::now();
+        let at_0 = next_direct_upgrade_at(0);
+        let at_1 = next_direct_upgrade_at(1);
+        let at_2 = next_direct_upgrade_at(2);
+        let at_capped = next_direct_upgrade_at(50);
+
+        let d_0 = at_0.duration_since(before);
+        let d_1 = at_1.duration_since(before);
+        let d_2 = at_2.duration_since(before);
+        let d_capped = at_capped.duration_since(before);
+
+        assert!(d_0 >= DIRECT_UPGRADE_BASE);
+        assert!(d_0 < DIRECT_UPGRADE_BASE + Duration::from_millis(100));
+        assert!(d_1 >= DIRECT_UPGRADE_BASE * 3 / 2);
+        assert!(d_2 >= DIRECT_UPGRADE_BASE * 9 / 4);
+        // After many failures, deadline saturates at the cap.
+        assert!(d_capped >= DIRECT_UPGRADE_MAX);
+        assert!(d_capped < DIRECT_UPGRADE_MAX + Duration::from_millis(100));
     }
 }
