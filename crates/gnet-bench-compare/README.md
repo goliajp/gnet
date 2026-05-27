@@ -40,7 +40,7 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
 | ML-KEM encaps |  9.9 µs | 18.0 µs (RustCrypto) | **1.82× faster** ← T-2.5 + serialize |
 | ML-KEM decaps | 10.9 µs | 24.2 µs (RustCrypto) | **2.22× faster** ← T-2.5 + serialize |
 | X25519 basepoint derivation (`x25519_base`) | 5.4 µs | ~5 µs (dalek table) | **0.93× (slower 1.08×)** ← width-5 comb |
-| Noise_IK handshake (classic) | 212 µs | 217 µs (snow) | **1.02× faster** ← T-1.4 win |
+| Noise_IK handshake (classic) | 209 µs | 230 µs (snow) | **1.10× faster** ← + batch-invert |
 | Noise_IK + ML-KEM (hybrid) | ~280 µs | — (no peer) | reference only |
 | Hex encode 32 B | 32 ns | 58 ns (hex crate) | **1.82× faster** |
 | Hex decode 32 B | 22 ns | 28 ns (hex crate) | **1.27× faster** |
@@ -56,7 +56,7 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
 | ML-KEM keygen | 31.0 µs | 45.3 µs (RustCrypto) | **1.45× faster** ← T-2.5 + serialize |
 | ML-KEM encaps | 31.6 µs | 42.8 µs (RustCrypto) | **1.35× faster** ← T-2.5 + serialize |
 | ML-KEM decaps | 37.0 µs | 55.2 µs (RustCrypto) | **1.49× faster** ← T-2.5 + serialize |
-| Noise_IK handshake (classic) | 372 µs | 411 µs (snow) | **1.10× faster** ← T-1.4 win |
+| Noise_IK handshake (classic) | 364 µs | 416 µs (snow) | **1.14× faster** ← + batch-invert |
 | Noise_IK + ML-KEM (hybrid) | ~480 µs | — | reference only |
 | Hex encode 32 B | 45 ns | 94 ns (hex crate) | **2.06× faster** |
 | Hex decode 32 B | 49 ns | 51 ns (hex crate) | **1.05× faster** |
@@ -91,14 +91,18 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
      number of syscalls, inflating gnet's apparent ratio by ~2×.
      Both sides now use a deterministic non-syscall `TestRng`, so the
      ratio reflects algorithmic cost only.
-- **Noise_IK handshake (classic)**: **1.02× faster** than `snow` on
-  Apple, **1.10× faster** on lx64 (was 1.24× / 1.14× slower at the
-  2026-05-27 baseline). Phase 1 allocation polish trimmed the
-  per-handshake overhead; T-1.4's Edwards basepoint comb cut
-  public-key derivation from ~20 µs (Montgomery ladder) to ~5.4 µs
-  on Apple / ~9.9 µs on lx64 (width-5 Edwards comb, T-1.4 + width-5
-  refinement), saving ≈ 65 µs over the four `public_of` calls in a
-  hybrid handshake.
+- **Noise_IK handshake (classic)**: **1.10× faster** than `snow` on
+  Apple, **1.14× faster** on lx64 (was 1.24× / 1.14× slower at the
+  2026-05-27 baseline). Three stones got us here:
+    1. Phase 1 allocation polish (allocation-free `Hasher` + HKDF,
+       single-Vec output) trimmed the per-handshake overhead.
+    2. T-1.4 + width-5 Edwards-basepoint comb cut public-key
+       derivation from ~20 µs (Montgomery ladder) to **~5.4 µs**
+       on Apple / **~9.9 µs** on lx64.
+    3. `x25519_base_pair` batch-inversion shares one Curve25519
+       field inversion between the static + ephemeral derivations
+       inside `Initiator::new` / `Responder::new`, saving another
+       ≈ 2 µs per side per handshake on Apple.
 
 **Where gnet is still marginally slower (1 category on Apple, near-parity):**
 - **X25519 basepoint derivation**: 1.08× slower than `x25519-dalek`'s
