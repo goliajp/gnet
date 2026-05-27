@@ -19,9 +19,11 @@ the yardstick we polish against and the basis for the regression gates in
 | ML-KEM-768 keygen (pre-T-2.5) | 15.9k ops/s · 62.9 µs | 47.4k ops/s · 21.1 µs | handshake |
 | ML-KEM-768 encaps (pre-T-2.5) | 20.2k ops/s · 49.5 µs | 48.9k ops/s · 20.5 µs | handshake |
 | ML-KEM-768 decaps (pre-T-2.5) | 14.6k ops/s · 68.5 µs | 35.3k ops/s · 28.3 µs | handshake |
-| **ML-KEM-768 keygen** (T-2.5) | (unchanged: NEON path stubs to scalar) | **64.7 µs · 15.5k ops/s** | handshake |
-| **ML-KEM-768 encaps** (T-2.5) | (unchanged) | **39.5 µs · 25.3k ops/s** | handshake |
-| **ML-KEM-768 decaps** (T-2.5) | (unchanged) | **22.7 µs · 44.0k ops/s** | handshake |
+| **ML-KEM-768 keygen** (T-2.5 + serialize) | **31.0 µs · 32.3k ops/s** | **11.7 µs · 85.5k ops/s** | handshake |
+| **ML-KEM-768 encaps** (T-2.5 + serialize) | **31.6 µs · 31.6k ops/s** | **9.9 µs · 101k ops/s** | handshake |
+| **ML-KEM-768 decaps** (T-2.5 + serialize) | **37.0 µs · 27.0k ops/s** | **10.9 µs · 91.7k ops/s** | handshake |
+| `byte_encode` d=12 (scalar fast path) | tbd | ~700 ns / 256-coeff poly | ek/dk serialize |
+| `byte_encode` d=10 (scalar fast path) | tbd | ~400 ns / 256-coeff poly | u ciphertext serialize |
 | Keccak-f[1600] scalar permutation | tbd | 185 ns/perm (M4 Pro) | SHA-3 / SHAKE base |
 | `sample_ntt` (scalar) | tbd | 643 ns/poly | ML-KEM matrix gen |
 | `sample_ntt_x4` (NEON 4-way) | (scalar) | 388 ns/poly (1.66× over 4× serial) | ML-KEM matrix gen |

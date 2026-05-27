@@ -21,6 +21,7 @@
 
 #![allow(clippy::cast_precision_loss)]
 
+use rand_core::RngCore;
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -168,19 +169,27 @@ fn aead_open_must_not_lose_to_rustcrypto() {
 
 #[test]
 fn mlkem_keygen_hardgate() {
-    let mut d = [0u8; 32];
-    let mut z = [0u8; 32];
-    gnet_rand::fill(&mut d);
-    gnet_rand::fill(&mut z);
+    // Pre-fill a pool of (d, z) seed pairs outside the timed loop so that
+    // each iteration just rotates an index — no in-loop `getrandom(2)`.
+    // macOS `getrandom` is ~22 µs/call and would otherwise dominate the
+    // measurement (a single keygen is ~20 µs in pure crypto).
+    let mut rng = TestRng::new();
+    const POOL: usize = 64;
+    let mut seeds = [[[0u8; 32]; 2]; POOL];
+    for slot in &mut seeds {
+        rng.fill_bytes(&mut slot[0]);
+        rng.fill_bytes(&mut slot[1]);
+    }
+    let mut idx = 0usize;
     let gnet_ns = measure(ITERS_MLKEM, || {
-        gnet_rand::fill(black_box(&mut d));
-        gnet_rand::fill(&mut z);
-        black_box(gnet_crypto::mlkem::keygen(&d, &z));
+        let (d, z) = (&seeds[idx % POOL][0], &seeds[idx % POOL][1]);
+        idx += 1;
+        black_box(gnet_crypto::mlkem::keygen(black_box(d), black_box(z)));
     });
 
     use ml_kem::KemCore;
     use ml_kem::MlKem768;
-    let mut rng = TestRng;
+    let mut rng = TestRng::new();
     let comp_ns = measure(ITERS_MLKEM, || {
         let (dk, ek) = MlKem768::generate(black_box(&mut rng));
         black_box((dk, ek));
@@ -188,37 +197,46 @@ fn mlkem_keygen_hardgate() {
 
     // 2026-05-27 history:
     //   Baseline 1.88 (Apple) / 1.67 (Linux) → T-2.4 in-place poly ops +
-    //   sha3 lane-aligned squeeze → ~1.70 (Apple) / 1.60 (Linux) → T-2.5
-    //   Keccak-x4 NEON (matrix gen 4-way SHAKE128) + NTT/invNTT/ntt_mul
-    //   NEON 8-way → ~1.54 (Apple median of 3). Linux unchanged
-    //   (NEON path stubs to 4 serial scalar calls on x86_64).
-    // Arch-cfg cap captures both: Apple 1.85 (5-run p95 ~1.75, median 1.55,
-    // outlier 2.00 in one run from rejection-sampling variance), x86_64
-    // 1.80 (≈ 1.60 × 1.12 margin). Further tightening on Apple wants either
-    // assembly-level NTT (Plantard reduction) or a SIMD-friendly Vec layout
-    // — both invasive.
-    let cap = if cfg!(target_arch = "aarch64") { 1.85 } else { 1.80 };
+    //   sha3 lane-aligned squeeze → T-2.5 Keccak-x4 NEON + NTT/invNTT/
+    //   ntt_mul NEON 8-way → byte_encode/decode fast paths for d ∈
+    //   {12, 10, 4, 1} (the old LSB-by-LSB loop was 5–8× slower than
+    //   needed) → 0.55 (Apple median of 5) / 0.69 (Linux). The bench
+    //   harness was also rewritten in the same commit to use a
+    //   deterministic non-syscall TestRng on both sides — the prior
+    //   harness mixed `gnet_rand::fill` (≈ 22 µs / call on macOS) into
+    //   the gnet loop while the competitor's internal RNG made fewer
+    //   syscalls, masking the true algorithmic ratio.
+    let cap = if cfg!(target_arch = "aarch64") { 0.70 } else { 0.85 };
     assert_ratio("ML-KEM keygen", gnet_ns, comp_ns, cap);
 }
 
 #[test]
 fn mlkem_encaps_hardgate() {
+    let mut bootstrap = TestRng::new();
     let mut d = [0u8; 32];
     let mut z = [0u8; 32];
-    gnet_rand::fill(&mut d);
-    gnet_rand::fill(&mut z);
+    bootstrap.fill_bytes(&mut d);
+    bootstrap.fill_bytes(&mut z);
     let (ek, _dk) = gnet_crypto::mlkem::keygen(&d, &z);
-    let mut m = [0u8; 32];
-    gnet_rand::fill(&mut m);
+
+    // Pool of randomness-injected `m` values, pre-filled outside the
+    // timed loop — same reasoning as mlkem_keygen_hardgate.
+    const POOL: usize = 64;
+    let mut ms = [[0u8; 32]; POOL];
+    for m in &mut ms {
+        bootstrap.fill_bytes(m);
+    }
+    let mut idx = 0usize;
     let gnet_ns = measure(ITERS_MLKEM, || {
-        gnet_rand::fill(black_box(&mut m));
-        black_box(gnet_crypto::mlkem::encaps(&ek, &m));
+        let m = &ms[idx % POOL];
+        idx += 1;
+        black_box(gnet_crypto::mlkem::encaps(black_box(&ek), black_box(m)));
     });
 
     use ml_kem::KemCore;
     use ml_kem::MlKem768;
     use ml_kem::kem::Encapsulate;
-    let mut rng = TestRng;
+    let mut rng = TestRng::new();
     let (_, comp_ek) = MlKem768::generate(&mut rng);
     let comp_ns = measure(ITERS_MLKEM, || {
         let (ct, ss) = black_box(&comp_ek)
@@ -228,23 +246,25 @@ fn mlkem_encaps_hardgate() {
     });
 
     // 2026-05-27 history:
-    //   Baseline 1.62 (Apple) / 1.46 (Linux) → T-2.4 → ~1.63 (Apple) /
-    //   1.35 (Linux) → T-2.5 Keccak-x4 + NTT SIMD → ~1.48 (Apple median).
-    //   Linux unchanged. Arch-cfg: Apple 1.65 (5-run p95 ~1.60, median 1.48),
-    //   x86_64 1.50 (≈ 1.35 × 1.11 margin).
-    let cap = if cfg!(target_arch = "aarch64") { 1.65 } else { 1.50 };
+    //   Baseline 1.62 (Apple) → T-2.4 → T-2.5 Keccak-x4 + NTT SIMD +
+    //   byte_encode/decode fast paths + fair RNG harness → 0.51 (Apple
+    //   median of 5) / 0.73 (Linux). Encaps's serialization step
+    //   (compress + byte_encode_d10 for u, byte_encode_d4 for v) was
+    //   the largest single beneficiary of the fast-path packers.
+    let cap = if cfg!(target_arch = "aarch64") { 0.65 } else { 0.85 };
     assert_ratio("ML-KEM encaps", gnet_ns, comp_ns, cap);
 }
 
 #[test]
 fn mlkem_decaps_hardgate() {
+    let mut bootstrap = TestRng::new();
     let mut d = [0u8; 32];
     let mut z = [0u8; 32];
-    gnet_rand::fill(&mut d);
-    gnet_rand::fill(&mut z);
+    bootstrap.fill_bytes(&mut d);
+    bootstrap.fill_bytes(&mut z);
     let (ek, dk) = gnet_crypto::mlkem::keygen(&d, &z);
     let mut m = [0u8; 32];
-    gnet_rand::fill(&mut m);
+    bootstrap.fill_bytes(&mut m);
     let (_ss, ct) = gnet_crypto::mlkem::encaps(&ek, &m);
     let gnet_ns = measure(ITERS_MLKEM, || {
         let ss = gnet_crypto::mlkem::decaps(black_box(&dk), black_box(&ct));
@@ -254,7 +274,7 @@ fn mlkem_decaps_hardgate() {
     use ml_kem::KemCore;
     use ml_kem::MlKem768;
     use ml_kem::kem::{Decapsulate, Encapsulate};
-    let mut rng = TestRng;
+    let mut rng = TestRng::new();
     let (comp_dk, comp_ek) = MlKem768::generate(&mut rng);
     let (comp_ct, _) = comp_ek.encapsulate(&mut rng).expect("encaps");
     let comp_ns = measure(ITERS_MLKEM, || {
@@ -265,11 +285,12 @@ fn mlkem_decaps_hardgate() {
     });
 
     // 2026-05-27 history:
-    //   Baseline 1.17 (Apple) / 1.31 (Linux) → T-2.4 → 1.03 / 1.13 →
-    //   T-2.5 Keccak-x4 + NTT SIMD → 0.88 (Apple median, well-winning) /
-    //   1.13 (Linux, unchanged). Apple cap ratchet 1.15 → 1.10 (5-run p95
-    //   ~1.01 with margin), x86_64 stays 1.20 (NEON path stubs to scalar).
-    let cap = if cfg!(target_arch = "aarch64") { 1.10 } else { 1.20 };
+    //   Baseline 1.17 (Apple) → T-2.4 → 1.03 → T-2.5 Keccak-x4 + NTT
+    //   SIMD → 0.88 → byte_encode/decode fast paths + fair RNG harness
+    //   → 0.45 (Apple median of 5) / 0.66 (Linux). decaps was already
+    //   winning before this commit; the serialize fast paths + harness
+    //   fix took it from "parity" to "gnet 2× faster".
+    let cap = if cfg!(target_arch = "aarch64") { 0.60 } else { 0.80 };
     assert_ratio("ML-KEM decaps", gnet_ns, comp_ns, cap);
 }
 
@@ -371,24 +392,63 @@ fn hex_decode_32_must_not_lose() {
     assert_ratio("Hex decode 32B", gnet_ns, comp_ns, 1.05);
 }
 
-// ───── rand_core 0.6 shim so ml_kem can use gnet_rand ─────────────────
+// ───── rand_core 0.6 shim for ml_kem ──────────────────────────────────
+//
+// A deterministic, syscall-free RNG so that ML-KEM benches measure
+// algorithmic cost rather than `getrandom(2)` overhead. macOS getrandom
+// is ~22 µs / call — large enough to swamp the actual keygen / encaps
+// work and produce misleading ratios (a one-call-vs-two-call asymmetry
+// between the bench loop and the competitor's internal RNG usage would
+// otherwise dominate the comparison).
+//
+// Seed bytes come from a single up-front `gnet_rand::fill` outside any
+// timed measurement; the in-loop `fill_bytes` is then just a counter-
+// driven Linear Congruential pull, ≪ 100 ns per call.
 
-struct TestRng;
+struct TestRng {
+    state: u64,
+}
+
+impl TestRng {
+    fn new() -> Self {
+        // One-off seed — outside any `measure(...)` loop.
+        let mut s = [0u8; 8];
+        gnet_rand::fill(&mut s);
+        TestRng {
+            state: u64::from_le_bytes(s).max(1),
+        }
+    }
+
+    #[inline(always)]
+    fn next_byte(&mut self) -> u8 {
+        // splitmix64 step — uniform, fast, syscall-free.
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        (z ^ (z >> 31)) as u8
+    }
+}
+
 impl rand_core::CryptoRng for TestRng {}
 impl rand_core::RngCore for TestRng {
     fn next_u32(&mut self) -> u32 {
-        gnet_rand::random_u32()
+        let mut b = [0u8; 4];
+        self.fill_bytes(&mut b);
+        u32::from_le_bytes(b)
     }
     fn next_u64(&mut self) -> u64 {
-        let lo = u64::from(gnet_rand::random_u32());
-        let hi = u64::from(gnet_rand::random_u32());
-        (hi << 32) | lo
+        let mut b = [0u8; 8];
+        self.fill_bytes(&mut b);
+        u64::from_le_bytes(b)
     }
     fn fill_bytes(&mut self, dest: &mut [u8]) {
-        gnet_rand::fill(dest);
+        for byte in dest {
+            *byte = self.next_byte();
+        }
     }
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
-        gnet_rand::fill(dest);
+        self.fill_bytes(dest);
         Ok(())
     }
 }
