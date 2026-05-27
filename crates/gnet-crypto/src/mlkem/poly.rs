@@ -9,7 +9,7 @@
 //! by tests and the historical API.
 
 use super::ntt;
-use super::sample::sample_ntt;
+use super::sample::{sample_ntt, sample_ntt_x4};
 
 /// Module rank for ML-KEM-768.
 pub const K: usize = 3;
@@ -77,20 +77,47 @@ pub fn dot_into(a: &PolyVec, b: &PolyVec, out: &mut Poly) {
 /// Generate the public matrix `Â` (NTT domain) from the 32-byte seed `rho`.
 /// `transposed` selects the `(i,j)` byte order: KeyGen uses `Â`, Encrypt uses
 /// `Â^T`, matching the FIPS 203 reference.
+///
+/// For `K = 3` this produces 9 independent `sample_ntt` invocations, batched
+/// as **2×4-way + 1 scalar** so the underlying NEON 4-way SHAKE128 handles
+/// 8 of the 9 cells in lockstep. On non-aarch64 hosts each 4-way call
+/// degrades to four serial scalar calls — same output, no SIMD win.
 pub fn gen_matrix(rho: &[u8; 32], transposed: bool) -> [PolyVec; K] {
-    let mut out: [PolyVec; K] = [[[0i16; 256]; K]; K];
-    for (i, row) in out.iter_mut().enumerate() {
-        for (j, cell) in row.iter_mut().enumerate() {
-            let mut seed = [0u8; 34];
-            seed[..32].copy_from_slice(rho);
+    // Build the 9 seeds first; cell order in the K×K matrix is row-major,
+    // so (i, j) = (0,0), (0,1), (0,2), (1,0), (1,1), (1,2), (2,0), (2,1), (2,2).
+    let mut seeds = [[0u8; 34]; K * K];
+    for i in 0..K {
+        for j in 0..K {
+            let s = &mut seeds[i * K + j];
+            s[..32].copy_from_slice(rho);
             if transposed {
-                seed[32] = i as u8;
-                seed[33] = j as u8;
+                s[32] = i as u8;
+                s[33] = j as u8;
             } else {
-                seed[32] = j as u8;
-                seed[33] = i as u8;
+                s[32] = j as u8;
+                s[33] = i as u8;
             }
-            *cell = sample_ntt(&seed);
+        }
+    }
+
+    let mut polys = [[0i16; 256]; K * K];
+
+    // Batch 1: cells 0..4 (matrix positions (0,0), (0,1), (0,2), (1,0)).
+    let b1 = sample_ntt_x4([&seeds[0], &seeds[1], &seeds[2], &seeds[3]]);
+    polys[0..4].copy_from_slice(&b1);
+
+    // Batch 2: cells 4..8 (matrix positions (1,1), (1,2), (2,0), (2,1)).
+    let b2 = sample_ntt_x4([&seeds[4], &seeds[5], &seeds[6], &seeds[7]]);
+    polys[4..8].copy_from_slice(&b2);
+
+    // Tail: cell 8 (matrix position (2,2)) — single scalar call.
+    polys[8] = sample_ntt(&seeds[8]);
+
+    // Repack flat poly array into the K×K matrix shape callers expect.
+    let mut out: [PolyVec; K] = [[[0i16; 256]; K]; K];
+    for i in 0..K {
+        for j in 0..K {
+            out[i][j] = polys[i * K + j];
         }
     }
     out

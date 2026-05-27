@@ -7,7 +7,7 @@
 //! handshake throughput and ships with a regression gate to keep it inside
 //! its measured envelope.
 
-use gnet_crypto::{aead, x25519};
+use gnet_crypto::{aead, sha3, x25519};
 use std::time::{Duration, Instant};
 
 #[test]
@@ -78,5 +78,50 @@ fn x25519_basepoint_derivation_within_budget() {
     assert!(
         per < budget,
         "x25519_base too slow: {per:?} (budget {budget:?}); see BUDGETS.md"
+    );
+}
+
+#[test]
+fn keccak_f_baseline_microbench() {
+    // shake128(b"", 168B) = 1 absorb-padded-block + 1 keccak_f + 1 squeeze-block
+    // (the squeeze of the first rate-block does not trigger an extra permutation).
+    // So this approximates 1 keccak_f per call, plus byte-shuffling overhead.
+    let mut out = [0u8; 168];
+
+    // Warm caches.
+    for _ in 0..2_000 {
+        sha3::shake128(b"", &mut out);
+    }
+
+    let iters = if cfg!(debug_assertions) {
+        20_000u32
+    } else {
+        200_000u32
+    };
+    let start = Instant::now();
+    for _ in 0..iters {
+        sha3::shake128(std::hint::black_box(b""), std::hint::black_box(&mut out));
+    }
+    let elapsed = start.elapsed();
+    let per_call_ns = elapsed.as_nanos() as u64 / iters as u64;
+
+    // Expected ballpark (release):
+    //   Apple Silicon (NEON, M1/M2): ~180 ns/call (~1 permutation)
+    //   lx64 x86_64 (AVX2 unused for scalar): ~280 ns/call
+    // Used as a soft ceiling reference for sha3/neon_x4 work — knowing
+    // single-permutation cost tells us how big the 4-way win can be.
+    eprintln!("shake128(empty, 168B): {per_call_ns} ns/call (~= 1 keccak_f)");
+
+    // Generous regression budget: 3× expected for slow CI.
+    let budget_ns = if cfg!(debug_assertions) {
+        30_000u64 // very loose for debug builds
+    } else if cfg!(target_arch = "aarch64") {
+        600u64
+    } else {
+        1000u64
+    };
+    assert!(
+        per_call_ns < budget_ns,
+        "keccak_f scalar baseline too slow: {per_call_ns} ns/call (budget {budget_ns} ns)"
     );
 }
