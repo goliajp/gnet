@@ -75,6 +75,13 @@ pub(super) fn handle_init(
         // let route_dg send the reply back through the relay (set reciprocally
         // by the RelayData dispatch before this re-dispatch).
         g.peers[i].endpoint = Some(from);
+        // A direct-path handshake completing means the direct-upgrade attempt
+        // (or the cold-start direct path) succeeded — drop the relay flag and
+        // reset the upgrade failure counter so a future re-trip restarts the
+        // backoff from the base interval rather than the cap.
+        g.peers[i].relay = false;
+        g.peers[i].relay_endpoint = None;
+        g.peers[i].direct_upgrade_failures = 0;
     }
     g.peers[i].punch_failures = 0; // handshake succeeded — clear punch-failure count
     let routed = route_dg(
@@ -90,7 +97,10 @@ pub(super) fn handle_init(
 }
 
 /// Complete an in-flight initiation with the responder's message 2.
-pub(super) fn complete_initiation(peer: &mut Peer, body: &[u8]) {
+/// `via_relay` mirrors `handle_init`: when the msg2 reached us through a relay
+/// envelope, the relay path is still load-bearing and any direct-upgrade
+/// state must stay intact; when it arrived direct, the relay flag is cleared.
+pub(super) fn complete_initiation(peer: &mut Peer, body: &[u8], via_relay: bool) {
     if !matches!(peer.session, Session::Initiating { .. }) {
         return;
     }
@@ -102,6 +112,13 @@ pub(super) fn complete_initiation(peer: &mut Peer, body: &[u8]) {
         peer.tx_index = peer_index;
         peer.session = Session::Established(transport);
         peer.punch_failures = 0; // handshake succeeded — clear punch-failure count
+        if !via_relay {
+            // mirror handle_init: the direct path is now live, so the relay
+            // hop is no longer needed and any pending upgrade backoff resets.
+            peer.relay = false;
+            peer.relay_endpoint = None;
+            peer.direct_upgrade_failures = 0;
+        }
     }
 }
 
@@ -110,7 +127,7 @@ mod tests {
     use super::*;
     use crate::MTU_BUF;
     use crate::keys;
-    use gnet_noise::hybrid::HybridInitiator;
+    use gnet_noise::hybrid::{HybridInitiator, HybridResponder};
     use gnet_punch::PunchState;
     use std::net::{IpAddr, Ipv4Addr};
     use std::time::{Duration, Instant};
@@ -253,7 +270,7 @@ mod tests {
         assert!(matches!(kind, Kind::HandshakeResp));
         {
             let mut g = win.lock().unwrap();
-            complete_initiation(&mut g.peers[0], &buf[wire::HEADER..n]);
+            complete_initiation(&mut g.peers[0], &buf[wire::HEADER..n], false);
         }
 
         // both ends established; the winner's initiator session and the loser's
@@ -278,5 +295,191 @@ mod tests {
             .recv_at(ctr, &[], &mut pkt, clen)
             .expect("loser decrypts the winner's transport packet");
         assert_eq!(&pkt[..got], plain);
+    }
+
+    /// Make `node`'s sole peer look like one currently routed via relay, so
+    /// the clear-relay assertions in the handshake tests have something to
+    /// clear: relay flag set, a relay endpoint pinned, and a non-zero
+    /// direct_upgrade_failures count we can watch for reset.
+    fn mark_peer_relayed(node: &Arc<Mutex<Node>>, relay_ep: SocketAddr, failures: u32) {
+        let mut g = node.lock().unwrap();
+        g.peers[0].relay = true;
+        g.peers[0].relay_endpoint = Some(relay_ep);
+        g.peers[0].direct_upgrade_failures = failures;
+    }
+
+    #[test]
+    fn handle_init_clears_relay_state_on_direct_path() {
+        // We are the responder; a peer currently routed via relay sends us a
+        // handshake init through the direct path (its punch succeeded). The
+        // direct-path init should swing the peer back to a direct route:
+        // relay flag cleared, relay endpoint cleared, upgrade failures reset.
+        let my_priv = [7u8; 32];
+        let peer_priv = [8u8; 32];
+        let my_pub = keys::public_key(&my_priv);
+        let peer_pub = keys::public_key(&peer_priv);
+        let (my_ek, _) = keys::derive_mlkem(&my_priv);
+        let (peer_ek, _) = keys::derive_mlkem(&peer_priv);
+
+        let node = node_with_peer(my_priv, peer_pub, peer_ek);
+        let relay_ep: SocketAddr = "203.0.113.9:7777".parse().unwrap();
+        mark_peer_relayed(&node, relay_ep, 3);
+
+        // peer initiates a direct handshake to us
+        let mut ini = HybridInitiator::new(
+            peer_priv,
+            my_pub,
+            &my_ek,
+            gnet_rand::random_32(),
+            gnet_rand::random_32(),
+        );
+        let msg1 = ini.write_message_1(&0xCAFE_BABE_u32.to_le_bytes());
+
+        let my_sock = UdpSocket::bind("127.0.0.1:0").expect("bind responder socket");
+        let peer_sock = UdpSocket::bind("127.0.0.1:0").expect("bind peer socket (drain msg2)");
+        let peer_addr = peer_sock.local_addr().unwrap();
+
+        handle_init(&node, &my_sock, &msg1, peer_addr, false /* direct */).unwrap();
+
+        let g = node.lock().unwrap();
+        assert!(
+            matches!(g.peers[0].session, Session::Established(_)),
+            "responder session established"
+        );
+        assert!(!g.peers[0].relay, "relay flag dropped");
+        assert!(g.peers[0].relay_endpoint.is_none(), "relay endpoint cleared");
+        assert_eq!(
+            g.peers[0].direct_upgrade_failures, 0,
+            "upgrade failure counter reset"
+        );
+        assert_eq!(
+            g.peers[0].endpoint,
+            Some(peer_addr),
+            "learned the peer's real endpoint",
+        );
+    }
+
+    #[test]
+    fn handle_init_preserves_relay_state_on_relayed_path() {
+        // Same setup, but the init reached us through a relay envelope.
+        // The relay route is still load-bearing — the upgrade has NOT
+        // succeeded, so the relay flag, relay endpoint, and upgrade failure
+        // counter must all stay intact.
+        let my_priv = [7u8; 32];
+        let peer_priv = [8u8; 32];
+        let my_pub = keys::public_key(&my_priv);
+        let peer_pub = keys::public_key(&peer_priv);
+        let (my_ek, _) = keys::derive_mlkem(&my_priv);
+        let (peer_ek, _) = keys::derive_mlkem(&peer_priv);
+
+        let node = node_with_peer(my_priv, peer_pub, peer_ek);
+        // bind the relay socket to localhost so the msg2 send_to that
+        // route_dg triggers actually reaches a listening port — using a
+        // docs-net address (203.0.113.x) would make send_to error out on
+        // hosts without a default route to that net.
+        let relay_sock = UdpSocket::bind("127.0.0.1:0").expect("bind relay socket");
+        let relay_ep = relay_sock.local_addr().unwrap();
+        mark_peer_relayed(&node, relay_ep, 3);
+
+        let mut ini = HybridInitiator::new(
+            peer_priv,
+            my_pub,
+            &my_ek,
+            gnet_rand::random_32(),
+            gnet_rand::random_32(),
+        );
+        let msg1 = ini.write_message_1(&0xCAFE_BABE_u32.to_le_bytes());
+
+        let my_sock = UdpSocket::bind("127.0.0.1:0").expect("bind responder socket");
+
+        handle_init(&node, &my_sock, &msg1, relay_ep, true /* via_relay */).unwrap();
+
+        let g = node.lock().unwrap();
+        assert!(matches!(g.peers[0].session, Session::Established(_)));
+        assert!(g.peers[0].relay, "relay flag preserved on relayed handshake");
+        assert_eq!(g.peers[0].relay_endpoint, Some(relay_ep));
+        assert_eq!(
+            g.peers[0].direct_upgrade_failures, 3,
+            "upgrade failure counter untouched"
+        );
+    }
+
+    #[test]
+    fn complete_initiation_clears_relay_state_on_direct_path() {
+        // We initiated through the relay path; the peer's msg2 reaches us
+        // back through the direct path (its hole-punch reply landed). The
+        // direct path is now alive — clear relay state and reset upgrade
+        // backoff so future trips start fresh.
+        let my_priv = [7u8; 32];
+        let peer_priv = [8u8; 32];
+        let peer_pub = keys::public_key(&peer_priv);
+        let (peer_ek, peer_dk) = keys::derive_mlkem(&peer_priv);
+
+        let node = node_with_peer(my_priv, peer_pub, peer_ek.clone());
+        let relay_ep: SocketAddr = "203.0.113.9:7777".parse().unwrap();
+        mark_peer_relayed(&node, relay_ep, 4);
+
+        // we initiate; capture msg1 the way the pump would
+        let msg1 = start_init(&node, my_priv, peer_pub, &peer_ek, 0xC0FF_EE00);
+        // peer responds — build msg2 with their state machine
+        let mut resp =
+            HybridResponder::new(peer_priv, &peer_ek, &peer_dk, gnet_rand::random_32());
+        resp.read_message_1(&msg1).expect("peer reads msg1");
+        let peer_rx = 0xDEAD_BEEF_u32;
+        let (msg2, _resp_t) = resp
+            .write_message_2(&peer_rx.to_le_bytes())
+            .expect("peer writes msg2");
+
+        {
+            let mut g = node.lock().unwrap();
+            complete_initiation(&mut g.peers[0], &msg2, false /* direct */);
+        }
+
+        let g = node.lock().unwrap();
+        assert!(matches!(g.peers[0].session, Session::Established(_)));
+        assert!(!g.peers[0].relay, "relay flag dropped");
+        assert!(g.peers[0].relay_endpoint.is_none(), "relay endpoint cleared");
+        assert_eq!(
+            g.peers[0].direct_upgrade_failures, 0,
+            "upgrade failure counter reset"
+        );
+        assert_eq!(g.peers[0].tx_index, peer_rx, "tx_index taken from msg2");
+    }
+
+    #[test]
+    fn complete_initiation_preserves_relay_state_on_relayed_path() {
+        // Same setup, but msg2 arrived through the relay envelope: the
+        // direct path is still not proven, so the relay state and the
+        // upgrade backoff must stay intact for the next scheduled attempt.
+        let my_priv = [7u8; 32];
+        let peer_priv = [8u8; 32];
+        let peer_pub = keys::public_key(&peer_priv);
+        let (peer_ek, peer_dk) = keys::derive_mlkem(&peer_priv);
+
+        let node = node_with_peer(my_priv, peer_pub, peer_ek.clone());
+        let relay_ep: SocketAddr = "203.0.113.9:7777".parse().unwrap();
+        mark_peer_relayed(&node, relay_ep, 4);
+
+        let msg1 = start_init(&node, my_priv, peer_pub, &peer_ek, 0xC0FF_EE00);
+        let mut resp =
+            HybridResponder::new(peer_priv, &peer_ek, &peer_dk, gnet_rand::random_32());
+        resp.read_message_1(&msg1).expect("peer reads msg1");
+        let (msg2, _resp_t) = resp
+            .write_message_2(&0u32.to_le_bytes())
+            .expect("peer writes msg2");
+
+        {
+            let mut g = node.lock().unwrap();
+            complete_initiation(&mut g.peers[0], &msg2, true /* via_relay */);
+        }
+
+        let g = node.lock().unwrap();
+        assert!(matches!(g.peers[0].session, Session::Established(_)));
+        assert!(g.peers[0].relay, "relay flag preserved");
+        assert_eq!(g.peers[0].relay_endpoint, Some(relay_ep));
+        assert_eq!(
+            g.peers[0].direct_upgrade_failures, 4,
+            "upgrade failure counter untouched"
+        );
     }
 }
