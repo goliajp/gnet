@@ -135,12 +135,17 @@ pub(super) struct Node {
     pub(super) probe_txid: u32,
     /// Whether the reflexive endpoint's IP matches one of our local interface
     /// IPs. `None` until reflexive is first learned and a local-IP scan runs.
-    /// `Some(false)` means we are behind a NAT that rewrote our source —
+    /// `Some(true)` means we are behind a NAT that rewrote our source —
     /// direct init to another NAT'd peer cold-starts unreliably, so pump
     /// prefers `start_punch` (DCUtR) for peers we have no relay path to yet.
-    /// `Some(true)` means our reflexive equals a local interface IP; we are
-    /// effectively public and direct init works.
+    /// `Some(false)` means our reflexive equals a local interface IP, OR an
+    /// operator pinned it via `behind_nat false` — we are effectively public
+    /// and direct init works.
     pub(super) self_is_nat: Option<bool>,
+    /// `true` when the operator pinned `behind_nat` in conf — `note_reflexive`
+    /// then leaves `self_is_nat` alone (do not let probe outputs override the
+    /// operator-known truth, e.g. AWS 1:1 NAT where the heuristic would lie).
+    pub(super) nat_override: bool,
 }
 
 impl Node {
@@ -176,7 +181,7 @@ impl Node {
         }
         let changed = self.reflexive != Some(observed);
         self.reflexive = Some(observed);
-        if changed {
+        if changed && !self.nat_override {
             let locals = crate::node::local_ips::list_local_ips();
             let public = locals.iter().any(|ip| ip == &observed.ip());
             self.self_is_nat = Some(!public);
@@ -426,6 +431,7 @@ mod tests {
             reflexive: None,
             probe_txid: 0,
             self_is_nat: None,
+            nat_override: false,
         }
     }
 
