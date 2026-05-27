@@ -4,11 +4,12 @@
 //! poly1305-donna) with no data-dependent branches or table lookups. The
 //! final conditional subtraction of `p = 2^130 - 5` is mask-selected.
 //!
-//! The field multiply ([`fmul5`]) and post-multiply reduction
-//! ([`reduce_products`]) are factored out so the portable scalar path and the
-//! x86_64 AVX2 path (see [`avx2`]) share one verified arithmetic core. AVX2
-//! evaluates four blocks per group in parallel via precomputed key powers
-//! `r .. r^4`; the tail and all other targets use the per-block path.
+//! The field multiply (`fmul5`) and post-multiply reduction
+//! (`reduce_products`) are factored out so the portable scalar path and the
+//! x86_64 AVX2 path (private `avx2` module) share one verified arithmetic
+//! core. AVX2 evaluates four blocks per group in parallel via precomputed
+//! key powers `r .. r^4`; the tail and all other targets use the per-block
+//! path.
 
 #[cfg(target_arch = "x86_64")]
 mod avx2;

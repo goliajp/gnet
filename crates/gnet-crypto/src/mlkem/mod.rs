@@ -1,11 +1,10 @@
 //! ML-KEM-768 (FIPS 203) — the post-quantum key-encapsulation mechanism for
-//! the gnet hybrid handshake. Built bottom-up on [`ntt`] (ring arithmetic),
-//! [`serialize`]/[`sample`], [`kpke`] (the IND-CPA scheme), and
-//! [`crate::sha3`].
+//! the gnet hybrid handshake. Built bottom-up on `ntt` (ring arithmetic),
+//! `serialize`/`sample`, `kpke` (the IND-CPA scheme), and [`crate::sha3`].
 //!
 //! Like the Noise handshake, the API is randomness-injected (the caller passes
 //! the 32-byte secrets `d`, `z`, `m`), keeping this crate free of an RNG
-//! dependency. The ring math is pinned by the schoolbook KAT in [`ntt`] and
+//! dependency. The ring math is pinned by the schoolbook KAT in `ntt` and
 //! the hashing by the FIPS 202 KATs in [`crate::sha3`]. The full KEM is
 //! validated against the official NIST FIPS 203 ACVP known-answer vectors
 //! (keyGen / encaps / decaps for ML-KEM-768) in `tests/mlkem_acvp.rs`, plus an

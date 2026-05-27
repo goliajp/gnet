@@ -1,8 +1,8 @@
 //! ChaCha20-Poly1305 AEAD — RFC 8439 §2.8.
 //!
-//! Builds on the KAT-verified [`chacha20`](crate::chacha20) and
-//! [`poly1305`](crate::poly1305) primitives. The authentication tag is
-//! compared in constant time on `open`.
+//! Builds on the KAT-verified [`chacha20`] and [`poly1305`] primitives,
+//! where the AEAD's authentication tag is compared in constant time on
+//! `open`.
 
 use crate::{chacha20, poly1305};
 

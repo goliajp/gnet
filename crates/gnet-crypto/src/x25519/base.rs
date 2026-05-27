@@ -36,7 +36,7 @@ pub fn x25519_base(scalar: &[u8; 32]) -> [u8; 32] {
     ed_to_mont_u(&p)
 }
 
-/// X25519 fixed-base for two scalars at once, sharing one [`finvert`]
+/// X25519 fixed-base for two scalars at once, sharing one `finvert`
 /// (Curve25519's most expensive field op) across both via Montgomery's
 /// batch-inversion trick.
 ///

@@ -2,8 +2,8 @@
 //!
 //! The scalar core is constant-time by construction (only add / xor / rotate
 //! on fixed-position words). On aarch64, [`apply_keystream`] processes the
-//! bulk four blocks at a time with NEON (see [`neon`]); the tail and all
-//! other targets use the scalar [`block`] function.
+//! bulk four blocks at a time with NEON (private `neon` module); the tail and
+//! all other targets use the scalar [`block`] function.
 
 #[cfg(target_arch = "x86_64")]
 mod avx2;

@@ -3,8 +3,7 @@
 //! BLAKE2s-256 is the underlying hash (32-byte output, 64-byte block). No
 //! standard RFC 5869 test vector exists for the BLAKE2s instantiation
 //! (the RFC uses SHA-2), so correctness here rests on the KAT-verified
-//! [`blake2s`](crate::blake2s) plus a structural HMAC test and HKDF
-//! property tests.
+//! [`blake2s`] plus a structural HMAC test and HKDF property tests.
 
 use crate::blake2s;
 

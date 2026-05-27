@@ -17,10 +17,9 @@
 //! unchanged message 2, primitive selection, RNG-free API) is anchored to
 //! peer-reviewed work in [`HYBRID.md`](../HYBRID.md) in this crate's root.
 //! At the time of writing there is no published cross-implementation test
-//! vector for Noise + ML-KEM; the
-//! [`frozen_hybrid_handshake_kat`](tests::frozen_hybrid_handshake_kat)
-//! test at the bottom of this file pins **our** wire stream against
-//! accidental drift between releases.
+//! vector for Noise + ML-KEM; the `frozen_hybrid_handshake_kat` test at
+//! the bottom of this file (under `#[cfg(test)]`) pins **our** wire stream
+//! against accidental drift between releases.
 
 use crate::handshake::Transport;
 use crate::symmetric_state::SymmetricState;
