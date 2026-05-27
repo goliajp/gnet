@@ -186,12 +186,19 @@ fn mlkem_keygen_hardgate() {
         black_box((dk, ek));
     });
 
-    // Baseline 2026-05-27 was 1.88 (Apple) / 1.67 (Linux). After Phase 2
-    // T-2.4 (in-place poly ops + single-alloc output Vec) + sha3 squeeze
-    // lane-aligned batching, median is ~1.85 on Apple (mostly bottlenecked
-    // by Keccak permutation in matrix gen). Cap 2.10 captures current state
-    // with noise margin; ratchet to 1.05 needs T-2.5 (SIMD NTT / Keccak-x4).
-    assert_ratio("ML-KEM keygen", gnet_ns, comp_ns, 2.10);
+    // 2026-05-27 history:
+    //   Baseline 1.88 (Apple) / 1.67 (Linux) → T-2.4 in-place poly ops +
+    //   sha3 lane-aligned squeeze → ~1.70 (Apple) / 1.60 (Linux) → T-2.5
+    //   Keccak-x4 NEON (matrix gen 4-way SHAKE128) + NTT/invNTT/ntt_mul
+    //   NEON 8-way → ~1.54 (Apple median of 3). Linux unchanged
+    //   (NEON path stubs to 4 serial scalar calls on x86_64).
+    // Arch-cfg cap captures both: Apple 1.85 (5-run p95 ~1.75, median 1.55,
+    // outlier 2.00 in one run from rejection-sampling variance), x86_64
+    // 1.80 (≈ 1.60 × 1.12 margin). Further tightening on Apple wants either
+    // assembly-level NTT (Plantard reduction) or a SIMD-friendly Vec layout
+    // — both invasive.
+    let cap = if cfg!(target_arch = "aarch64") { 1.85 } else { 1.80 };
+    assert_ratio("ML-KEM keygen", gnet_ns, comp_ns, cap);
 }
 
 #[test]
@@ -220,10 +227,13 @@ fn mlkem_encaps_hardgate() {
         black_box((ct, ss));
     });
 
-    // Baseline 2026-05-27 was 1.62 (Apple) / 1.46 (Linux). After Phase 2
-    // T-2.4 in-place ops + sha3 lane-aligned squeeze, median ~1.55 on
-    // Apple. Cap 1.75 captures current + noise margin.
-    assert_ratio("ML-KEM encaps", gnet_ns, comp_ns, 1.75);
+    // 2026-05-27 history:
+    //   Baseline 1.62 (Apple) / 1.46 (Linux) → T-2.4 → ~1.63 (Apple) /
+    //   1.35 (Linux) → T-2.5 Keccak-x4 + NTT SIMD → ~1.48 (Apple median).
+    //   Linux unchanged. Arch-cfg: Apple 1.65 (5-run p95 ~1.60, median 1.48),
+    //   x86_64 1.50 (≈ 1.35 × 1.11 margin).
+    let cap = if cfg!(target_arch = "aarch64") { 1.65 } else { 1.50 };
+    assert_ratio("ML-KEM encaps", gnet_ns, comp_ns, cap);
 }
 
 #[test]
@@ -254,13 +264,12 @@ fn mlkem_decaps_hardgate() {
         black_box(ss);
     });
 
-    // Baseline 2026-05-27 was 1.17 (Apple) / 1.31 (Linux). After Phase 2
-    // T-2.4, Apple median ~1.03 (parity). Linux floats ~1.14-1.16 on
-    // the same code path — same lane-aligned squeeze ratio doesn't
-    // collapse the gap on x86_64 the way it does on NEON. Per-arch cap
-    // so each gate stays tight: 1.15 on Apple (locks the win), 1.20 on
-    // x86_64 (captures Linux baseline + run-to-run noise).
-    let cap = if cfg!(target_arch = "aarch64") { 1.15 } else { 1.20 };
+    // 2026-05-27 history:
+    //   Baseline 1.17 (Apple) / 1.31 (Linux) → T-2.4 → 1.03 / 1.13 →
+    //   T-2.5 Keccak-x4 + NTT SIMD → 0.88 (Apple median, well-winning) /
+    //   1.13 (Linux, unchanged). Apple cap ratchet 1.15 → 1.10 (5-run p95
+    //   ~1.01 with margin), x86_64 stays 1.20 (NEON path stubs to scalar).
+    let cap = if cfg!(target_arch = "aarch64") { 1.10 } else { 1.20 };
     assert_ratio("ML-KEM decaps", gnet_ns, comp_ns, cap);
 }
 

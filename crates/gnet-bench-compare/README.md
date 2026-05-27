@@ -24,7 +24,7 @@ multiplier so you can read the table in seconds.
 | Noise_IK handshake | `gnet-noise::handshake` | `snow` (mcginty) |
 | Hex codec | `gnet-hex` | `hex` (rust-lang-deprecated, de-facto std) |
 
-## Baseline (refreshed 2026-05-27 after Phase 1 + Phase 2 + T-1.4)
+## Baseline (refreshed 2026-05-27 after Phase 1 + Phase 2 + T-1.4 + T-2.5)
 
 Run: `cargo bench -p gnet-bench-compare`. Each line prints `ns/op` and a
 relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
@@ -36,9 +36,9 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
 | X25519 (one ECDH) | 19.2 µs | 20.5 µs (dalek) | **1.07× faster** |
 | AEAD seal in-place 1400B | 1.49 µs | 2.30 µs (RustCrypto) | **1.54× faster** |
 | AEAD open in-place 1400B | 1.47 µs | 2.30 µs (RustCrypto) | **1.56× faster** |
-| ML-KEM keygen | 69.2 µs | 39.4 µs (RustCrypto) | 0.57× (slower 1.76×) |
-| ML-KEM encaps | 43.0 µs | 27.6 µs (RustCrypto) | 0.64× (slower 1.55×) |
-| ML-KEM decaps | 24.5 µs | 23.7 µs (RustCrypto) | **0.97× (parity)** ← Phase 2 win |
+| ML-KEM keygen | 64.7 µs | 39.0 µs (RustCrypto) | 0.65× (slower 1.66×) ← T-2.5 |
+| ML-KEM encaps | 39.5 µs | 27.2 µs (RustCrypto) | 0.69× (slower 1.45×) ← T-2.5 |
+| ML-KEM decaps | 22.7 µs | 24.4 µs (RustCrypto) | **1.07× faster** ← T-2.5 win |
 | X25519 basepoint derivation (`x25519_base`) | 6.3 µs | ~5 µs (dalek table) | **0.79× (slower 1.26×)** ← T-1.4 |
 | Noise_IK handshake (classic) | 212 µs | 217 µs (snow) | **1.02× faster** ← T-1.4 win |
 | Noise_IK + ML-KEM (hybrid) | ~280 µs | — (no peer) | reference only |
@@ -74,9 +74,9 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
   uses a tighter Poly1305 inner loop and avoids the trait-object
   indirection RustCrypto layers add.
 - **X25519**: 1.07×–1.19× faster than `x25519-dalek` on general ECDH.
-- **ML-KEM decaps**: **at parity** with RustCrypto's `ml-kem` (was
-  1.17× slower at baseline). The Phase 2 polish (in-place poly ops +
-  lane-aligned SHAKE squeeze) closed the gap.
+- **ML-KEM decaps**: **gnet faster** than RustCrypto's `ml-kem` (was
+  1.17× slower at baseline → 0.97× parity after Phase 2 polish →
+  1.07× faster after T-2.5 Keccak-x4 + NTT/invNTT/ntt_mul NEON SIMD).
 - **Noise_IK handshake (classic)**: **1.02× faster** than `snow` on
   Apple, **1.10× faster** on lx64 (was 1.24× / 1.14× slower at the
   2026-05-27 baseline). Phase 1 allocation polish trimmed the
@@ -87,10 +87,14 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
 
 **Where gnet is still slower (3 categories on Apple, all small/in-spec):**
 
-- **ML-KEM keygen / encaps**: 1.55×–1.76× slower than RustCrypto's
-  `ml-kem`. Remaining bottleneck is the Keccak-f1600 cost in matrix
-  generation (27 permutations per keygen); RustCrypto uses batched
-  Keccak-x4. See `TASKS.md` → T-2.5.
+- **ML-KEM keygen / encaps**: 1.45×–1.66× slower than RustCrypto's
+  `ml-kem` (down from 1.55×–1.76× pre-T-2.5). After T-2.5 the bulk of
+  remaining cost lives in code paths NEON can't easily SIMD: the inner
+  2 NTT/invNTT layers (`len` = 2, 4) where one int16x8_t spans 4 groups
+  with mixed zetas, and Vec heap allocation in `kpke::keygen` /
+  `kpke::encrypt`. Further progress wants either Plantard reduction in
+  assembly or a SIMD-friendly polynomial layout — both invasive. See
+  `TASKS.md` → T-2.5.
 - **X25519 basepoint derivation**: 1.26× slower than `x25519-dalek`'s
   `EdwardsBasepointTable` (6.3 µs vs ~5 µs). We use a width-4 comb
   with 60 KiB rodata; the remaining gap is in the constant-time
