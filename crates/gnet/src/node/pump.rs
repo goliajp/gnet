@@ -108,26 +108,42 @@ pub(super) fn uplink(
                         if g.peers[i].relay {
                             init_dg = g.initiate(i);
                         } else {
-                            let self_nat = matches!(g.self_is_nat, Some(true));
+                            // Conservative "always works first" v0.5 rule —
+                            // only use the direct path when BOTH sides are
+                            // confirmed reachable without coordinator help:
+                            //   - we are confirmed public (`self_is_nat ==
+                            //     Some(false)`, set by `note_reflexive` after
+                            //     a successful probe matched a local
+                            //     interface, OR by an operator's
+                            //     `behind_nat false` conf override), OR
+                            //   - peer is operator-marked `relay_eligible`
+                            //     (the conventional flag for always-on
+                            //     public hosts in our deployment).
+                            //
+                            // Any other case — including the daemon's
+                            // first 5s of uptime before a probe lands and
+                            // `self_is_nat == None` — falls into the relay
+                            // path. Direct can be retried as a background
+                            // upgrade in a follow-on (v0.6); ship reliable
+                            // first.
+                            let self_known_public = matches!(g.self_is_nat, Some(false));
                             let peer_known_public = g.peers[i].relay_eligible;
-                            if !self_nat || peer_known_public {
-                                // direct: at least one side is public-reachable
-                                if g.peers[i].endpoint.is_some() {
-                                    init_dg = g.initiate(i);
-                                }
+                            if (self_known_public || peer_known_public)
+                                && g.peers[i].endpoint.is_some()
+                            {
+                                init_dg = g.initiate(i);
                             } else if let Some(relay_ep) = g.coordinator_endpoint(i) {
-                                // both presumed NAT'd → route via relay now.
                                 g.peers[i].relay = true;
                                 g.peers[i].relay_endpoint = Some(relay_ep);
                                 eprintln!(
-                                    "peer {i} routed via relay {relay_ep} (nat→nat, immediate)"
+                                    "peer {i} routed via relay {relay_ep} (default-relay, self_pub={self_known_public}, peer_pub={peer_known_public})"
                                 );
                                 init_dg = g.initiate(i);
                             } else if g.peers[i].endpoint.is_some() {
-                                // last-resort best-effort direct
+                                // no relay candidate available (single-peer
+                                // bootstrap) — best-effort direct
                                 init_dg = g.initiate(i);
                             }
-                            // else: no path. retry next outbound.
                         }
                     }
                 }
