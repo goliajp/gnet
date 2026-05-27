@@ -14,7 +14,8 @@ the yardstick we polish against and the basis for the regression gates in
 | ChaCha20-Poly1305 seal (alloc) | 1669 MiB/s | 970 MiB/s | — |
 | AEAD seal_in_place 64K | 1722 MiB/s | 854 MiB/s | bulk |
 | **AEAD seal_in_place 1400B** | **1132 MiB/s · 9.2 Gbps · 1179 ns/pkt** | **913 MiB/s · 7.3 Gbps · 1462 ns/pkt** | **HOT (per packet)** |
-| X25519 scalarmult | 27.3k ops/s · 36.6 µs | 52.1k ops/s · 19.2 µs | handshake |
+| X25519 scalarmult (variable point) | 27.3k ops/s · 36.6 µs | 52.1k ops/s · 19.2 µs | handshake |
+| **X25519 basepoint derivation (comb)** | tbd | **158k ops/s · 6.3 µs** | handshake (×4 / hybrid) |
 | ML-KEM-768 keygen | 15.9k ops/s · 62.9 µs | 47.4k ops/s · 21.1 µs | handshake |
 | ML-KEM-768 encaps | 20.2k ops/s · 49.5 µs | 48.9k ops/s · 20.5 µs | handshake |
 | ML-KEM-768 decaps | 14.6k ops/s · 68.5 µs | 35.3k ops/s · 28.3 µs | handshake |
@@ -26,9 +27,11 @@ the yardstick we polish against and the basis for the regression gates in
   This is the path the regression gate guards.
 - **Handshake-only (per session):** X25519 (×2), ML-KEM-768 keygen/encaps/
   decaps, BLAKE2s, SHA3/SHAKE. Runs once at session setup — the full ML-KEM
-  trio is ~70 µs (Apple Silicon) / ~180 µs (lx64) — then never again. Not on
-  the latency-sensitive path, so deliberately **not** optimized further:
-  vectorizing the NTT could win 2–4× but buys nothing user-visible.
+  trio is ~70 µs (Apple Silicon) / ~180 µs (lx64) — then never again. Per
+  handshake we now also amortize public-key derivation via the Edwards comb
+  (`x25519_base`), which is invoked 4× per hybrid Noise_IK initiator
+  (static + ephemeral on each side) so the 3× speedup over the ladder
+  trims ≈ 50 µs of handshake latency.
 
 ## Regression gates
 
@@ -37,7 +40,8 @@ baseline — a generous budget that catches a ~6–7× regression while tolerati
 slow / contended CI. Runs in the normal `cargo test -p gnet-crypto`. The budget
 tracks the build mode (unoptimized `cargo test` runs the crypto ~60× slower
 than `--release`), so it is meaningful either way: 1000 µs/packet round-trip in
-debug, 20 µs in release.
+debug, 20 µs in release for the AEAD path. The `x25519_basepoint_derivation`
+gate covers public-key derivation at 7 µs/op release / 400 µs/op debug.
 
 Rule: never weaken a budget without re-measuring P95 and justifying it in the
 commit message.

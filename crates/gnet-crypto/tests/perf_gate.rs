@@ -1,8 +1,13 @@
 //! Data-plane hot-path performance gates. Deliberately generous: they catch
 //! order-of-magnitude regressions in the per-packet AEAD path without flaking
 //! on slow or contended CI. Measured baselines live in BUDGETS.md.
+//!
+//! Also covers the per-handshake `x25519_base` (fixed-base public-key
+//! derivation): the Edwards comb path replaces the Montgomery ladder for
+//! handshake throughput and ships with a regression gate to keep it inside
+//! its measured envelope.
 
-use gnet_crypto::aead;
+use gnet_crypto::{aead, x25519};
 use std::time::{Duration, Instant};
 
 #[test]
@@ -38,5 +43,38 @@ fn aead_per_packet_roundtrip_within_budget() {
     assert!(
         per < budget,
         "AEAD per-packet roundtrip too slow: {per:?} (budget {budget:?}); see BUDGETS.md"
+    );
+}
+
+#[test]
+fn x25519_basepoint_derivation_within_budget() {
+    let scalar = [0x77u8; 32];
+
+    // Warm caches / branch predictors before timing.
+    for _ in 0..200 {
+        let _ = x25519::x25519_base(&scalar);
+    }
+
+    let iters = 2_000u32;
+    let start = Instant::now();
+    for _ in 0..iters {
+        let pk = x25519::x25519_base(std::hint::black_box(&scalar));
+        let _ = std::hint::black_box(pk);
+    }
+    let per = start.elapsed() / iters;
+
+    // Release baseline target: ≤ 7 µs/op on Apple Silicon (NEON) — within
+    // ~1.5× of dalek's basepoint table (~5 µs). Debug runs ~50× slower for
+    // the same reasons as the AEAD gate; the budget tracks build mode.
+    // See BUDGETS.md "x25519_base" row for the calibrated baseline.
+    let budget = if cfg!(debug_assertions) {
+        Duration::from_micros(400)
+    } else {
+        Duration::from_micros(7)
+    };
+    eprintln!("x25519_base per call: {per:?} (budget {budget:?})");
+    assert!(
+        per < budget,
+        "x25519_base too slow: {per:?} (budget {budget:?}); see BUDGETS.md"
     );
 }

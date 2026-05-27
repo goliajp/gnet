@@ -19,13 +19,6 @@ use gnet_crypto::{mlkem, x25519};
 const PROTOCOL_NAME: &[u8] = b"Noise_pqIKhybrid_25519MLKEM768_ChaChaPoly_BLAKE2s";
 const TAG_LEN: usize = 16;
 
-/// Curve25519 base point (`u = 9`).
-const BASE_POINT: [u8; 32] = {
-    let mut b = [0u8; 32];
-    b[0] = 9;
-    b
-};
-
 #[inline]
 fn dh(secret: &[u8; 32], public: &[u8; 32]) -> [u8; 32] {
     x25519::x25519(secret, public)
@@ -33,7 +26,7 @@ fn dh(secret: &[u8; 32], public: &[u8; 32]) -> [u8; 32] {
 
 #[inline]
 fn public_of(secret: &[u8; 32]) -> [u8; 32] {
-    x25519::x25519(secret, &BASE_POINT)
+    x25519::x25519_base(secret)
 }
 
 /// The hybrid handshake initiator. Knows the responder's X25519 static key and

@@ -6,26 +6,19 @@
 
 use gnet_crypto::{mlkem, sha3, x25519};
 
-/// Curve25519 base point (`u = 9`).
-const BASE_POINT: [u8; 32] = {
-    let mut b = [0u8; 32];
-    b[0] = 9;
-    b
-};
-
 /// Domain separator for ML-KEM seed derivation.
 const MLKEM_DERIVE_DOMAIN: &[u8] = b"gnet-mlkem768-v1";
 
 /// Generate a fresh static keypair `(private, public)` using OS entropy.
 pub fn generate_static() -> ([u8; 32], [u8; 32]) {
     let private = gnet_rand::random_32();
-    let public = x25519::x25519(&private, &BASE_POINT);
+    let public = x25519::x25519_base(&private);
     (private, public)
 }
 
 /// Derive the public key for a static private key.
 pub fn public_key(private: &[u8; 32]) -> [u8; 32] {
-    x25519::x25519(private, &BASE_POINT)
+    x25519::x25519_base(private)
 }
 
 /// Deterministically derive a node's ML-KEM-768 key pair `(ek, dk)` from its

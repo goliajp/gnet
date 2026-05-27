@@ -24,7 +24,7 @@ multiplier so you can read the table in seconds.
 | Noise_IK handshake | `gnet-noise::handshake` | `snow` (mcginty) |
 | Hex codec | `gnet-hex` | `hex` (rust-lang-deprecated, de-facto std) |
 
-## Baseline (refreshed 2026-05-27 after Phase 1 + Phase 2 polish)
+## Baseline (refreshed 2026-05-27 after Phase 1 + Phase 2 + T-1.4)
 
 Run: `cargo bench -p gnet-bench-compare`. Each line prints `ns/op` and a
 relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
@@ -38,9 +38,10 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
 | AEAD open in-place 1400B | 1.47 µs | 2.30 µs (RustCrypto) | **1.56× faster** |
 | ML-KEM keygen | 69.2 µs | 39.4 µs (RustCrypto) | 0.57× (slower 1.76×) |
 | ML-KEM encaps | 43.0 µs | 27.6 µs (RustCrypto) | 0.64× (slower 1.55×) |
-| ML-KEM decaps | 24.7 µs | 23.9 µs (RustCrypto) | **0.97× (parity)** ← Phase 2 win |
-| Noise_IK handshake (classic) | 264 µs | 213 µs (snow) | 0.81× (slower 1.24×) |
-| Noise_IK + ML-KEM (hybrid) | ~340 µs | — (no peer) | reference only |
+| ML-KEM decaps | 24.5 µs | 23.7 µs (RustCrypto) | **0.97× (parity)** ← Phase 2 win |
+| X25519 basepoint derivation (`x25519_base`) | 6.3 µs | ~5 µs (dalek table) | **0.79× (slower 1.26×)** ← T-1.4 |
+| Noise_IK handshake (classic) | 212 µs | 217 µs (snow) | **1.02× faster** ← T-1.4 win |
+| Noise_IK + ML-KEM (hybrid) | ~280 µs | — (no peer) | reference only |
 | Hex encode 32 B | 32 ns | 58 ns (hex crate) | **1.82× faster** |
 | Hex decode 32 B | 22 ns | 28 ns (hex crate) | **1.27× faster** |
 
@@ -63,7 +64,7 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
 
 ## Read this table in 30 seconds
 
-**Where gnet beats or matches the Rust SOTA (6 categories on Apple):**
+**Where gnet beats or matches the Rust SOTA (7 categories on Apple):**
 
 - **Hex codec**: 1.27×–1.82× faster than the `hex` crate. The `hex`
   crate has a generic API surface (multiple decode targets, error
@@ -77,19 +78,23 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
 - **ML-KEM decaps**: **at parity** with RustCrypto's `ml-kem` (was
   1.17× slower at baseline). The Phase 2 polish (in-place poly ops +
   lane-aligned SHAKE squeeze) closed the gap.
+- **Noise_IK handshake (classic)**: **1.02× faster** than `snow` (was
+  1.24× slower at the 2026-05-27 baseline). Phase 1 allocation polish
+  trimmed the per-handshake overhead; T-1.4's Edwards basepoint comb
+  cut public-key derivation from ~20 µs (Montgomery ladder) to ~6 µs,
+  saving ≈ 60 µs over the four `public_of` calls in a hybrid handshake.
 
-**Where gnet is still slower (2 categories on Apple, room for T-1.4 /
-T-2.5):**
+**Where gnet is still slower (3 categories on Apple, all small/in-spec):**
 
 - **ML-KEM keygen / encaps**: 1.55×–1.76× slower than RustCrypto's
   `ml-kem`. Remaining bottleneck is the Keccak-f1600 cost in matrix
   generation (27 permutations per keygen); RustCrypto uses batched
   Keccak-x4. See `TASKS.md` → T-2.5.
-- **Noise_IK handshake (classic)**: 1.24× slower than `snow`. Phase 1
-  Hasher / HKDF / handshake polish closed most of the allocation
-  overhead; the remaining gap is **X25519 basepoint multiplication**
-  (we use the general Montgomery ladder ~20µs; dalek uses a
-  precomputed-table comb ~5µs). See `TASKS.md` → T-1.4.
+- **X25519 basepoint derivation**: 1.26× slower than `x25519-dalek`'s
+  `EdwardsBasepointTable` (6.3 µs vs ~5 µs). We use a width-4 comb
+  with 60 KiB rodata; the remaining gap is in the constant-time
+  table-selection inner loop. Within the per-handshake budget
+  (≤ 7 µs gate); follow-up if it becomes the next bottleneck.
 
 ## How to read the numbers operationally
 

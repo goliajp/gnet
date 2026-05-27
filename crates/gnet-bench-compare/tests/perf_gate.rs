@@ -262,8 +262,8 @@ fn mlkem_decaps_hardgate() {
 
 // ───── Noise_IK classic handshake ─────────────────────────────────────
 // Baseline 2026-05-27: gnet 1.22× (Apple) / 1.14× (Linux) slower than snow.
-// The polish task removes per-handshake Vec allocations + inlines the
-// mix_* operations to match snow.
+// After Phase 1 allocation polish and T-1.4 (Edwards basepoint comb),
+// gnet is now ~0.95× snow on Apple. Cap ratchetted to 1.05.
 
 #[test]
 fn noise_ik_classic_hardgate() {
@@ -315,13 +315,13 @@ fn noise_ik_classic_hardgate() {
         black_box(n2);
     });
 
-    // Baseline 2026-05-27 was 1.22 (Apple) / 1.14 (Linux); after Phase 1
-    // allocation-free Hasher + HKDF-Expand precomputed pads + handshake
-    // pre-sized output Vec, median is ~1.25 with ±0.05 run-to-run noise.
-    // Cap 1.35 captures "no regression past today + 10% noise margin". The
-    // hard goal of < 1.10 needs X25519 basepoint precomputation (see
-    // TASKS.md Phase 1 follow-up); ratchet again then.
-    assert_ratio("Noise_IK classic handshake", gnet_ns, comp_ns, 1.35);
+    // Baseline 2026-05-27 was 1.22 (Apple) / 1.14 (Linux). After Phase 1
+    // (allocation-free Hasher + HKDF / single-Vec output) and T-1.4
+    // (X25519 Edwards-basepoint comb, ≈ 3× faster public-key derivation,
+    // applied 4× per handshake), gnet went from 1.24 → ~0.95 on Apple —
+    // a clear win over snow. Cap 1.05 to lock the win with run-to-run
+    // noise margin, matching the other winning categories.
+    assert_ratio("Noise_IK classic handshake", gnet_ns, comp_ns, 1.05);
 }
 
 // ───── Hex codec ──────────────────────────────────────────────────────
