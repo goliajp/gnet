@@ -223,10 +223,21 @@ impl Node {
     /// peer `punched` so its endpoint is known to be punch-derived: a run of
     /// give-ups on it accrues toward relay fallback. Returns the init datagram,
     /// or `None` if it cannot be built.
+    ///
+    /// The dial commits to the direct path: the relay flag is cleared so
+    /// `initiate`'s [`super::types::route_dg`] sends msg1 directly to the
+    /// punched endpoint — sending it through the relay envelope would defeat
+    /// DCUtR's simultaneous-open NAT-mapping property (the kernel needs an
+    /// outbound packet on the direct 4-tuple for the inbound reply to land).
+    /// If the resulting handshake fails, `expire_handshakes` walks the
+    /// regular PUNCH_ATTEMPTS path back to relay fallback.
     fn dial(&mut self, i: usize, endpoint: SocketAddr) -> Option<(SocketAddr, Vec<u8>)> {
         self.peers[i].endpoint = Some(endpoint);
         self.peers[i].punch = PunchState::Idle;
         self.peers[i].punched = true;
+        self.peers[i].relay = false;
+        self.peers[i].relay_endpoint = None;
+        self.peers[i].direct_upgrade_failures = 0;
         self.initiate(i)
     }
 
@@ -653,6 +664,105 @@ mod tests {
         assert!(
             n.poll_direct_upgrades().is_empty(),
             "neither candidate qualifies for an upgrade"
+        );
+    }
+
+    #[test]
+    fn relayed_peer_walks_through_full_upgrade_lifecycle() {
+        // Single-Node integration of the direct-upgrade pipeline on the
+        // origin side:
+        //   Established+relay → poll_direct_upgrades → Connecting
+        //   → handle_connect (target reply) → Syncing
+        //   → poll_punch_dials → Initiating + endpoint=peer reflexive
+        // (Handshake completion + relay clearing on the resulting msg2 is
+        // covered by the dedicated complete_initiation tests in
+        // node/handshake.rs — keeping it out of this fixture avoids
+        // reaching into the HybridInitiator that initiate() captured.)
+        let (target_pub, target_ek) = identity(6);
+        let (coord_pub, coord_ek) = identity(5);
+        let coord_ep: SocketAddr = "127.0.0.1:7777".parse().unwrap();
+        let my_refl: SocketAddr = "127.0.0.1:40000".parse().unwrap();
+        let target_refl: SocketAddr = "127.0.0.1:50000".parse().unwrap();
+
+        let (initial_t, _) = established_pair();
+        let mut target = peer(target_pub, target_ek, None);
+        target.session = Session::Established(initial_t);
+        target.relay = true;
+        target.relay_endpoint = Some(coord_ep);
+        target.direct_upgrade_failures = 2;
+        target.direct_upgrade_at = Instant::now() - Duration::from_secs(1);
+        let coord = peer(coord_pub, coord_ek, Some(coord_ep));
+        let mut n = node([1u8; 32], vec![target, coord], Some(my_refl));
+
+        // Stage A — the scheduler fires a connect through the coordinator.
+        let sends = n.poll_direct_upgrades();
+        assert_eq!(sends.len(), 1);
+        assert_eq!(sends[0].0, coord_ep, "connect relayed via coordinator");
+        assert_eq!(sends[0].1[0], Kind::PunchConnect as u8);
+        assert!(
+            matches!(n.peers[0].punch, PunchState::Connecting { .. }),
+            "stage A: peer entered Connecting"
+        );
+
+        // Stage B — the target replies with its reflexive endpoint, looped
+        // back to us via the coordinator. handle_connect on Connecting state
+        // measures the RTT and emits the sync to the coordinator. Backdate
+        // sent_at so the measured RTT is a positive value.
+        if let PunchState::Connecting { sent_at } = &mut n.peers[0].punch {
+            *sent_at = Instant::now() - Duration::from_millis(40);
+        }
+        let reply_out = n.handle_connect(
+            &encode_connect(&target_pub, &n.public, target_refl),
+            coord_ep,
+        );
+        assert_eq!(reply_out.len(), 1);
+        assert_eq!(reply_out[0].0, coord_ep, "sync relayed to coordinator");
+        assert_eq!(reply_out[0].1[0], Kind::PunchSync as u8);
+        assert!(
+            matches!(n.peers[0].punch, PunchState::Syncing { .. }),
+            "stage B: peer transitioned to Syncing"
+        );
+
+        // Stage C — force the dial deadline past; poll_punch_dials sends
+        // the handshake init at the peer's reflexive endpoint.
+        if let PunchState::Syncing { dial_at, .. } = &mut n.peers[0].punch {
+            *dial_at = Instant::now() - Duration::from_secs(1);
+        }
+        let dials = n.poll_punch_dials();
+        assert_eq!(dials.len(), 1);
+        assert_eq!(dials[0].0, target_refl, "init dialed at peer's reflexive");
+        assert_eq!(dials[0].1[0], Kind::HandshakeInit as u8);
+        assert!(
+            matches!(n.peers[0].session, Session::Initiating { .. }),
+            "stage C: handshake initiation in flight"
+        );
+        assert!(
+            matches!(n.peers[0].punch, PunchState::Idle),
+            "stage C: punch state cleared after dial",
+        );
+        assert_eq!(
+            n.peers[0].endpoint,
+            Some(target_refl),
+            "endpoint repointed at the peer's direct reflexive address"
+        );
+        // The dial is the moment we commit to the direct path: relay state
+        // drops here so the msg1 leaves via route_dg's direct branch (NOT
+        // wrapped in a relay envelope, which would defeat the whole point
+        // of opening a NAT mapping with that outbound packet). Tests in
+        // handshake.rs cover the *handshake-side* relay-clear via
+        // complete_initiation; this assertion is about the dial-side
+        // commitment.
+        assert!(
+            !n.peers[0].relay,
+            "stage C: dial committed to direct path — relay flag dropped"
+        );
+        assert!(
+            n.peers[0].relay_endpoint.is_none(),
+            "relay endpoint released alongside the flag"
+        );
+        assert_eq!(
+            n.peers[0].direct_upgrade_failures, 0,
+            "dial commits to direct path — upgrade backoff reset"
         );
     }
 

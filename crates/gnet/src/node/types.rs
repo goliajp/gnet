@@ -279,6 +279,17 @@ impl Node {
             let relay_ep = self.coordinator_endpoint(i);
             self.peers[i].relay = true;
             self.peers[i].relay_endpoint = relay_ep;
+            // A fresh trip back to the relay path is logically a failed
+            // direct-upgrade — whatever the failure mode (rendezvous never
+            // completed, dial issued but handshake never finished, etc.).
+            // Bump the upgrade failure count and roll the per-peer deadline
+            // forward so the next attempt sits further out; without this,
+            // direct_upgrade_at would still be in the past and the
+            // scheduler would re-fire on the very next maintenance tick.
+            self.peers[i].direct_upgrade_failures =
+                self.peers[i].direct_upgrade_failures.saturating_add(1);
+            self.peers[i].direct_upgrade_at =
+                super::punch::next_direct_upgrade_at(self.peers[i].direct_upgrade_failures);
             eprintln!(
                 "peer {i} tripped to relay fallback after {} punch failures",
                 self.peers[i].punch_failures

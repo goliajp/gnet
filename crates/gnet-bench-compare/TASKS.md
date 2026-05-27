@@ -218,13 +218,76 @@ to lock the win in.)
 - For categories that we're already winning (X25519, AEAD, hex):
   drop the cap to `1.05` to lock in the win against future regressions.
 
-### T-3.3 Add direct-init upgrade path for relayed peers (carry-over)
+### T-3.3 Direct-init upgrade path for relayed peers — **DONE (2026-05-27)**
 
-- This was noted in the v0.5 path-selection commit body — periodically
-  retry direct/punch on relayed peers to downgrade the relay hop when
-  topology allows. Belongs in this polish round because it directly
-  affects perceived data-plane latency.
-- File: `crates/gnet/src/node.rs` maintenance thread.
+Periodic warm-path upgrade so a peer routed via relay snaps back to a
+direct hop once both sides' NAT topology cooperates. Tailscale's
+DERP→direct upgrade and libp2p's hole-punch retry sit in the same
+neighbourhood; ours is the same shape, hand-rolled on top of the
+existing DCUtR rendezvous (`gnet_punch::PunchState`).
+
+**Scheduler** (`crates/gnet/src/node/punch.rs`):
+- `Node::poll_direct_upgrades` runs on the 1s maintenance tick. For
+  every peer routed via relay whose session is `Established`, whose
+  `punch` state is `Idle`, and whose per-peer
+  `direct_upgrade_at` deadline has come due, it kicks off
+  `start_punch(i)` and rolls the deadline forward by the current
+  failure backoff. Skipped wholesale when the node has no reflexive
+  endpoint — `start_punch` cannot encode a coherent connect without it.
+- Backoff is `30s × 1.5^failures` capped at 5 min, computed in
+  integer-Duration arithmetic (`× 3 / 2`) so the deadlines track
+  `Instant`'s nanosecond units without floats.
+
+**Success / failure bookkeeping**
+  (`crates/gnet/src/node/{handshake,types}.rs`):
+- A handshake whose msg1 (`handle_init`) or msg2
+  (`complete_initiation`) reaches us **directly** clears the peer's
+  `relay` flag, releases `relay_endpoint`, and resets
+  `direct_upgrade_failures` to zero — the direct path is alive, so
+  the relay route is no longer needed and any future re-trip starts
+  the backoff fresh from the base interval.
+- A handshake that travels through the relay envelope (via_relay=true)
+  preserves the relay state intact — the upgrade has not yet
+  succeeded.
+- A `PunchState::Connecting` that times out on a relayed peer (i.e. a
+  failed upgrade attempt) is detected by `expire_handshakes`, which
+  increments `direct_upgrade_failures` and rolls
+  `direct_upgrade_at` forward by the new backoff. The original
+  `punch_failures` counter stays separate from
+  `direct_upgrade_failures` — one drives "trip to relay after 3
+  direct failures", the other drives "retry direct after relay
+  backoff"; mixing them would couple the two control loops.
+
+**Mechanics**
+- `start_punch`, already implemented and `#[allow(dead_code)]`ed in
+  earlier commits, is now reachable through the scheduler. The
+  dead-code annotation drops.
+- A punch already in flight (`PunchState != Idle`) is skipped: the
+  active rendezvous state machine carries the upgrade itself.
+
+**Acceptance** (12 new tests across `node/{punch,handshake,types}.rs`):
+- `poll_direct_upgrades` fires on a due relayed+Established session
+- skips when deadline not due, when punch already in flight, without
+  a reflexive endpoint, when peer is not relay-routed, when session
+  is still Idle
+- `next_direct_upgrade_at` backoff curve + cap saturation
+- `handle_init` and `complete_initiation` each clear/preserve relay
+  state based on `via_relay` (4 tests, both sides × both paths)
+- `expire_handshakes` bumps `direct_upgrade_failures` + rolls
+  deadline forward on relay+Connecting timeout, leaves them alone
+  for non-relay peers
+- end-to-end origin-side lifecycle walkthrough: Established+relay →
+  scheduler fires → Connecting → target reply → Syncing →
+  scheduler dial → Initiating with endpoint repointed at peer's
+  reflexive address
+
+Behavioural improvement is in **perceived data-plane latency**: a
+session that cold-started via relay (one extra hop, typically tens of
+ms in our deployment) drops back to the direct path within ~30s of
+both NATs cooperating, without operator intervention. No perf-gate
+ratchet — this is a control-plane behaviour change, not a crypto
+hot-path one; the existing 9/9 perf-gate winning ratios are preserved
+unchanged.
 
 ---
 
