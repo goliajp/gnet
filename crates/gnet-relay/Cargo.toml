@@ -15,8 +15,9 @@ categories = ["network-programming", "no-std"]
 [dependencies]
 
 [dev-dependencies]
-# none — tests use gnet-rand (a sibling 0-dep crate) for randomized/property
+# tests use gnet-rand (a sibling 0-dep crate) for randomized/property
 # coverage, and benches use a hand-rolled std::time harness.
+# Plain path dep (no `version`) so the uploaded manifest strips it.
 gnet-rand = { path = "../gnet-rand" }
 
 [lints]

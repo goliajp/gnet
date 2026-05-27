@@ -14,10 +14,10 @@ publish = false
 [dependencies]
 
 [dev-dependencies]
-gnet-crypto = { path = "../gnet-crypto" }
-gnet-hex = { path = "../gnet-hex" }
-gnet-noise = { path = "../gnet-noise" }
-gnet-rand = { path = "../gnet-rand" }
+gnet-crypto.workspace = true
+gnet-hex.workspace = true
+gnet-noise.workspace = true
+gnet-rand.workspace = true
 # SOTA Rust competitors
 x25519-dalek.workspace = true
 chacha20poly1305.workspace = true

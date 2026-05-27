@@ -12,10 +12,11 @@ categories = ["cryptography", "network-programming"]
 
 # only in-house crate(s); no crates.io dependencies.
 [dependencies]
-gnet-crypto = { path = "../gnet-crypto" }
+gnet-crypto.workspace = true
 
 # dev-only: the frozen hybrid-handshake KAT uses gnet-hex to dump expected
 # transcript bytes in a human-readable form. Not exposed to consumers.
+# Plain path dep (no `version`) so the uploaded manifest strips it.
 [dev-dependencies]
 gnet-hex = { path = "../gnet-hex" }
 

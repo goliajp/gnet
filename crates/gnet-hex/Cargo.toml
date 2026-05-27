@@ -15,6 +15,9 @@ categories = ["encoding", "no-std"]
 
 [dev-dependencies]
 # randomized roundtrip coverage via the sibling 0-dep RNG (no proptest).
+# Plain path dep without `version` so `cargo publish` strips it from the
+# uploaded manifest — dev-deps are local-test-only and need not exist on
+# crates.io for the consumer build.
 gnet-rand = { path = "../gnet-rand" }
 
 [lints]
