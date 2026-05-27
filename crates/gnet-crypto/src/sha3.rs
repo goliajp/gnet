@@ -190,15 +190,51 @@ impl Xof {
         Self::new(136, input)
     }
 
-    /// Squeeze `out.len()` more bytes, continuing the stream.
-    pub fn squeeze(&mut self, out: &mut [u8]) {
-        for o in out.iter_mut() {
+    /// Squeeze `out.len()` more bytes, continuing the stream. Reads 8 bytes
+    /// at a time when the current position is lane-aligned, so a rate-block
+    /// squeeze costs ~21 u64 reads instead of 168 byte-level shifts.
+    pub fn squeeze(&mut self, mut out: &mut [u8]) {
+        while !out.is_empty() {
             if self.pos == self.rate {
                 keccak_f(&mut self.state);
                 self.pos = 0;
             }
-            *o = (self.state[self.pos / 8] >> (8 * (self.pos % 8))) as u8;
-            self.pos += 1;
+            let avail = self.rate - self.pos;
+            let take = out.len().min(avail);
+
+            // Fast path: when both pos and take are aligned, copy whole u64
+            // lanes via `to_le_bytes`. Otherwise fall back to byte-level
+            // extraction for the partial lanes at either end.
+            let mut written = 0;
+            // Misaligned head (pos not on a lane boundary).
+            let head = self.pos % 8;
+            if head != 0 {
+                let lane = self.state[self.pos / 8];
+                let take_head = (8 - head).min(take);
+                let bytes = lane.to_le_bytes();
+                out[..take_head].copy_from_slice(&bytes[head..head + take_head]);
+                written += take_head;
+            }
+            // Whole lanes.
+            while written + 8 <= take {
+                let lane_idx = (self.pos + written) / 8;
+                let bytes = self.state[lane_idx].to_le_bytes();
+                out[written..written + 8].copy_from_slice(&bytes);
+                written += 8;
+            }
+            // Misaligned tail.
+            if written < take {
+                let p = self.pos + written;
+                let lane = self.state[p / 8];
+                let lane_off = p % 8;
+                let remaining = take - written;
+                let bytes = lane.to_le_bytes();
+                out[written..written + remaining]
+                    .copy_from_slice(&bytes[lane_off..lane_off + remaining]);
+            }
+
+            self.pos += take;
+            out = &mut out[take..];
         }
     }
 }

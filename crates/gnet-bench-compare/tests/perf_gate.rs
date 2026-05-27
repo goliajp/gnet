@@ -185,8 +185,12 @@ fn mlkem_keygen_hardgate() {
         black_box((dk, ek));
     });
 
-    // Baseline ratio: 1.88 (Apple) / 1.67 (Linux). Cap at 2.5 for both.
-    assert_ratio("ML-KEM keygen", gnet_ns, comp_ns, 2.5);
+    // Baseline 2026-05-27 was 1.88 (Apple) / 1.67 (Linux). After Phase 2
+    // T-2.4 (in-place poly ops + single-alloc output Vec) + sha3 squeeze
+    // lane-aligned batching, median is ~1.85 on Apple (mostly bottlenecked
+    // by Keccak permutation in matrix gen). Cap 2.10 captures current state
+    // with noise margin; ratchet to 1.05 needs T-2.5 (SIMD NTT / Keccak-x4).
+    assert_ratio("ML-KEM keygen", gnet_ns, comp_ns, 2.10);
 }
 
 #[test]
@@ -215,8 +219,10 @@ fn mlkem_encaps_hardgate() {
         black_box((ct, ss));
     });
 
-    // Baseline: 1.62 (Apple) / 1.46 (Linux). Cap 2.2.
-    assert_ratio("ML-KEM encaps", gnet_ns, comp_ns, 2.2);
+    // Baseline 2026-05-27 was 1.62 (Apple) / 1.46 (Linux). After Phase 2
+    // T-2.4 in-place ops + sha3 lane-aligned squeeze, median ~1.55 on
+    // Apple. Cap 1.75 captures current + noise margin.
+    assert_ratio("ML-KEM encaps", gnet_ns, comp_ns, 1.75);
 }
 
 #[test]
@@ -247,8 +253,10 @@ fn mlkem_decaps_hardgate() {
         black_box(ss);
     });
 
-    // Baseline: 1.17 (Apple) / 1.31 (Linux). Cap 1.7.
-    assert_ratio("ML-KEM decaps", gnet_ns, comp_ns, 1.7);
+    // Baseline 2026-05-27 was 1.17 (Apple) / 1.31 (Linux). After Phase 2
+    // T-2.4 in-place ops + sha3 lane-aligned squeeze, median ~1.03 on
+    // Apple — essentially at parity. Cap 1.15 locks in the win.
+    assert_ratio("ML-KEM decaps", gnet_ns, comp_ns, 1.15);
 }
 
 // ───── Noise_IK classic handshake ─────────────────────────────────────

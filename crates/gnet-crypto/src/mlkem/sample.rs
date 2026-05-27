@@ -8,22 +8,35 @@ use crate::sha3::{self, Xof};
 
 /// `SampleNTT`: a uniform polynomial in the NTT domain from a 34-byte seed
 /// (`ρ ‖ i ‖ j`), via rejection sampling of 12-bit values from SHAKE-128.
+/// Reads SHAKE128 a full rate-block (168 bytes) at a time into a stack
+/// buffer; consumes 12-bit candidates from that buffer until the polynomial
+/// fills. This amortizes the per-call squeeze overhead across 56 candidates
+/// per Keccak permutation.
 pub fn sample_ntt(seed: &[u8]) -> [i16; 256] {
+    const RATE: usize = 168;
     let mut xof = Xof::shake128(seed);
     let mut a = [0i16; 256];
     let mut j = 0usize;
-    let mut buf = [0u8; 3];
+    let mut buf = [0u8; RATE];
     while j < 256 {
         xof.squeeze(&mut buf);
-        let d1 = (buf[0] as u16) | (((buf[1] & 0x0f) as u16) << 8);
-        let d2 = ((buf[1] >> 4) as u16) | ((buf[2] as u16) << 4);
-        if d1 < Q as u16 {
-            a[j] = d1 as i16;
-            j += 1;
-        }
-        if j < 256 && d2 < Q as u16 {
-            a[j] = d2 as i16;
-            j += 1;
+        // A 168-byte block carries 56 groups of 3 bytes = 112 candidates.
+        let mut off = 0;
+        while off + 3 <= RATE && j < 256 {
+            let b0 = buf[off] as u16;
+            let b1 = buf[off + 1] as u16;
+            let b2 = buf[off + 2] as u16;
+            let d1 = b0 | ((b1 & 0x0f) << 8);
+            let d2 = (b1 >> 4) | (b2 << 4);
+            if d1 < Q as u16 {
+                a[j] = d1 as i16;
+                j += 1;
+            }
+            if j < 256 && d2 < Q as u16 {
+                a[j] = d2 as i16;
+                j += 1;
+            }
+            off += 3;
         }
     }
     a

@@ -27,12 +27,14 @@ const ZETAS: [i16; 128] = [
 
 /// Montgomery reduction: for `|a| < q·2^15`, returns `a·2^-16 mod q` in
 /// `(-q, q)`.
+#[inline(always)]
 pub fn montgomery_reduce(a: i32) -> i16 {
     let t = (a as i16).wrapping_mul(QINV) as i32;
     ((a - t * Q as i32) >> 16) as i16
 }
 
 /// Barrett reduction: returns a representative of `a mod q` in `(-q/2, q/2]`.
+#[inline(always)]
 pub fn barrett_reduce(a: i16) -> i16 {
     const V: i32 = 20159; // ⌊2^26 / q⌉
     let t = ((V * a as i32 + (1 << 25)) >> 26) as i16;
@@ -40,6 +42,7 @@ pub fn barrett_reduce(a: i16) -> i16 {
 }
 
 /// Montgomery multiply: `a·b·2^-16 mod q`.
+#[inline(always)]
 pub fn fqmul(a: i16, b: i16) -> i16 {
     montgomery_reduce(a as i32 * b as i32)
 }
@@ -93,6 +96,7 @@ pub fn invntt(r: &mut [i16; 256]) {
 }
 
 /// Multiply two degree-1 polynomials in `Z_q[X]/(X^2 - zeta)` (one NTT pair).
+#[inline(always)]
 fn basemul(a: &[i16; 2], b: &[i16; 2], zeta: i16) -> [i16; 2] {
     [
         fqmul(fqmul(a[1], b[1]), zeta) + fqmul(a[0], b[0]),
@@ -100,9 +104,11 @@ fn basemul(a: &[i16; 2], b: &[i16; 2], zeta: i16) -> [i16; 2] {
     ]
 }
 
-/// Pointwise multiplication in the NTT domain: 128 degree-2 base multiplies.
-pub fn ntt_mul(a: &[i16; 256], b: &[i16; 256]) -> [i16; 256] {
-    let mut r = [0i16; 256];
+/// Pointwise multiplication in the NTT domain into a caller-provided
+/// polynomial: 128 degree-2 base multiplies. No allocation, no return-by-
+/// value copy of 512-byte arrays.
+#[inline]
+pub fn ntt_mul_into(a: &[i16; 256], b: &[i16; 256], r: &mut [i16; 256]) {
     for i in 0..64 {
         let z = ZETAS[64 + i];
         let lo = basemul(&[a[4 * i], a[4 * i + 1]], &[b[4 * i], b[4 * i + 1]], z);
@@ -116,8 +122,8 @@ pub fn ntt_mul(a: &[i16; 256], b: &[i16; 256]) -> [i16; 256] {
         r[4 * i + 2] = hi[0];
         r[4 * i + 3] = hi[1];
     }
-    r
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -165,7 +171,8 @@ mod tests {
             let mut nb = b;
             ntt(&mut na);
             ntt(&mut nb);
-            let mut prod = ntt_mul(&na, &nb);
+            let mut prod = [0i16; 256];
+            ntt_mul_into(&na, &nb, &mut prod);
             invntt(&mut prod);
 
             let want = schoolbook(&a, &b);
