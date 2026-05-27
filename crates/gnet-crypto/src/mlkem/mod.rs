@@ -42,10 +42,16 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 pub fn keygen(d: &[u8; 32], z: &[u8; 32]) -> (Vec<u8>, Vec<u8>) {
     let (ek, dk_pke) = kpke::keygen(d);
     let h = sha3_256(&ek);
+    // dk layout: dk_pke ‖ ek ‖ H(ek) ‖ z. dk_pke is already a Vec of
+    // length kpke::DK_LEN; reserving the exact tail size avoids the
+    // double-doubling realloc Vec::extend_from_slice would otherwise
+    // trigger when growing from 1152 → 2400 bytes.
     let mut dk = dk_pke;
+    dk.reserve_exact(DK_LEN - dk.len());
     dk.extend_from_slice(&ek);
     dk.extend_from_slice(&h);
     dk.extend_from_slice(z);
+    debug_assert_eq!(dk.len(), DK_LEN);
     (ek, dk)
 }
 
@@ -99,6 +105,153 @@ pub fn decaps(dk: &[u8], ct: &[u8]) -> [u8; SS_LEN] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "informational keygen profiling; opt in with `--ignored --nocapture --release`"]
+    fn keygen_breakdown_microbench() {
+        use std::time::Instant;
+        use crate::sha3::sha3_512;
+        use super::kpke;
+        use super::poly::{
+            K, PolyVec, add_in_place, dot_into, gen_matrix, polyvec_ntt_in_place, reduce_in_place,
+            to_mont_in_place,
+        };
+        use super::sample::sample_cbd_eta2;
+
+        let d = [0x11u8; 32];
+
+        // Prepare inputs that mirror kpke::keygen flow
+        let mut g_in = [0u8; 33];
+        g_in[..32].copy_from_slice(&d);
+        g_in[32] = K as u8;
+        let g = sha3_512(&g_in);
+        let rho: [u8; 32] = g[..32].try_into().unwrap();
+        let sigma: [u8; 32] = g[32..].try_into().unwrap();
+
+        // warm
+        for _ in 0..50 {
+            let _ = super::keygen(&d, &[0; 32]);
+        }
+
+        let iters = 2_000u32;
+
+        let mut t_sha3 = 0u128;
+        let mut t_matrix = 0u128;
+        let mut t_cbd = 0u128;
+        let mut t_ntt = 0u128;
+        let mut t_dot = 0u128;
+        let mut t_to_mont = 0u128;
+        let mut t_kpke = 0u128;
+        let mut t_mlkem = 0u128;
+        let mut t_dk_concat = 0u128;
+
+        for _ in 0..iters {
+            let s = Instant::now();
+            let _g = std::hint::black_box(sha3_512(std::hint::black_box(&g_in)));
+            t_sha3 += s.elapsed().as_nanos();
+
+            let s = Instant::now();
+            let a = std::hint::black_box(gen_matrix(&rho, false));
+            t_matrix += s.elapsed().as_nanos();
+
+            let s = Instant::now();
+            let mut sv: PolyVec = [[0i16; 256]; K];
+            let mut ev: PolyVec = [[0i16; 256]; K];
+            for i in 0..K {
+                sv[i] = sample_cbd_eta2(&sigma, i as u8);
+                ev[i] = sample_cbd_eta2(&sigma, (K + i) as u8);
+            }
+            t_cbd += s.elapsed().as_nanos();
+
+            let s = Instant::now();
+            polyvec_ntt_in_place(&mut sv);
+            polyvec_ntt_in_place(&mut ev);
+            t_ntt += s.elapsed().as_nanos();
+
+            let s = Instant::now();
+            let mut t: PolyVec = [[0i16; 256]; K];
+            for i in 0..K {
+                dot_into(&a[i], &sv, &mut t[i]);
+            }
+            t_dot += s.elapsed().as_nanos();
+
+            let s = Instant::now();
+            for i in 0..K {
+                to_mont_in_place(&mut t[i]);
+                add_in_place(&mut t[i], &ev[i]);
+                reduce_in_place(&mut t[i]);
+            }
+            t_to_mont += s.elapsed().as_nanos();
+
+            std::hint::black_box(&t);
+
+            let s = Instant::now();
+            let _kp = std::hint::black_box(kpke::keygen(&d));
+            t_kpke += s.elapsed().as_nanos();
+
+            let s = Instant::now();
+            let _full = std::hint::black_box(super::keygen(&d, &[0; 32]));
+            t_mlkem += s.elapsed().as_nanos();
+
+            // Just the dk concat at the end of mlkem::keygen
+            let (ek, dk_pke) = kpke::keygen(&d);
+            let h = sha3_256(&ek);
+            let s = Instant::now();
+            let mut dk = dk_pke;
+            dk.reserve_exact(super::DK_LEN - dk.len());
+            dk.extend_from_slice(&ek);
+            dk.extend_from_slice(&h);
+            dk.extend_from_slice(&[0u8; 32]);
+            t_dk_concat += s.elapsed().as_nanos();
+            std::hint::black_box(dk);
+        }
+
+        let n = u128::from(iters);
+        eprintln!("\nML-KEM keygen breakdown ({iters} iters, ns/op):");
+        eprintln!("  sha3_512(d||K)            : {} ns", t_sha3 / n);
+        eprintln!("  gen_matrix(rho)           : {} ns", t_matrix / n);
+        eprintln!("  6 × sample_cbd_eta2       : {} ns", t_cbd / n);
+        eprintln!("  polyvec_ntt_in_place × 2  : {} ns", t_ntt / n);
+        eprintln!("  dot_into × K              : {} ns", t_dot / n);
+        eprintln!("  to_mont+add+reduce × K    : {} ns", t_to_mont / n);
+        eprintln!("  --");
+        eprintln!("  kpke::keygen TOTAL        : {} ns", t_kpke / n);
+        eprintln!("  mlkem::keygen TOTAL       : {} ns", t_mlkem / n);
+        eprintln!("  dk concat overhead        : {} ns", t_dk_concat / n);
+
+        // Equivalent encaps + decaps profile to see whether those also
+        // benefit from any narrowly-targeted optimization.
+        let (ek, dk) = super::keygen(&d, &[0; 32]);
+        let m = [0x33u8; 32];
+
+        for _ in 0..50 {
+            let _ = super::encaps(&ek, &m);
+        }
+        let s = Instant::now();
+        for _ in 0..iters {
+            let _ = std::hint::black_box(super::encaps(
+                std::hint::black_box(&ek),
+                std::hint::black_box(&m),
+            ));
+        }
+        let t_encaps = s.elapsed().as_nanos();
+
+        let (_ss, ct) = super::encaps(&ek, &m);
+        for _ in 0..50 {
+            let _ = super::decaps(&dk, &ct);
+        }
+        let s = Instant::now();
+        for _ in 0..iters {
+            let _ = std::hint::black_box(super::decaps(
+                std::hint::black_box(&dk),
+                std::hint::black_box(&ct),
+            ));
+        }
+        let t_decaps = s.elapsed().as_nanos();
+
+        eprintln!("  mlkem::encaps TOTAL       : {} ns", t_encaps / n);
+        eprintln!("  mlkem::decaps TOTAL       : {} ns", t_decaps / n);
+    }
 
     #[test]
     fn sizes_are_mlkem768() {

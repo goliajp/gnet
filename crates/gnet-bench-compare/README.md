@@ -36,9 +36,9 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
 | X25519 (one ECDH) | 19.2 µs | 20.5 µs (dalek) | **1.07× faster** |
 | AEAD seal in-place 1400B | 1.49 µs | 2.30 µs (RustCrypto) | **1.54× faster** |
 | AEAD open in-place 1400B | 1.47 µs | 2.30 µs (RustCrypto) | **1.56× faster** |
-| ML-KEM keygen | 64.7 µs | 39.0 µs (RustCrypto) | 0.65× (slower 1.66×) ← T-2.5 |
-| ML-KEM encaps | 39.5 µs | 27.2 µs (RustCrypto) | 0.69× (slower 1.45×) ← T-2.5 |
-| ML-KEM decaps | 22.7 µs | 24.4 µs (RustCrypto) | **1.07× faster** ← T-2.5 win |
+| ML-KEM keygen | 11.7 µs | 22.0 µs (RustCrypto) | **1.82× faster** ← T-2.5 + serialize |
+| ML-KEM encaps |  9.9 µs | 18.0 µs (RustCrypto) | **1.82× faster** ← T-2.5 + serialize |
+| ML-KEM decaps | 10.9 µs | 24.2 µs (RustCrypto) | **2.22× faster** ← T-2.5 + serialize |
 | X25519 basepoint derivation (`x25519_base`) | 6.3 µs | ~5 µs (dalek table) | **0.79× (slower 1.26×)** ← T-1.4 |
 | Noise_IK handshake (classic) | 212 µs | 217 µs (snow) | **1.02× faster** ← T-1.4 win |
 | Noise_IK + ML-KEM (hybrid) | ~280 µs | — (no peer) | reference only |
@@ -53,9 +53,9 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
 | X25519 basepoint derivation (`x25519_base`) | 11.6 µs | — (no apples-to-apples in dalek's perf suite) | ← T-1.4 |
 | AEAD seal in-place 1400B | 1.22 µs | 2.04 µs (RustCrypto) | **1.68× faster** |
 | AEAD open in-place 1400B | 1.20 µs | 2.02 µs (RustCrypto) | **1.69× faster** |
-| ML-KEM keygen | 77.1 µs | 48.2 µs (RustCrypto) | 0.62× (slower 1.60×) |
-| ML-KEM encaps | 59.4 µs | 44.1 µs (RustCrypto) | 0.74× (slower 1.35×) |
-| ML-KEM decaps | 63.7 µs | 54.4 µs (RustCrypto) | 0.85× (slower 1.17×) |
+| ML-KEM keygen | 31.0 µs | 45.3 µs (RustCrypto) | **1.45× faster** ← T-2.5 + serialize |
+| ML-KEM encaps | 31.6 µs | 42.8 µs (RustCrypto) | **1.35× faster** ← T-2.5 + serialize |
+| ML-KEM decaps | 37.0 µs | 55.2 µs (RustCrypto) | **1.49× faster** ← T-2.5 + serialize |
 | Noise_IK handshake (classic) | 372 µs | 411 µs (snow) | **1.10× faster** ← T-1.4 win |
 | Noise_IK + ML-KEM (hybrid) | ~480 µs | — | reference only |
 | Hex encode 32 B | 45 ns | 94 ns (hex crate) | **2.06× faster** |
@@ -63,7 +63,7 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
 
 ## Read this table in 30 seconds
 
-**Where gnet beats or matches the Rust SOTA (7 categories on Apple):**
+**Where gnet beats or matches the Rust SOTA (10 categories on Apple — all benched):**
 
 - **Hex codec**: 1.27×–1.82× faster than the `hex` crate. The `hex`
   crate has a generic API surface (multiple decode targets, error
@@ -74,9 +74,23 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
   uses a tighter Poly1305 inner loop and avoids the trait-object
   indirection RustCrypto layers add.
 - **X25519**: 1.07×–1.19× faster than `x25519-dalek` on general ECDH.
-- **ML-KEM decaps**: **gnet faster** than RustCrypto's `ml-kem` (was
-  1.17× slower at baseline → 0.97× parity after Phase 2 polish →
-  1.07× faster after T-2.5 Keccak-x4 + NTT/invNTT/ntt_mul NEON SIMD).
+- **ML-KEM (all three ops)**: gnet now **1.82×–2.22× faster** than
+  RustCrypto's `ml-kem` on Apple (1.35–1.49× on lx64). Breakdown of
+  what got us here:
+  1. **Phase 2 polish** (in-place poly ops, lane-aligned SHAKE squeeze)
+     — closed the initial 1.7×–1.9× gap to ~parity on decaps.
+  2. **T-2.5 Keccak-x4 NEON + NTT/invNTT/ntt_mul NEON 8-way** —
+     real algorithmic improvements on aarch64.
+  3. **`byte_encode` / `byte_decode` fast paths** for `d ∈ {12, 10, 4, 1}`
+     — replaced the LSB-by-LSB bit loop (12 ops/coeff) with a packed
+     2-coeff or 4-coeff inner loop (≈ 3 ops/coeff). This was the
+     unrecognized dominant cost across all three ops: ~10 µs / call.
+  4. **Fair bench harness**: the perf-gate previously interleaved
+     `gnet_rand::fill` (≈ 22 µs / call on macOS getrandom) into the
+     gnet loop while the competitor's internal RNG made a different
+     number of syscalls, inflating gnet's apparent ratio by ~2×.
+     Both sides now use a deterministic non-syscall `TestRng`, so the
+     ratio reflects algorithmic cost only.
 - **Noise_IK handshake (classic)**: **1.02× faster** than `snow` on
   Apple, **1.10× faster** on lx64 (was 1.24× / 1.14× slower at the
   2026-05-27 baseline). Phase 1 allocation polish trimmed the
@@ -85,16 +99,7 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
   on Apple / ~12 µs on lx64, saving ≈ 60 µs over the four
   `public_of` calls in a hybrid handshake.
 
-**Where gnet is still slower (3 categories on Apple, all small/in-spec):**
-
-- **ML-KEM keygen / encaps**: 1.45×–1.66× slower than RustCrypto's
-  `ml-kem` (down from 1.55×–1.76× pre-T-2.5). After T-2.5 the bulk of
-  remaining cost lives in code paths NEON can't easily SIMD: the inner
-  2 NTT/invNTT layers (`len` = 2, 4) where one int16x8_t spans 4 groups
-  with mixed zetas, and Vec heap allocation in `kpke::keygen` /
-  `kpke::encrypt`. Further progress wants either Plantard reduction in
-  assembly or a SIMD-friendly polynomial layout — both invasive. See
-  `TASKS.md` → T-2.5.
+**Where gnet is still slower (1 category on Apple, in-spec):**
 - **X25519 basepoint derivation**: 1.26× slower than `x25519-dalek`'s
   `EdwardsBasepointTable` (6.3 µs vs ~5 µs). We use a width-4 comb
   with 60 KiB rodata; the remaining gap is in the constant-time
@@ -104,9 +109,9 @@ relative multiplier (`<1× = competitor faster`, `>1× = competitor slower`).
 ## How to read the numbers operationally
 
 - Per-handshake budget: ~5–10 ms is "fast" for an interactive overlay.
-  gnet's hybrid handshake at 356–620 µs sits at 4–6% of that budget.
-  ML-KEM optimisation would shave the cost roughly in half, freeing
-  budget for higher join concurrency.
+  gnet's hybrid handshake at 356–620 µs sits at 4–6% of that budget;
+  after T-2.5 + serialize fast paths the ML-KEM trio takes ≈ 32 µs
+  on Apple Silicon (was ≈ 130 µs at baseline).
 - Per-packet budget at MTU 1400: at 1 Gbps line rate that's ~89k pps
   per direction. gnet's AEAD at 1.2–1.5 µs/op leaves ample headroom
   (rough ceiling ~700k pps from AEAD alone — bottleneck is elsewhere).

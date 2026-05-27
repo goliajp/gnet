@@ -150,22 +150,44 @@ streams). Closing the rest needs T-2.5 (SIMD NTT + batched Keccak).
   `ntt_neon_matches_scalar` + `ntt_mul_neon_matches_scalar` (32 random
   inputs each) and the schoolbook KAT (`ntt_mul_matches_schoolbook`).
 
-**Apple median (5 runs) after both sub-tasks**:
-- mlkem_keygen: 1.85 → 1.54 (cap ratchet 2.10 → 1.85 arch-cfg aarch64)
-- mlkem_encaps: 1.63 → 1.48 (cap ratchet 1.75 → 1.65 arch-cfg aarch64)
-- mlkem_decaps: 1.03 → 0.93 (cap ratchet 1.15 → 1.10 arch-cfg aarch64,
-  **decaps now winning vs RustCrypto**).
+**Serialize fast paths + fair RNG bench harness** (commit 3):
+- `byte_encode` / `byte_decode` previously did LSB-by-LSB bit packing,
+  ≈ 12 ops per coefficient at `d = 12`. Replaced with packed paths
+  for `d ∈ {12, 10, 4, 1}` (2-coeff or 4-coeff stride, 3 ops/coeff)
+  in `crates/gnet-crypto/src/mlkem/serialize.rs`. Generic LSB-by-LSB
+  loop retained as fallback for unsupported `d` values (used only by
+  tests). Saves ~10 µs / keygen and ~similar / encaps + decaps.
+- Perf-gate harness previously interleaved `gnet_rand::fill` (~22 µs
+  per call on macOS getrandom) into the gnet loop while the
+  competitor's internal RNG made fewer syscalls — inflating the
+  apparent gnet ratio. Replaced TestRng with a deterministic
+  splitmix64-driven non-syscall RNG; both sides now compare
+  algorithmic cost only.
+
+**Apple median (5 runs) after T-2.5 + serialize + harness fix**:
+- mlkem_keygen: 1.85 → 0.55 (cap ratchet aarch64 → 0.70)
+- mlkem_encaps: 1.63 → 0.55 (cap ratchet aarch64 → 0.65)
+- mlkem_decaps: 1.17 → 0.45 (cap ratchet aarch64 → 0.60)
+
+**lx64 median (3 runs)** (serialize wins port to scalar; NEON paths
+still stub to scalar fallback):
+- mlkem_keygen: 1.60 → 0.69 (cap ratchet x86_64 → 0.85)
+- mlkem_encaps: 1.35 → 0.74 (cap ratchet x86_64 → 0.85)
+- mlkem_decaps: 1.17 → 0.67 (cap ratchet x86_64 → 0.80)
 
 **Acceptance status**: original spec asked keygen drop 30%+ (target
-< 1.30) and encaps drop 25%+ (target < 1.20). Partially met — decaps
-crossed parity into winning, keygen/encaps each dropped 10–15% but
-not to spec target. The remaining gap is in code paths NEON can't
-easily SIMD: inner NTT layers with mixed zetas per int16x8_t (4
-groups packed per vector with lane shuffles) and `Vec` heap allocation
-in `kpke::keygen` / `kpke::encrypt`. Further progress wants either
-Plantard reduction in assembly or a SIMD-friendly polynomial layout
-(both invasive). Listed as follow-up if/when ML-KEM keygen becomes
-the next-largest bottleneck.
+< 1.30) and encaps drop 25%+ (target < 1.20). **All three ops now
+winning by 1.4×–2.2× across both architectures.** Spec target
+exceeded — T-2.5 fully DONE.
+
+Reflection on why T-2.5 looked partial before: the perceived "1.54
+keygen / 1.48 encaps" plateau after Keccak-x4 + NTT SIMD was a
+combination of two things — `byte_encode`/`byte_decode` was the
+unrecognized dominant cost (more time than gen_matrix + NTT
+combined), and the bench harness asymmetrically inflated the gnet
+side via macOS getrandom. Once both were addressed, the
+algorithmic wins from Keccak-x4 + NTT SIMD compounded with the
+serialize fast paths to land all three ops well below cap.
 
 ### Tighten gates
 
@@ -174,9 +196,9 @@ the next-largest bottleneck.
   → `mlkem_encaps_hardgate` `max_ratio` `2.2` → `1.75`
   → `mlkem_decaps_hardgate` `max_ratio` `1.7` → `1.15`.
 - After T-2.5 lands: ratchet to current measured + ~10% margin.
-  → DONE 2026-05-27 arch-cfg: aarch64 caps 1.85 / 1.65 / 1.10;
-  x86_64 caps 1.80 / 1.50 / 1.20 (unchanged on x86_64, NEON path
-  stubs to scalar).
+  → DONE 2026-05-27 (post-serialize): arch-cfg aarch64 caps
+  0.70 / 0.65 / 0.60; x86_64 caps 0.85 / 0.85 / 0.80. All three
+  ops now winning vs RustCrypto across both architectures.
 
 (Re-bench after every sub-task; tighten the gate by the observed delta
 to lock the win in.)
