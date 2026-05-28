@@ -97,10 +97,18 @@ pub(super) fn handle_init(
 }
 
 /// Complete an in-flight initiation with the responder's message 2.
-/// `via_relay` mirrors `handle_init`: when the msg2 reached us through a relay
-/// envelope, the relay path is still load-bearing and any direct-upgrade
-/// state must stay intact; when it arrived direct, the relay flag is cleared.
-pub(super) fn complete_initiation(peer: &mut Peer, body: &[u8], via_relay: bool) {
+/// `from` is the wire source address of the msg2; `via_relay` mirrors
+/// `handle_init`: when the msg2 reached us through a relay envelope, the
+/// relay path is still load-bearing and any direct-upgrade state must stay
+/// intact; when it arrived direct, the relay flag is cleared.
+///
+/// On a direct msg2 from a `punched` peer whose `endpoint` does not match
+/// `from`, the endpoint is corrected to `from`. This is the symmetric-NAT
+/// port-prediction hit-detection step: `dial_fanout` set `endpoint` to the
+/// observed-port guess and emitted msg1 to every candidate; the candidate
+/// the peer's NAT actually allocated for us is the one whose msg2 arrives,
+/// and its real source port is exactly `from`.
+pub(super) fn complete_initiation(peer: &mut Peer, body: &[u8], from: SocketAddr, via_relay: bool) {
     if !matches!(peer.session, Session::Initiating { .. }) {
         return;
     }
@@ -118,6 +126,14 @@ pub(super) fn complete_initiation(peer: &mut Peer, body: &[u8], via_relay: bool)
             peer.relay = false;
             peer.relay_endpoint = None;
             peer.direct_upgrade_failures = 0;
+            // symmetric-NAT fan-out hit detection: if the punched peer's
+            // msg2 arrived from a candidate other than the observed-port
+            // guess we stored, correct the endpoint to the real one before
+            // any transport packets go out (they would otherwise re-target
+            // the wrong NAT mapping and never land).
+            if peer.punched && peer.endpoint != Some(from) {
+                peer.endpoint = Some(from);
+            }
         }
     }
 }
@@ -270,7 +286,7 @@ mod tests {
         assert!(matches!(kind, Kind::HandshakeResp));
         {
             let mut g = win.lock().unwrap();
-            complete_initiation(&mut g.peers[0], &buf[wire::HEADER..n], false);
+            complete_initiation(&mut g.peers[0], &buf[wire::HEADER..n], lose_addr, false);
         }
 
         // both ends established; the winner's initiator session and the loser's
@@ -430,9 +446,10 @@ mod tests {
             .write_message_2(&peer_rx.to_le_bytes())
             .expect("peer writes msg2");
 
+        let from: SocketAddr = "203.0.113.42:50000".parse().unwrap();
         {
             let mut g = node.lock().unwrap();
-            complete_initiation(&mut g.peers[0], &msg2, false /* direct */);
+            complete_initiation(&mut g.peers[0], &msg2, from, false /* direct */);
         }
 
         let g = node.lock().unwrap();
@@ -468,9 +485,10 @@ mod tests {
             .write_message_2(&0u32.to_le_bytes())
             .expect("peer writes msg2");
 
+        let from: SocketAddr = "203.0.113.42:50000".parse().unwrap();
         {
             let mut g = node.lock().unwrap();
-            complete_initiation(&mut g.peers[0], &msg2, true /* via_relay */);
+            complete_initiation(&mut g.peers[0], &msg2, from, true /* via_relay */);
         }
 
         let g = node.lock().unwrap();
@@ -480,6 +498,100 @@ mod tests {
         assert_eq!(
             g.peers[0].direct_upgrade_failures, 4,
             "upgrade failure counter untouched"
+        );
+    }
+
+    /// Symmetric-NAT port-prediction hit detection: `dial_fanout` set the
+    /// peer's endpoint to the observed-port guess and emitted msg1 to every
+    /// candidate; the candidate that the peer's NAT actually allocated for us
+    /// is the one whose msg2 arrives, with its real source port in `from`. On
+    /// a direct msg2 from a `punched` peer whose `endpoint` disagrees with
+    /// `from`, `complete_initiation` corrects the endpoint so subsequent
+    /// transport packets target the live NAT mapping rather than the
+    /// observed-port guess.
+    #[test]
+    fn complete_initiation_corrects_endpoint_for_punched_fan_out_hit() {
+        let my_priv = [7u8; 32];
+        let peer_priv = [8u8; 32];
+        let peer_pub = keys::public_key(&peer_priv);
+        let (peer_ek, peer_dk) = keys::derive_mlkem(&peer_priv);
+
+        let node = node_with_peer(my_priv, peer_pub, peer_ek.clone());
+
+        // mimic `dial_fanout`: set the observed-port guess as endpoint and
+        // mark the peer `punched`. The msg1 the pump would have emitted is
+        // captured here for the responder to consume.
+        let observed: SocketAddr = "203.0.113.4:60000".parse().unwrap();
+        {
+            let mut g = node.lock().unwrap();
+            g.peers[0].endpoint = Some(observed);
+            g.peers[0].punched = true;
+        }
+        let msg1 = start_init(&node, my_priv, peer_pub, &peer_ek, 0x1234_5678);
+
+        // peer's NAT actually allocated a *different* port — the candidate
+        // that landed is `actual_hit`, not `observed`.
+        let actual_hit: SocketAddr = "203.0.113.4:60017".parse().unwrap();
+        let mut resp =
+            HybridResponder::new(peer_priv, &peer_ek, &peer_dk, gnet_rand::random_32());
+        resp.read_message_1(&msg1).expect("peer reads msg1");
+        let (msg2, _resp_t) = resp
+            .write_message_2(&0u32.to_le_bytes())
+            .expect("peer writes msg2");
+
+        {
+            let mut g = node.lock().unwrap();
+            complete_initiation(&mut g.peers[0], &msg2, actual_hit, false /* direct */);
+        }
+
+        let g = node.lock().unwrap();
+        assert!(matches!(g.peers[0].session, Session::Established(_)));
+        assert_eq!(
+            g.peers[0].endpoint,
+            Some(actual_hit),
+            "endpoint corrected from observed-port guess to the hit candidate"
+        );
+    }
+
+    /// Mirror of the hit-detection test for the non-punched direct path:
+    /// `complete_initiation` must NOT mutate the endpoint when `peer.punched`
+    /// is false (regular direct init flow), because endpoint roaming is
+    /// reserved for the post-decrypt `roam` path that guards against forged
+    /// sources. A punched peer is the one exception, justified by the dial
+    /// commitment in `dial_fanout`.
+    #[test]
+    fn complete_initiation_leaves_endpoint_alone_when_not_punched() {
+        let my_priv = [7u8; 32];
+        let peer_priv = [8u8; 32];
+        let peer_pub = keys::public_key(&peer_priv);
+        let (peer_ek, peer_dk) = keys::derive_mlkem(&peer_priv);
+
+        let node = node_with_peer(my_priv, peer_pub, peer_ek.clone());
+        let configured: SocketAddr = "203.0.113.4:60000".parse().unwrap();
+        {
+            let mut g = node.lock().unwrap();
+            g.peers[0].endpoint = Some(configured);
+            // punched stays false — this is a regular direct init.
+        }
+        let msg1 = start_init(&node, my_priv, peer_pub, &peer_ek, 0x1234_5678);
+        let mut resp =
+            HybridResponder::new(peer_priv, &peer_ek, &peer_dk, gnet_rand::random_32());
+        resp.read_message_1(&msg1).expect("peer reads msg1");
+        let (msg2, _resp_t) = resp
+            .write_message_2(&0u32.to_le_bytes())
+            .expect("peer writes msg2");
+
+        let stray: SocketAddr = "198.51.100.99:33333".parse().unwrap();
+        {
+            let mut g = node.lock().unwrap();
+            complete_initiation(&mut g.peers[0], &msg2, stray, false);
+        }
+
+        let g = node.lock().unwrap();
+        assert_eq!(
+            g.peers[0].endpoint,
+            Some(configured),
+            "non-punched peers do not roam through complete_initiation"
         );
     }
 }

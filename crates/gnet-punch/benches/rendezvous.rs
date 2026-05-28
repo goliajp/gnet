@@ -42,10 +42,22 @@ fn main() {
     bench("decode_sync", iters, || {
         black_box(decode_sync(black_box(&sbody)));
     });
-    bench("on_reply (rtt measure)", iters, || {
+    // R=0: pure RTT measurement + Connecting → Syncing transition, no
+    // candidate enumeration. Tracks the legacy `on_reply` cost.
+    bench("on_reply (rtt measure, R=0)", iters, || {
         let mut st = PunchState::Connecting {
             sent_at: Instant::now(),
         };
-        black_box(st.on_reply(black_box(ep), Instant::now()));
+        black_box(st.on_reply(black_box(ep), Instant::now(), 0));
+    });
+    // R=32: production fan-out radius — also amortizes the
+    // `CandidateSet::iter().collect()` allocation of 1 + 2·32 = 65 entries.
+    // Higher iter count would distort because of the heap traffic, so the
+    // outer rate is honest if a bit slower than R=0.
+    bench("on_reply (R=32 fan-out)", iters, || {
+        let mut st = PunchState::Connecting {
+            sent_at: Instant::now(),
+        };
+        black_box(st.on_reply(black_box(ep), Instant::now(), 32));
     });
 }
