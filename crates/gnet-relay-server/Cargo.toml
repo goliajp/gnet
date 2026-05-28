@@ -1,0 +1,23 @@
+[package]
+name = "gnet-relay-server"
+version.workspace = true
+edition.workspace = true
+authors = ["GOLIA K.K."]
+license = "MIT OR Apache-2.0"
+description = "Standalone, zero-dependency relay daemon for the gnet overlay — terminates RelayData envelopes by destination pubkey and forwards opaque ciphertext to the last-known UDP endpoint of that peer. No coordinator state, no plaintext awareness."
+repository = "https://github.com/goliajp/portal"
+readme = "README.md"
+publish = false
+keywords = ["relay", "nat-traversal", "wireguard", "overlay"]
+categories = ["network-programming"]
+
+[[bin]]
+name = "gnet-relay-server"
+path = "src/main.rs"
+
+[dependencies]
+gnet-wire = { workspace = true }
+gnet-relay = { workspace = true }
+
+[lints]
+workspace = true
