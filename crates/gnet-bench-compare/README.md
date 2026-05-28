@@ -142,11 +142,57 @@ runs can vary 5–15%. Run several times and look at the median if you need a
 tight number; the 30-second take-away from this README is the order of
 magnitude and direction.
 
+## Cross-language reference
+
+Per-op timings against the most-common non-Rust implementations a
+GOLIA-network operator would otherwise reach for: **Go stdlib** (`crypto/ecdh`,
+`crypto/mlkem`, `crypto/sha3` + `golang.org/x/crypto`) and **libsodium**
+(`crypto_scalarmult_curve25519`, `crypto_aead_chacha20poly1305_ietf_*`,
+`sodium_bin2hex`, `crypto_generichash`). Same best-of-10 sampling protocol
+as the Rust gate, so the ratios cancel hardware noise.
+
+### Apple Silicon (M4 Pro, aarch64) — 2026-05-28
+
+| 类别 | gnet | RustCrypto | Go stdlib | libsodium |
+|---|---:|---:|---:|---:|
+| X25519 ECDH | **18.3 µs** | 20.7 µs | 23.6 µs | 20.0 µs |
+| AEAD seal 1400B | 1.49 µs | 2.27 µs | **1.28 µs** | 2.03 µs |
+| AEAD open 1400B | 1.49 µs | 2.26 µs | **1.31 µs** | 2.14 µs |
+| ML-KEM keygen | **9.85 µs** | 21.7 µs | 27.9 µs | — |
+| ML-KEM encaps | **9.79 µs** | 18.6 µs | 27.2 µs | — |
+| ML-KEM decaps | **10.9 µs** | 24.4 µs | 35.7 µs | — |
+| Hex encode 32B | 29.8 ns | 77.1 ns | 38.7 ns | **19.5 ns** |
+| Hex decode 32B | **21.8 ns** | 26.1 ns | 28.6 ns | 58.2 ns |
+| BLAKE2s-256 64B | (gnet only) | — | 122.6 ns | — (BLAKE2b 114 ns) |
+
+**Honest reading**
+
+- gnet wins **5 of 8** comparable categories on Apple Silicon.
+- gnet wins ML-KEM by ~2-3× against every alternative — the v0.8 AVX2/NEON
+  work compounded with `byte_encode` fast paths and the in-house
+  Keccak-x4 makes the gap structural, not transient.
+- gnet **loses ~16% on ChaCha20-Poly1305 AEAD vs Go stdlib**. Go ships
+  hand-written ARMv8 + AVX2 assembly inside `golang.org/x/crypto`; gnet
+  is Rust intrinsics → LLVM codegen, no inline asm. Closing this gap
+  with intrinsics alone has diminishing returns — see [ASM_NOTES.md]
+  (ASM_NOTES.md) for a cost study on dropping to inline assembly.
+- gnet **loses 53% on hex encode vs libsodium** (and 31% vs Go). libsodium's
+  `sodium_bin2hex` uses bytewise SWAR + table lookup; the gain here is
+  small absolute (10 ns) and a cold path (per-config-line, not per-packet),
+  so not a polish priority.
+
+Reproduce:
+
+```sh
+# Go (requires Go 1.24+ for crypto/mlkem)
+cd crates/gnet-bench-compare/go && go run ./...
+
+# C / libsodium (brew install libsodium  /  apt install libsodium-dev)
+cd crates/gnet-bench-compare/c && make run
+```
+
 ## Out-of-scope (intentional)
 
-- **Cross-language comparison (Go / C / kernel WireGuard)**: planned as a
-  follow-up; would require either FFI or standalone `go test -bench` /
-  `libsodium` micro-benchmark binaries. Both possible; not in this crate.
 - **End-to-end throughput (Mbps over TUN)**: belongs in a netns scripts /
   `iperf3` harness, not a micro-bench. See `crates/gnet/scripts/netns-*.sh`
   for the existing E2E correctness tests; throughput E2E is future work.
