@@ -18,11 +18,21 @@ mod scalar;
 #[cfg(target_arch = "aarch64")]
 mod neon_x4;
 
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod avx2_x4;
+
+/// SHAKE128 rate in bytes (1600 − 2·128 = 1344 bits = 168 B). Shared by
+/// the per-arch 4-way fast paths plus the scalar fallback so callers
+/// can size their per-block buffers without pulling in a SIMD-only
+/// re-export.
+pub(crate) const SHAKE128_RATE: usize = 168;
+
 /// Streaming SHAKE128 4-way sponge, used by ML-KEM matrix sampling. Only
 /// available on aarch64; on other architectures callers should fall back to
-/// four serial [`Xof::shake128`] readers.
+/// four serial [`Xof::shake128`] readers, or use the AVX2 path on
+/// x86_64 (see `avx2_x4::ShakeState4Avx2`).
 #[cfg(target_arch = "aarch64")]
-pub(crate) use neon_x4::{SHAKE128_RATE, ShakeState4};
+pub(crate) use neon_x4::ShakeState4;
 
 /// SHA3-256 (FIPS 202): 32-byte digest.
 pub fn sha3_256(input: &[u8]) -> [u8; 32] {
@@ -63,6 +73,16 @@ pub fn shake128_x4(seeds: [&[u8]; 4], outs: [&mut [u8]; 4]) {
     }
     #[cfg(not(target_arch = "aarch64"))]
     {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                // SAFETY: AVX2 just runtime-detected.
+                unsafe {
+                    avx2_x4::shake128_x4(seeds, outs);
+                }
+                return;
+            }
+        }
         let [s0, s1, s2, s3] = seeds;
         let [o0, o1, o2, o3] = outs;
         shake128(s0, o0);
