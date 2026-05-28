@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [develop, master]
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: workspace tests (debug)
+        run: cargo test --workspace
+      - name: rustdoc — every public surface renders cleanly
+        run: cargo doc --no-deps --workspace
+      # The perf_gate is the ceiling enforcement: every category must stay
+      # within its arch-cfg cap vs the SOTA Rust competitor on the same
+      # hardware. CI runs on x86_64 → uses the lx64 caps with the
+      # bimodal-noise-tolerant ratios documented in
+      # tests/perf_gate.rs.
+      #
+      # `continue-on-error: true` because even the loosened x86_64 caps
+      # can occasionally false-fire on a shared GH Actions runner that
+      # enters a slow CPU-governor cluster mid-test. We still want the
+      # gate's ratio numbers in the build log (a real regression jumps
+      # 50%+, well above the noise envelope) — failing the whole CI run
+      # for stochastic noise costs more than the signal it gives. Watch
+      # the step's red ✗ in the Actions UI; investigate if it persists
+      # for ≥ 3 consecutive runs.
+      - name: perf_gate (release, arch-cfg caps) — non-blocking
+        continue-on-error: true
+        run: cargo test --release -p gnet-bench-compare --test perf_gate
+      # Every publishable crate's README example pairs with a runnable
+      # `cargo run --example <name>`; smoke-test all eight to catch
+      # silent breakage from API changes.
+      - name: examples — smoke-test all runnable demos
+        run: |
+          set -e
+          for tuple in \
+              "gnet-rand:random_32" \
+              "gnet-hex:roundtrip" \
+              "gnet-wire:frame_parse" \
+              "gnet-crypto:aead_roundtrip" \
+              "gnet-noise:handshake_classic" \
+              "gnet-relay:envelope_demo" \
+              "gnet-punch:codec_demo" \
+              "gnet-config:parse_sample"; do
+            pkg="${tuple%:*}"
+            ex="${tuple#*:}"
+            echo "::group::$pkg --example $ex"
+            cargo run -q -p "$pkg" --example "$ex"
+            echo "::endgroup::"
+          done
+      # Manifest-only publish check on the Tier 0 (no internal real deps)
+      # crates. Tier 1+ can only verify once their prerequisites land on
+      # crates.io in topological order — see crates/PUBLISH.md.
+      - name: publish dry-run (Tier 0 leaf crates)
+        run: |
+          set -e
+          for c in gnet-rand gnet-hex gnet-wire gnet-tun gnet-crypto gnet-relay; do
+            echo "::group::publish dry-run $c"
+            cargo publish --dry-run --no-verify --allow-dirty -p "$c"
+            echo "::endgroup::"
+          done

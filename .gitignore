@@ -1,0 +1,16 @@
+# rust
+target/
+*.orig
+*.rs.bk
+
+# editors / OS
+.idea/
+.DS_Store
+
+# claude — fully gitignored, each dev runs `devops dotclaude sync gnet`
+.claude/
+
+# env
+.env
+.env.local
+.env.*.local
