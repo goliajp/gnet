@@ -20,6 +20,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod predict;
+
 use std::net::SocketAddr;
 use std::time::Instant;
 
