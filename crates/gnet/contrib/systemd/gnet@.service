@@ -20,7 +20,7 @@
 
 [Unit]
 Description=gnet overlay daemon (%i)
-Documentation=https://github.com/goliajp/portal
+Documentation=https://github.com/goliajp/gnet
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=/etc/gnet/%i.conf

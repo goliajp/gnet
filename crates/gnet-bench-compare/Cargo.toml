@@ -5,7 +5,7 @@ edition.workspace = true
 authors = ["GOLIA K.K."]
 license = "MIT OR Apache-2.0"
 description = "Cross-ecosystem perf comparison: gnet's hand-rolled crypto stones vs. the SOTA libraries in Rust (dalek / snow / RustCrypto), Go (crypto/ecdh / crypto/mlkem), and C (libsodium). Internal-only — NOT published."
-repository = "https://github.com/goliajp/portal"
+repository = "https://github.com/goliajp/gnet"
 publish = false
 
 # Internal bench crate: external crypto deps are allowed here. The gnet stack

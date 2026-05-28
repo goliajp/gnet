@@ -1,0 +1,64 @@
+[workspace.package]
+version = "2.0.0-alpha.2"
+edition = "2024"
+authors = ["GOLIA K.K."]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/goliajp/gnet"
+homepage = "https://github.com/goliajp/gnet"
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/gnet",
+    "crates/gnet-bench-compare",
+    "crates/gnet-config",
+    "crates/gnet-crypto",
+    "crates/gnet-discover",
+    "crates/gnet-hex",
+    "crates/gnet-noise",
+    "crates/gnet-punch",
+    "crates/gnet-rand",
+    "crates/gnet-relay",
+    "crates/gnet-relay-server",
+    "crates/gnet-tun",
+    "crates/gnet-wire",
+]
+
+[workspace.dependencies]
+# Internal crates — `path` resolves locally during development; `version`
+# kicks in at `cargo publish` time (Cargo strips `path` and keeps `version`
+# in the uploaded manifest). One workspace.version bump cascades to every
+# internal dep edge through these declarations.
+gnet-config = { path = "crates/gnet-config", version = "2.0.0-alpha.2" }
+gnet-crypto = { path = "crates/gnet-crypto", version = "2.0.0-alpha.2" }
+gnet-hex = { path = "crates/gnet-hex", version = "2.0.0-alpha.2" }
+gnet-noise = { path = "crates/gnet-noise", version = "2.0.0-alpha.2" }
+gnet-punch = { path = "crates/gnet-punch", version = "2.0.0-alpha.2" }
+gnet-rand = { path = "crates/gnet-rand", version = "2.0.0-alpha.2" }
+gnet-relay = { path = "crates/gnet-relay", version = "2.0.0-alpha.2" }
+gnet-tun = { path = "crates/gnet-tun", version = "2.0.0-alpha.2" }
+gnet-wire = { path = "crates/gnet-wire", version = "2.0.0-alpha.2" }
+
+# External crates — kept to the minimum the control-plane (gnet-discover)
+# and the cross-ecosystem bench harness (gnet-bench-compare) need. The
+# overlay's data-plane crates stay 0-dep by policy.
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+httparse = "1"
+thiserror = "2"
+tracing = "0.1"
+# bench-compare only — SOTA Rust competitors put numbers next to ours.
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+snow = "0.10"
+
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[profile.release]
+strip = true
+lto = "thin"

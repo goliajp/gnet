@@ -1,6 +1,6 @@
 [Unit]
 Description=gnet overlay UDP relay daemon
-Documentation=https://github.com/goliajp/portal/tree/develop/crates/gnet-relay-server
+Documentation=https://github.com/goliajp/gnet/tree/develop/crates/gnet-relay-server
 After=network-online.target
 Wants=network-online.target
 
