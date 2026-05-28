@@ -158,6 +158,45 @@ The relay's wire is documented in
 [`crates/gnet-relay-server/src/main.rs`](../../crates/gnet-relay-server/src/main.rs):
 it honours only `Kind::RelayData(0x08)` and never decrypts the inner.
 
+## Log events
+
+The daemon emits structured event lines on stderr (captured by
+journald). Every operational event has a stable `event=<name>` tag plus
+key=value fields, so simple grep / awk pipelines suffice — no JSON
+parser, no logging framework.
+
+| `event=` | Fires when | Fields |
+|---|---|---|
+| `node_up` | Daemon finished tun setup and entered the run loop | `tun`, `v4`, `v6`?, `peers` |
+| `reflexive_discovered` | First time we learn our public `ip:port` from a probe reflection (or whenever it changes) | `endpoint` |
+| `self_nat_detected` | Reflexive-vs-local-interface comparison settled | `is_nat`, `reflexive`, `reason` (`matches_local_if` \| `no_local_match`) |
+| `peer_routed_via_relay` | Cold-start path selection picked the relay path for a peer | `peer`, `alias`, `relay`, `self_pub`, `peer_pub` |
+| `peer_relay_fallback` | A peer's direct path failed enough times to fall back to relay | `peer`, `alias`, `punch_failures` |
+| `direct_upgrade_succeeded` | A previously-relayed peer's direct upgrade completed (hole punch hit) | `vip`, `alias`, `endpoint` |
+| `discovery_poll` | One coordinator `/peers` poll changed something | `added`, `updated`, `total` |
+| `discovery_poll_failed` | The poll itself errored (curl exit, JSON parse, ...) | `error` |
+| `endpoint_reported` | Successfully pushed our reflexive endpoint to `/endpoint-report` | `endpoint` |
+| `endpoint_report_failed` | Endpoint-report POST errored | `error` |
+| `peer_keys_rotated` | Discovery saw the same alias with a different pubkey — session reset | `alias` |
+| `peer_adopted` | Static-conf peer (alias-less) got matched to a coordinator entry by overlay v4 | `vip`, `alias`, `pubkey_changed` |
+
+Typical grep recipes:
+
+```bash
+# Count direct upgrade successes vs relay fallbacks for one instance.
+journalctl -u gnet@main | grep -c event=direct_upgrade_succeeded
+journalctl -u gnet@main | grep -c event=peer_relay_fallback
+
+# Live-watch new peer events.
+journalctl -u gnet@main -f | grep -E 'event=(peer_routed_via_relay|peer_adopted|peer_keys_rotated|direct_upgrade_succeeded)'
+
+# Surface coordinator errors only.
+journalctl -u gnet@main | grep -E 'event=(discovery_poll_failed|endpoint_report_failed)'
+```
+
+Free-form values (error messages) are quoted with `"…"`; everything
+else is unquoted and shell-word-safe.
+
 ## Troubleshooting
 
 | Symptom | Likely cause |
