@@ -1,0 +1,71 @@
+## v0.13 measurement test-only patch — DO NOT COMMIT
+##
+## Tightens DIRECT_UPGRADE_BASE from 30s to 3s so N=30 trial iteration
+## finishes in ~6 minutes per NAT mode. Adds three eprintln! markers in
+## the punch state machine so the harness can score each trial's outcome.
+##
+## Apply with `git apply` from the repo root; revert after measurement.
+
+diff --git a/crates/gnet/src/node/punch.rs b/crates/gnet/src/node/punch.rs
+--- a/crates/gnet/src/node/punch.rs
++++ b/crates/gnet/src/node/punch.rs
+@@ -27,7 +27,7 @@ pub(super) const PUNCH_SEQUENTIAL_RADIUS: u16 = 32;
+ /// in the 30-second neighbourhood: short enough that a transient relay
+ /// route is replaced quickly, long enough not to flood the rendezvous
+ /// coordinator with retries.
+-pub(super) const DIRECT_UPGRADE_BASE: Duration = Duration::from_secs(30);
++pub(super) const DIRECT_UPGRADE_BASE: Duration = Duration::from_secs(3); // v0.13 test only
+
+ /// Maximum backoff after repeated upgrade failures; growth caps at five
+ /// minutes so a peer behind an un-punchable symmetric NAT does not retry
+@@ -67,6 +67,7 @@ impl Node {
+     pub(super) fn start_punch(&mut self, i: usize) -> Option<(SocketAddr, Vec<u8>)> {
+         let reflexive = self.reflexive?;
+         let coordinator = self.coordinator_endpoint(i)?;
++        eprintln!("v013-test: start_punch i={i} reflexive={reflexive} coord={coordinator}");
+         let target = self.peers[i].public;
+         let body = encode_connect(&self.public, &target, reflexive);
+         self.peers[i].punch = PunchState::Connecting {
+@@ -135,6 +136,7 @@ impl Node {
+         self.peers[i].punch = PunchState::Awaiting {
+             candidates: candidates_around(reflexive, PUNCH_SEQUENTIAL_RADIUS),
+         };
++        eprintln!("v013-test: target-side stored origin_reflexive={reflexive} for peer i={i}");
+         let reply = encode_connect(&self.public, &origin, my_reflexive);
+         vec![(from, wire::frame(Kind::PunchConnect, &reply))]
+     }
+@@ -275,6 +277,8 @@ impl Node {
+         for &cand in rest {
+             out.push((cand, dg.clone()));
+         }
++        let count = out.len();
++        eprintln!("v013-test: dial_fanout i={i} candidates={count} observed={observed}");
+         out
+     }
+
+diff --git a/crates/gnet/src/node/handshake.rs b/crates/gnet/src/node/handshake.rs
+--- a/crates/gnet/src/node/handshake.rs
++++ b/crates/gnet/src/node/handshake.rs
+@@ -111,6 +111,7 @@ pub(super) fn complete_initiation(peer: &mut Peer, body: &[u8], from: SocketAddr
+     if !matches!(peer.session, Session::Initiating { .. }) {
+         return;
+     }
++    eprintln!("v013-test: complete_initiation via_relay={via_relay} from={from} punched={} prev_endpoint={:?}", peer.punched, peer.endpoint);
+     if let Session::Initiating { ini, .. } = std::mem::replace(&mut peer.session, Session::Idle)
+         && let Some((transport, payload)) = ini.read_message_2(body)
+         && let Some(peer_index) = index_from_payload(&payload)
+@@ -129,7 +130,13 @@ pub(super) fn complete_initiation(peer: &mut Peer, body: &[u8], from: SocketAddr
+             // any transport packets go out (they would otherwise re-target
+             // the wrong NAT mapping and never land).
+             if peer.punched && peer.endpoint != Some(from) {
++                let before = peer.endpoint;
+                 peer.endpoint = Some(from);
++                eprintln!("v013-test: PUNCH-SUCCESS (corrected) {before:?} -> {from}");
++            } else if peer.punched {
++                eprintln!("v013-test: PUNCH-SUCCESS (slot-0 hit) endpoint stays at {from}");
++            } else {
++                eprintln!("v013-test: direct non-punch from {from}");
+             }
+         }
+     }
+ }
