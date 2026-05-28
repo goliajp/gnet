@@ -12,7 +12,7 @@
 //! per-block path, which the differential test pins together.
 
 use core::arch::aarch64::{
-    uint32x2_t, uint64x2_t, vaddq_u64, vcreate_u32, vgetq_lane_u64, vmull_u32,
+    uint32x2_t, uint64x2_t, vaddq_u64, vcreate_u32, vgetq_lane_u64, vmull_u32, vpaddq_u64,
 };
 
 use super::{MASK, fmul5, load_le32, mul5, reduce_products};
@@ -65,12 +65,17 @@ fn col(
 }
 
 /// Sum the four lanes carried by the `lo` and `hi` halves of one column.
+///
+/// Uses a pairwise NEON reduction (`addq` then `addp d0, v.2d`) so the final
+/// 4-way sum lands in a single d-register lane that we read out once — saving
+/// one NEON→GPR transfer + one GPR add per column versus extracting both
+/// lanes and adding in the scalar domain.
 #[inline]
 fn hsum(lo: uint64x2_t, hi: uint64x2_t) -> u64 {
-    // SAFETY: NEON is baseline on aarch64; add + lane extracts.
+    // SAFETY: NEON is baseline on aarch64; pure register ops + one lane read.
     unsafe {
         let s = vaddq_u64(lo, hi);
-        vgetq_lane_u64::<0>(s) + vgetq_lane_u64::<1>(s)
+        vgetq_lane_u64::<0>(vpaddq_u64(s, s))
     }
 }
 

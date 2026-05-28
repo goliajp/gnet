@@ -134,6 +134,103 @@ unsafe {
 被用做 multi-gigabit DERP relay 时），重读本文 + 走 ARM64 内联汇编
 优先路径。
 
+## v0.9 update (2026-05-28) — intrinsic schedule pre-flight measured
+
+The "尝试 intrinsic schedule 优化 pre-flight (~1-2 周)" item above was
+exercised on Apple M4 Pro NEON between 2026-05-28 ~09:50 and ~10:30 (about
+40 minutes inside this v0.9 cycle, far below the ~1-2 week estimate). Real
+measured results — both wins and rejections recorded for the next decision
+point:
+
+### Methodology
+
+- Five `perf_gate` runs (best-of-20 sampling each, fast-cluster min) on the
+  primary dev host, paired with five `golang.org/x/crypto` reference runs
+  (best-of-10 min). Same hardware, same thermal state.
+- Baseline taken from this session's first measurement, not the README cell
+  — that lets a 2026-05-28 v0.9 improvement be attributed cleanly to the
+  intrinsic-schedule work and not to a different machine state.
+
+### Tried & rejected (kept for evidence)
+
+**Manual unroll of the 10-round ChaCha20 main loop** into a single
+80-`quarter_round` straight-line block. Hypothesis: handing LLVM the full
+data-flow graph would let the AArch64 backend interleave independent chains
+across rounds. Result: the unrolled body grew from 417 to 3089 assembler
+lines and the prologue's stack frame went 384 → 416 bytes; AEAD `seal`
+regressed +1.7%, `open` +3.4%. LLVM's register allocator collapsed on the
+80-round SSA graph and spilled more aggressively than in the looped form.
+**Rolled back.** The Apple Silicon ROB does not buy free unroll headroom
+at this register-pressure ceiling.
+
+### Tried & kept (the v0.9 ship)
+
+**Independent SSA locals in `chacha20::neon::keystream4`.** The original
+`[uint32x4_t; 16]` array, indexed by const `usize` arguments to a helper
+fn, was replaced with 16 named locals (`v0..v15`, `init0..init15`) and a
+macro-form quarter-round (`qr!(a, b, c, d)`) that operates directly on
+those locals. Effect: LLVM sees 16 independent SSA chains instead of an
+array-borrow indirection; stack frame 384 → 368 bytes; AEAD `seal`
+1477 → 1419 ns (−3.9%, gap 14.2% → 9.8%); AEAD `open` 1450 → 1429 ns
+(−1.4%, gap 13.2% → 11.5%).
+
+**`vpaddq_u64` for Poly1305's per-column `hsum`.** The original 5-column
+horizontal sum did two NEON→GPR lane extracts plus a scalar add per
+column; switched to one `vaddq_u64` + one pairwise `vpaddq_u64` + a single
+`vgetq_lane_u64::<0>`, cutting cross-domain transfers per column from 2 to
+1. Effect: AEAD `seal` 1419 → 1370 ns (−3.5%); AEAD `open` 1429 → 1371 ns
+(−4.0%).
+
+### Cumulative measured gap
+
+| Op | baseline 2026-05-27 | v0.9 best | Go stdlib best | gap (v0.9 vs Go) |
+|---|---:|---:|---:|---:|
+| AEAD seal 1400B | 1477 ns | 1370 ns | 1252 ns | **+9.4%** (was +14.2%) |
+| AEAD open 1400B | 1450 ns | 1371 ns | 1278 ns | **+7.3%** (was +13.2%) |
+
+`open` hit the ≤8% target. `seal` closed 34% of the gap but sits at 9.4%
+— 1.4 pp above target.
+
+### Why the residual is structural
+
+`cargo rustc --release -- --emit=asm` on the v0.9 keystream4 inner round
+loop shows **35 unique NEON v-registers in use vs 32 physical registers**,
+forcing 6 spills inside the inner loop body. This is a *physical* ceiling,
+not an LLVM scheduling artefact: the 4-way ChaCha20 design needs 16 state
++ 16 init + a handful of temps live simultaneously. The "independent SSA
+locals" change recovered some of the array-borrow overhead but cannot
+close the register-pressure gap itself.
+
+### Decision delta vs original recommendation
+
+The original "**短期（v0.9-v0.x）不下汇编**" stance still holds:
+
+- Pre-flight succeeded **partially** — open at target, seal close to it.
+- Total time spent: ~40 min, not the 1-2 weeks estimated above. We over-
+  estimated this path's cost; the under-estimation of *result*, conversely,
+  was small.
+- Remaining gap on `seal` (~9%) is bounded by a physical register count
+  the intrinsic form cannot dodge. The ARM64 NEON inline-asm path would
+  buy hand-allocated register layout (e.g. spilling `init` to general
+  registers via `umov` + `dup` reload, leaving all 32 NEON registers for
+  the round body), which is exactly the optimisation `golang.org/x/crypto`
+  ARM64 path uses today.
+
+### Trigger for the next reread
+
+This document moves back to the deferred queue. **Reread it when**:
+
+- A real deployment shows AEAD on the per-packet hot path (DERP relay,
+  multi-Gbps tunnel) measurably bottlenecking throughput, or
+- A user requests closing the residual `seal` gap below 8% explicitly,
+  or
+- The pre-flight result on `lx64` (x86_64 AVX2 ChaCha20 / Poly1305)
+  shows a different ceiling — possibly opening a smaller-scope asm win
+  that's cheaper than the ARM64 5-7 week estimate.
+
+Until then, v0.9 closed half the AEAD gap from the deferred list without
+spending the asm-routing engineering budget.
+
 ## 参考
 
 - Go `chacha20/chacha_arm64.s`：
