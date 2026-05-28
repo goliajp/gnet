@@ -10,9 +10,10 @@
 //! coordinator state, no out-of-band registration — symmetric NAT peers
 //! that have spoken to the relay at least once become routable.
 //!
-//! Stale entries (no activity for [`STALE_AFTER`]) are pruned in-line on
-//! each `recv_from` wake-up so the table size stays bounded by active
-//! peers and doesn't need a background thread.
+//! Stale entries (no activity for [`STALE_AFTER_DEFAULT`], or the override
+//! from `--stale-after`) are pruned in-line on each `recv_from` wake-up so
+//! the table size stays bounded by active peers and doesn't need a
+//! background thread.
 //!
 //! # Wire contract
 //!

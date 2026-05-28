@@ -33,9 +33,11 @@ fn main() {
     let mut state = PunchState::Connecting { sent_at };
 
     // The target's reply arrives via the coordinator; on_reply measures the
-    // RTT and schedules the dial at RTT/2 past now.
+    // RTT, builds the symmetric-NAT port-prediction candidate list around the
+    // observed reflexive (±R), and schedules the dial at RTT/2 past now.
     let target_refl: SocketAddr = "198.51.100.8:50000".parse().unwrap();
-    let scheduled = state.on_reply(target_refl, Instant::now());
+    let radius: u16 = 4;
+    let scheduled = state.on_reply(target_refl, Instant::now(), radius);
     assert!(scheduled, "Connecting + reply → Syncing");
     println!("on_reply ok: Connecting -> Syncing with dial scheduled at RTT/2");
 
@@ -47,9 +49,18 @@ fn main() {
     assert_eq!(decoded_target, target_pk);
     println!("PunchSync:    {} bytes (32 + 32)", sync_body.len());
 
-    // Past the dial deadline → state hands back the target endpoint so the
-    // node binary can start a handshake.
-    let endpoint = state.due_dial(Instant::now() + Duration::from_secs(1));
-    assert_eq!(endpoint, Some(target_refl));
-    println!("due_dial -> {target_refl} (ready to start the handshake)");
+    // Past the dial deadline → state hands back the fan-out candidate list
+    // (observed reflexive first, then ±1..=±R) so the node binary can emit
+    // one handshake init per candidate.
+    let candidates = state
+        .due_dial(Instant::now() + Duration::from_secs(1))
+        .expect("dial deadline arrived");
+    assert_eq!(candidates.len(), 1 + 2 * radius as usize);
+    assert_eq!(candidates[0], target_refl, "observed reflexive first");
+    println!(
+        "due_dial -> {} candidates ({} observed + {} ±k sequential)",
+        candidates.len(),
+        1,
+        2 * radius
+    );
 }

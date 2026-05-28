@@ -17,6 +17,10 @@
 //! - [`encode_sync`] / [`decode_sync`] — PunchSync body (`origin ‖ target`).
 //! - [`PunchState`] — per-peer rendezvous state + its transitions
 //!   ([`PunchState::on_reply`], [`PunchState::due_dial`]).
+//! - [`candidates_around`] — sequential symmetric-NAT port-prediction
+//!   candidates around an observed reflexive endpoint (sequential half of
+//!   [`predict::CandidateSet`]; randomized half stays off in phase 2 — the
+//!   wire path is sequential-only until the integration is measured).
 
 #![forbid(unsafe_code)]
 
@@ -26,6 +30,7 @@ use std::net::SocketAddr;
 use std::time::Instant;
 
 use gnet_wire::{decode_addr, encode_addr};
+use predict::CandidateSet;
 
 /// Length of a static public key on the wire (X25519).
 const PK_LEN: usize = 32;
@@ -84,46 +89,77 @@ pub enum PunchState {
         /// When the PunchConnect was sent — dates the coordinator RTT measurement.
         sent_at: Instant,
     },
-    /// Origin role: RTT measured and PunchSync sent; dial `endpoint` once
-    /// `dial_at` (reply time + RTT/2) arrives, so our first packet crosses the
-    /// target's — which dialed immediately on the sync — at the path midpoint.
+    /// Origin role: RTT measured and PunchSync sent; fan-out dial `candidates`
+    /// once `dial_at` (reply time + RTT/2) arrives, so our first packets cross
+    /// the target's — which dialed immediately on the sync — at the path
+    /// midpoint. The candidate list always leads with the observed reflexive
+    /// endpoint (the one the coordinator told us); the remainder is symmetric
+    /// `±1..=±R` ports for symmetric-NAT port-prediction (see [`predict`]).
     Syncing {
         /// When to dial: the reply time plus half the measured coordinator RTT.
         dial_at: Instant,
-        /// The target's reflexive endpoint to dial.
-        endpoint: SocketAddr,
+        /// Fan-out candidate endpoints in dial order; `candidates[0]` is the
+        /// observed reflexive.
+        candidates: Vec<SocketAddr>,
     },
     /// Target role: we replied to a PunchConnect and await the origin's sync.
-    /// Dial `endpoint` (the origin's reflexive) the instant the sync lands —
-    /// no wait, since the origin already scheduled its own dial RTT/2 out.
+    /// Fan-out dial `candidates` the instant the sync lands — no wait, since
+    /// the origin already scheduled its own dial RTT/2 out. Same shape as the
+    /// origin's `Syncing.candidates`.
     Awaiting {
-        /// The origin's reflexive endpoint, dialed the instant the sync lands.
-        endpoint: SocketAddr,
+        /// Fan-out candidate endpoints in dial order; `candidates[0]` is the
+        /// origin's observed reflexive.
+        candidates: Vec<SocketAddr>,
     },
 }
 
 impl PunchState {
-    /// The endpoint to dial if this is a `Syncing` state whose deadline has
-    /// arrived, else `None`. Drives the origin's delayed dial.
-    pub fn due_dial(&self, now: Instant) -> Option<SocketAddr> {
+    /// The candidate endpoints to dial if this is a `Syncing` state whose
+    /// deadline has arrived, else `None`. Drives the origin's delayed
+    /// fan-out dial.
+    pub fn due_dial(&self, now: Instant) -> Option<&[SocketAddr]> {
         match self {
-            PunchState::Syncing { dial_at, endpoint } if *dial_at <= now => Some(*endpoint),
+            PunchState::Syncing { dial_at, candidates } if *dial_at <= now => {
+                Some(candidates.as_slice())
+            }
             _ => None,
         }
     }
 
     /// Origin transition on the target's connect reply: measure the RTT from
     /// `sent_at`, move to `Syncing` with the dial scheduled at reply + RTT/2,
-    /// and remember the `endpoint` to dial. Returns `false` (a no-op) unless we
-    /// were `Connecting`, so a stray or duplicate reply is ignored.
-    pub fn on_reply(&mut self, endpoint: SocketAddr, now: Instant) -> bool {
+    /// and remember the candidate list (observed reflexive plus
+    /// `sequential_radius` symmetric `±1..=±R` ports — see [`predict`]).
+    /// Returns `false` (a no-op) unless we were `Connecting`, so a stray or
+    /// duplicate reply is ignored.
+    pub fn on_reply(
+        &mut self,
+        endpoint: SocketAddr,
+        now: Instant,
+        sequential_radius: u16,
+    ) -> bool {
         let PunchState::Connecting { sent_at } = self else {
             return false;
         };
         let dial_at = dial_at_from_rtt(*sent_at, now);
-        *self = PunchState::Syncing { dial_at, endpoint };
+        let candidates = candidates_around(endpoint, sequential_radius);
+        *self = PunchState::Syncing {
+            dial_at,
+            candidates,
+        };
         true
     }
+}
+
+/// Build the fan-out candidate list around an observed reflexive endpoint:
+/// the observed endpoint itself first, then symmetric `±1..=±R` ports. The
+/// randomized half of [`predict::CandidateSet`] is intentionally off here —
+/// phase 2's wire path is sequential-only, and the random tail is reserved
+/// for a follow-on once the sequential fan-out is measured in the field.
+pub fn candidates_around(observed: SocketAddr, sequential_radius: u16) -> Vec<SocketAddr> {
+    CandidateSet::new(observed, sequential_radius, 0, 0)
+        .iter()
+        .collect()
 }
 
 /// The dial instant after a connect→reply round: `reply_now + RTT/2`, where RTT
@@ -184,12 +220,12 @@ mod tests {
         let now = Instant::now();
         let past = PunchState::Syncing {
             dial_at: now - Duration::from_secs(1),
-            endpoint: ep,
+            candidates: vec![ep],
         };
-        assert_eq!(past.due_dial(now), Some(ep));
+        assert_eq!(past.due_dial(now), Some(&[ep][..]));
         let future = PunchState::Syncing {
             dial_at: now + Duration::from_secs(1),
-            endpoint: ep,
+            candidates: vec![ep],
         };
         assert_eq!(future.due_dial(now), None);
         assert_eq!(PunchState::Idle.due_dial(now), None);
@@ -203,18 +239,51 @@ mod tests {
         let mut st = PunchState::Connecting {
             sent_at: now - Duration::from_millis(40),
         };
-        assert!(st.on_reply(ep, now), "connecting accepts the reply");
+        assert!(
+            st.on_reply(ep, now, 0),
+            "connecting accepts the reply"
+        );
         assert_eq!(st.due_dial(now), None);
-        match st {
-            PunchState::Syncing { dial_at, endpoint } => {
-                assert_eq!(endpoint, ep);
+        match &st {
+            PunchState::Syncing { dial_at, candidates } => {
+                assert_eq!(candidates.as_slice(), &[ep][..]);
                 let delay = dial_at.duration_since(now);
                 assert!(delay >= Duration::from_millis(18) && delay <= Duration::from_millis(40));
             }
             _ => panic!("on_reply must yield Syncing"),
         }
-        assert!(!st.on_reply(ep, now));
-        assert!(!PunchState::Idle.on_reply(ep, now));
+        assert!(!st.on_reply(ep, now, 0));
+        assert!(!PunchState::Idle.on_reply(ep, now, 0));
+    }
+
+    #[test]
+    fn on_reply_builds_sequential_fan_out_when_radius_positive() {
+        let ep: SocketAddr = "203.0.113.5:41000".parse().unwrap();
+        let now = Instant::now();
+        let mut st = PunchState::Connecting {
+            sent_at: now - Duration::from_millis(20),
+        };
+        assert!(st.on_reply(ep, now, 3));
+        let PunchState::Syncing { candidates, .. } = &st else {
+            panic!("on_reply must yield Syncing");
+        };
+        let ports: Vec<u16> = candidates.iter().map(|a| a.port()).collect();
+        // observed, +1, -1, +2, -2, +3, -3
+        assert_eq!(ports, vec![41000, 41001, 40999, 41002, 40998, 41003, 40997]);
+    }
+
+    #[test]
+    fn candidates_around_is_observed_then_alternating_sequential() {
+        let ep: SocketAddr = "203.0.113.5:41000".parse().unwrap();
+        let c = candidates_around(ep, 2);
+        let ports: Vec<u16> = c.iter().map(|a| a.port()).collect();
+        assert_eq!(ports, vec![41000, 41001, 40999, 41002, 40998]);
+    }
+
+    #[test]
+    fn candidates_around_radius_zero_yields_observed_only() {
+        let ep: SocketAddr = "203.0.113.5:41000".parse().unwrap();
+        assert_eq!(candidates_around(ep, 0), vec![ep]);
     }
 
     #[test]

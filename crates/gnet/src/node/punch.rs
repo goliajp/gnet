@@ -7,10 +7,20 @@
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
-use gnet_punch::{PunchState, decode_connect, decode_sync, encode_connect, encode_sync};
+use gnet_punch::{
+    PunchState, candidates_around, decode_connect, decode_sync, encode_connect, encode_sync,
+};
 use gnet_wire::{self as wire, Kind};
 
 use super::types::{Node, Session};
+
+/// Sequential candidate radius for symmetric-NAT port-prediction fan-out:
+/// dial the observed reflexive endpoint plus `±1..=±R` around it. `R=32`
+/// matches the field-realistic Linux MASQUERADE walk distance covered by
+/// the [`gnet_punch::predict`] sequential half (see its
+/// `sequential_catches_small_walk` test). Total fan-out per dial is
+/// `1 + 2·R = 65` UDP packets — within DCUtR's path-midpoint sync window.
+pub(super) const PUNCH_SEQUENTIAL_RADIUS: u16 = 32;
 
 /// Initial backoff between direct-path upgrade attempts on a relayed peer.
 /// Tailscale's DERP→direct upgrade and libp2p's hole-punch retry both sit
@@ -105,7 +115,9 @@ impl Node {
         // we are already punching this peer as origin → this connect is the
         // reply we awaited: measure the RTT and send the sync.
         if matches!(self.peers[i].punch, PunchState::Connecting { .. }) {
-            if self.peers[i].punch.on_reply(reflexive, Instant::now())
+            if self.peers[i]
+                .punch
+                .on_reply(reflexive, Instant::now(), PUNCH_SEQUENTIAL_RADIUS)
                 && let Some(coord) = self.coordinator_endpoint(i)
             {
                 let sync = encode_sync(&self.public, &origin);
@@ -119,15 +131,16 @@ impl Node {
             return Vec::new();
         };
         self.peers[i].punch = PunchState::Awaiting {
-            endpoint: reflexive,
+            candidates: candidates_around(reflexive, PUNCH_SEQUENTIAL_RADIUS),
         };
         let reply = encode_connect(&self.public, &origin, my_reflexive);
         vec![(from, wire::frame(Kind::PunchConnect, &reply))]
     }
 
     /// Handle an inbound PunchSync. Relay it if we are the coordinator;
-    /// otherwise we are the target and dial the origin immediately (its first
-    /// packet is already on its way). Returns the handshake init, if any.
+    /// otherwise we are the target and fan-out dial the origin immediately
+    /// (its first packets are already on the way). Returns the handshake
+    /// inits — one per candidate — to send with the lock released.
     pub(super) fn handle_sync(&mut self, body: &[u8]) -> Vec<(SocketAddr, Vec<u8>)> {
         let Some((origin, target)) = decode_sync(body) else {
             return Vec::new();
@@ -138,27 +151,30 @@ impl Node {
         let Some(i) = self.by_pubkey(&origin) else {
             return Vec::new();
         };
-        let PunchState::Awaiting { endpoint } = &self.peers[i].punch else {
+        let PunchState::Awaiting { candidates } = &self.peers[i].punch else {
             return Vec::new();
         };
-        let endpoint = *endpoint;
-        self.dial(i, endpoint).into_iter().collect()
+        let candidates = candidates.clone();
+        self.dial_fanout(i, &candidates)
     }
 
-    /// Origin-side delayed dials: dial any peer whose `Syncing` deadline
-    /// (reply + RTT/2) has arrived. Called from the dial poller. Returns
-    /// handshake inits to send with the lock released.
+    /// Origin-side delayed dials: fan-out dial any peer whose `Syncing`
+    /// deadline (reply + RTT/2) has arrived. Called from the dial poller.
+    /// Returns handshake inits — one per candidate — to send with the lock
+    /// released.
     pub(super) fn poll_punch_dials(&mut self) -> Vec<(SocketAddr, Vec<u8>)> {
         let now = Instant::now();
-        let due: Vec<(usize, SocketAddr)> = self
+        let due: Vec<(usize, Vec<SocketAddr>)> = self
             .peers
             .iter()
             .enumerate()
-            .filter_map(|(i, p)| p.punch.due_dial(now).map(|ep| (i, ep)))
+            .filter_map(|(i, p)| p.punch.due_dial(now).map(|c| (i, c.to_vec())))
             .collect();
-        due.into_iter()
-            .filter_map(|(i, ep)| self.dial(i, ep))
-            .collect()
+        let mut out = Vec::new();
+        for (i, candidates) in due {
+            out.extend(self.dial_fanout(i, &candidates));
+        }
+        out
     }
 
     /// The earliest pending origin dial deadline (`Syncing.dial_at`), if any.
@@ -217,28 +233,49 @@ impl Node {
         out
     }
 
-    /// Dial a peer once rendezvous has aligned the timing: point the peer at
-    /// `endpoint`, clear its punch state, and start the normal handshake (which
-    /// the glare logic + jittered retransmit carry to completion). Marks the
-    /// peer `punched` so its endpoint is known to be punch-derived: a run of
-    /// give-ups on it accrues toward relay fallback. Returns the init datagram,
-    /// or `None` if it cannot be built.
+    /// Fan-out dial across all symmetric-NAT port-prediction candidates once
+    /// rendezvous has aligned the timing: point the peer at the observed
+    /// reflexive (`candidates[0]`), clear its punch state, and start the
+    /// normal handshake (which the glare logic + jittered retransmit carry
+    /// to completion). The same `HandshakeInit` datagram — Noise IK msg1 is
+    /// not bound to its destination address — is then emitted to every
+    /// candidate; under symmetric NAT only the one whose port the peer's
+    /// NAT actually allocated for *us* makes it through. The hit address
+    /// reaches us as the `from` of the subsequent `HandshakeResp`, where
+    /// [`super::handshake::complete_initiation`] corrects `peer.endpoint`
+    /// from the observed-port guess to the real one. Marks the peer
+    /// `punched` so a run of give-ups on it accrues toward relay fallback.
+    /// Returns one `(candidate, datagram)` per fan-out target.
     ///
     /// The dial commits to the direct path: the relay flag is cleared so
     /// `initiate`'s [`super::types::route_dg`] sends msg1 directly to the
     /// punched endpoint — sending it through the relay envelope would defeat
     /// DCUtR's simultaneous-open NAT-mapping property (the kernel needs an
     /// outbound packet on the direct 4-tuple for the inbound reply to land).
-    /// If the resulting handshake fails, `expire_handshakes` walks the
-    /// regular PUNCH_ATTEMPTS path back to relay fallback.
-    fn dial(&mut self, i: usize, endpoint: SocketAddr) -> Option<(SocketAddr, Vec<u8>)> {
-        self.peers[i].endpoint = Some(endpoint);
+    /// If every candidate misses and the handshake fails, `expire_handshakes`
+    /// walks the regular PUNCH_ATTEMPTS path back to relay fallback.
+    fn dial_fanout(&mut self, i: usize, candidates: &[SocketAddr]) -> Vec<(SocketAddr, Vec<u8>)> {
+        let Some((&observed, rest)) = candidates.split_first() else {
+            return Vec::new();
+        };
+        self.peers[i].endpoint = Some(observed);
         self.peers[i].punch = PunchState::Idle;
         self.peers[i].punched = true;
         self.peers[i].relay = false;
         self.peers[i].relay_endpoint = None;
         self.peers[i].direct_upgrade_failures = 0;
-        self.initiate(i)
+        // `initiate` returns the routed (observed, dg) pair (relay is off, so
+        // this is the direct branch of `route_dg`). The same dg bytes are then
+        // cloned out to every other candidate.
+        let Some((_, dg)) = self.initiate(i) else {
+            return Vec::new();
+        };
+        let mut out = Vec::with_capacity(candidates.len());
+        out.push((observed, dg.clone()));
+        for &cand in rest {
+            out.push((cand, dg.clone()));
+        }
+        out
     }
 
     /// Relay a rendezvous datagram to the peer identified by `target`'s pubkey,
@@ -404,18 +441,28 @@ mod tests {
         assert_eq!(rt, origin_pub);
         assert_eq!(rrefl, my_refl);
         match &t.peers[0].punch {
-            PunchState::Awaiting { endpoint } => assert_eq!(*endpoint, origin_refl),
+            PunchState::Awaiting { candidates } => {
+                assert_eq!(candidates.len(), 1 + 2 * PUNCH_SEQUENTIAL_RADIUS as usize);
+                assert_eq!(candidates[0], origin_refl, "observed candidate first");
+            }
             _ => panic!("target must await the sync"),
         }
 
-        // the sync lands → dial the origin's reflexive endpoint at once
+        // the sync lands → fan-out dial the origin's reflexive endpoint plus
+        // ±R sequential candidates. dials[0] is the observed reflexive; the
+        // remaining 2·R entries are alternating ±k samples (same dg, distinct
+        // dst port — Noise IK msg1 is not bound to its destination).
         let dout = t.handle_sync(&encode_sync(&origin_pub, &t.public));
-        assert_eq!(dout.len(), 1);
+        let fanout_len = 1 + 2 * PUNCH_SEQUENTIAL_RADIUS as usize;
+        assert_eq!(dout.len(), fanout_len);
         assert_eq!(
             dout[0].0, origin_refl,
-            "dial the origin's reflexive endpoint"
+            "first dial targets the observed reflexive"
         );
-        assert_eq!(dout[0].1[0], Kind::HandshakeInit as u8);
+        for d in &dout {
+            assert_eq!(d.1[0], Kind::HandshakeInit as u8);
+            assert_eq!(d.1, dout[0].1, "all candidates share the same msg1 bytes");
+        }
         assert!(matches!(t.peers[0].session, Session::Initiating { .. }));
         assert!(matches!(t.peers[0].punch, PunchState::Idle));
         assert_eq!(t.peers[0].endpoint, Some(origin_refl));
@@ -436,11 +483,11 @@ mod tests {
         assert_eq!(n.next_punch_dial(), None);
         n.peers[0].punch = PunchState::Syncing {
             dial_at: now + Duration::from_millis(50),
-            endpoint: ep,
+            candidates: vec![ep],
         };
         n.peers[1].punch = PunchState::Syncing {
             dial_at: now + Duration::from_millis(20),
-            endpoint: ep,
+            candidates: vec![ep],
         };
         assert_eq!(n.next_punch_dial(), Some(now + Duration::from_millis(20)));
         n.peers[1].punch = PunchState::Idle;
@@ -481,14 +528,19 @@ mod tests {
 
         // not yet due → nothing dialed
         assert!(o.poll_punch_dials().is_empty());
-        // force the dial deadline past → poll dials the target's reflexive ep
+        // force the dial deadline past → poll fan-out dials across the
+        // observed target reflexive plus ±R sequential candidate ports.
         if let PunchState::Syncing { dial_at, .. } = &mut o.peers[0].punch {
             *dial_at = Instant::now() - Duration::from_secs(1);
         }
         let dials = o.poll_punch_dials();
-        assert_eq!(dials.len(), 1);
-        assert_eq!(dials[0].0, target_refl);
-        assert_eq!(dials[0].1[0], Kind::HandshakeInit as u8);
+        let fanout_len = 1 + 2 * PUNCH_SEQUENTIAL_RADIUS as usize;
+        assert_eq!(dials.len(), fanout_len);
+        assert_eq!(dials[0].0, target_refl, "first dial is the observed reflexive");
+        for d in &dials {
+            assert_eq!(d.1[0], Kind::HandshakeInit as u8);
+            assert_eq!(d.1, dials[0].1, "all candidates share the same msg1 bytes");
+        }
         assert!(matches!(o.peers[0].session, Session::Initiating { .. }));
         assert!(matches!(o.peers[0].punch, PunchState::Idle));
     }
@@ -723,15 +775,20 @@ mod tests {
             "stage B: peer transitioned to Syncing"
         );
 
-        // Stage C — force the dial deadline past; poll_punch_dials sends
-        // the handshake init at the peer's reflexive endpoint.
+        // Stage C — force the dial deadline past; poll_punch_dials fan-out
+        // dials the handshake init across the observed reflexive plus ±R
+        // sequential candidates (symmetric-NAT port prediction).
         if let PunchState::Syncing { dial_at, .. } = &mut n.peers[0].punch {
             *dial_at = Instant::now() - Duration::from_secs(1);
         }
         let dials = n.poll_punch_dials();
-        assert_eq!(dials.len(), 1);
-        assert_eq!(dials[0].0, target_refl, "init dialed at peer's reflexive");
-        assert_eq!(dials[0].1[0], Kind::HandshakeInit as u8);
+        let fanout_len = 1 + 2 * PUNCH_SEQUENTIAL_RADIUS as usize;
+        assert_eq!(dials.len(), fanout_len);
+        assert_eq!(dials[0].0, target_refl, "first dial is the observed reflexive");
+        for d in &dials {
+            assert_eq!(d.1[0], Kind::HandshakeInit as u8);
+            assert_eq!(d.1, dials[0].1, "all candidates share the same msg1 bytes");
+        }
         assert!(
             matches!(n.peers[0].session, Session::Initiating { .. }),
             "stage C: handshake initiation in flight"
