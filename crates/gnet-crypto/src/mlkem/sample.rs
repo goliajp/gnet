@@ -63,6 +63,13 @@ pub fn sample_ntt_x4(seeds: [&[u8]; 4]) -> [[i16; 256]; 4] {
     }
     #[cfg(not(target_arch = "aarch64"))]
     {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                // SAFETY: AVX2 just runtime-detected.
+                return unsafe { sample_ntt_x4_avx2(seeds) };
+            }
+        }
         [
             sample_ntt(seeds[0]),
             sample_ntt(seeds[1]),
@@ -72,19 +79,20 @@ pub fn sample_ntt_x4(seeds: [&[u8]; 4]) -> [[i16; 256]; 4] {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
-fn sample_ntt_x4_neon(seeds: [&[u8]; 4]) -> [[i16; 256]; 4] {
-    use crate::sha3::{SHAKE128_RATE, ShakeState4};
-    let mut xof = ShakeState4::absorb_short(seeds);
+/// Per-stream rejection-sampling loop shared between the NEON and AVX2
+/// fast paths. The closure produces the next 168-byte block per stream;
+/// the inner logic is bit-identical to four serial `sample_ntt` calls
+/// because the underlying SHAKE128 byte stream is identical per seed.
+fn sample_ntt_x4_with<F>(mut next_block: F) -> [[i16; 256]; 4]
+where
+    F: FnMut(&mut [[u8; crate::sha3::SHAKE128_RATE]; 4]),
+{
+    use crate::sha3::SHAKE128_RATE;
     let mut a = [[0i16; 256]; 4];
     let mut j = [0usize; 4];
     let mut bufs = [[0u8; SHAKE128_RATE]; 4];
     while j.iter().any(|&jc| jc < 256) {
-        xof.next_block(&mut bufs);
-        // Per-stream consume what we have; different streams may finish in
-        // different blocks. The bit-exact match with serial sample_ntt
-        // holds because the underlying SHAKE128 byte stream is identical
-        // per seed — 4-way Keccak just produces all four in lockstep.
+        next_block(&mut bufs);
         for s in 0..4 {
             if j[s] >= 256 {
                 continue;
@@ -110,6 +118,31 @@ fn sample_ntt_x4_neon(seeds: [&[u8]; 4]) -> [[i16; 256]; 4] {
         }
     }
     a
+}
+
+#[cfg(target_arch = "aarch64")]
+fn sample_ntt_x4_neon(seeds: [&[u8]; 4]) -> [[i16; 256]; 4] {
+    use crate::sha3::ShakeState4;
+    let mut xof = ShakeState4::absorb_short(seeds);
+    sample_ntt_x4_with(move |bufs| xof.next_block(bufs))
+}
+
+/// AVX2 path. Caller (the `sample_ntt_x4` dispatcher) has already
+/// runtime-detected AVX2.
+///
+/// # Safety
+/// CPU must support AVX2.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn sample_ntt_x4_avx2(seeds: [&[u8]; 4]) -> [[i16; 256]; 4] {
+    use crate::sha3::avx2_x4::ShakeState4Avx2;
+    // SAFETY: target_feature(enable = "avx2") on this fn means we may
+    // freely call other AVX2-gated routines inside.
+    let mut xof = unsafe { ShakeState4Avx2::absorb_short(seeds) };
+    sample_ntt_x4_with(move |bufs| {
+        // SAFETY: same — we're in an AVX2-enabled function.
+        unsafe { xof.next_block(bufs) }
+    })
 }
 
 /// `PRF_2(s, b)` = SHAKE-256(`s ‖ b`) → 128 bytes (`64·η`, η = 2).
