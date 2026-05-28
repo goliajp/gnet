@@ -1,0 +1,43 @@
+[Unit]
+Description=gnet overlay UDP relay daemon
+Documentation=https://github.com/goliajp/portal/tree/develop/crates/gnet-relay-server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gnet-relay-server --listen 0.0.0.0:51820
+Restart=on-failure
+RestartSec=2
+
+# Sandboxing: dedicated dynamic user, no privileges, read-only system.
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+# Process limits.
+LimitNOFILE=4096
+MemoryMax=64M
+
+# Bandwidth accounting — systemctl show exposes IPIngressBytes/IPEgressBytes
+# so AWS data egress cost is visible without external probes. Add
+# `IPAddressDeny=` blocks here if you need an emergency cap.
+IPAccounting=yes
+
+# Stdout/stderr go to journal; the binary itself logs one summary line per
+# minute (peers, forwarded count, bytes in/out).
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
