@@ -171,6 +171,9 @@ as the Rust gate, so the ratios cancel hardware noise.
 |---|---:|---:|---:|
 | AEAD seal 1400B | 1.20 µs | 2.00 µs | **0.63 µs** |
 | AEAD open 1400B | 1.20 µs | 2.02 µs | **0.61 µs** |
+| ML-KEM keygen | **18.8 µs** | 44.7 µs | 47.7 µs |
+| ML-KEM encaps | **16.9 µs** | 42.0 µs | 50.7 µs |
+| ML-KEM decaps | **19.8 µs** | 54.1 µs | 67.6 µs |
 
 **Honest reading**
 

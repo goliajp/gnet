@@ -26,9 +26,10 @@ use core::arch::x86_64::{
     __m256i, _mm256_add_epi16, _mm256_add_epi32, _mm256_castsi256_si128,
     _mm256_cvtepi16_epi32, _mm256_extracti128_si256, _mm256_loadu_si256,
     _mm256_mulhi_epi16, _mm256_mullo_epi16, _mm256_mullo_epi32,
-    _mm256_packs_epi32, _mm256_permute4x64_epi64, _mm256_set1_epi16,
-    _mm256_set1_epi32, _mm256_srai_epi32, _mm256_storeu_si256,
-    _mm256_sub_epi16,
+    _mm256_packs_epi32, _mm256_permute2x128_si256, _mm256_permute4x64_epi64,
+    _mm256_set1_epi16, _mm256_set1_epi32, _mm256_slli_epi32, _mm256_srai_epi32,
+    _mm256_storeu_si256, _mm256_sub_epi16, _mm256_unpackhi_epi16,
+    _mm256_unpacklo_epi16,
 };
 
 /// `a · b · 2^-16 mod q` over 16 lanes. Matches [`super::fqmul`]
@@ -246,5 +247,122 @@ pub(super) unsafe fn invntt_avx2(r: &mut [i16; 256]) {
         let scaled = fqmul_x16(f_v, rj);
         _mm256_storeu_si256(r.as_mut_ptr().add(j) as *mut __m256i, scaled);
         j += 16;
+    }
+}
+
+/// Pre-computed zeta vectors for [`ntt_mul_into_avx2`], one row of 16 i16 per
+/// 32-coefficient chunk (= 8 scalar iterations, 16 base multiplications). Each
+/// row is `[+z_0, -z_0, +z_1, -z_1, ..., +z_7, -z_7]` matching the alternating
+/// ±-zeta rule the scalar `lo basemul / hi basemul` pair encodes — applied
+/// lane-wise to the de-interleaved `a_odd · b_odd` product before adding it
+/// into `c0`.
+const fn build_zeta_mul_vecs_avx2() -> [[i16; 16]; 8] {
+    let mut out = [[0i16; 16]; 8];
+    let mut chunk = 0;
+    while chunk < 8 {
+        let mut k = 0;
+        while k < 8 {
+            let z = ZETAS[64 + 8 * chunk + k];
+            out[chunk][2 * k] = z;
+            out[chunk][2 * k + 1] = -z;
+            k += 1;
+        }
+        chunk += 1;
+    }
+    out
+}
+
+static ZETA_MUL_VECS_AVX2: [[i16; 16]; 8] = build_zeta_mul_vecs_avx2();
+
+/// De-interleave 32 i16 (loaded as two `__m256i`) into `(evens, odds)` —
+/// `evens` carries the per-pair index-0 coefficients, `odds` the index-1
+/// ones. AVX2 has no native 16-bit `vld2` analogue, so we sign-extend each
+/// half to i32 lanes (shift-and-arith-shift for the lo half, plain arith
+/// shift for the hi half), narrow back with signed-saturating `packs_epi32`
+/// — values fit in i16 so no saturation actually clips — and fix the
+/// standard cross-128-bit-lane interleave with `permute4x64::<0xD8>`
+/// (swap qword 1 ↔ qword 2). Bit-identical to the NEON `vld2q_s16` step.
+#[target_feature(enable = "avx2")]
+unsafe fn deinterleave_x16(a_lo: __m256i, a_hi: __m256i) -> (__m256i, __m256i) {
+    // Evens: low i16 of each i32, sign-extended via `<<16 >>16`.
+    let evens_lo32 = _mm256_srai_epi32::<16>(_mm256_slli_epi32::<16>(a_lo));
+    let evens_hi32 = _mm256_srai_epi32::<16>(_mm256_slli_epi32::<16>(a_hi));
+    // Odds: high i16 of each i32, sign-extended via plain `>>16`.
+    let odds_lo32 = _mm256_srai_epi32::<16>(a_lo);
+    let odds_hi32 = _mm256_srai_epi32::<16>(a_hi);
+
+    let evens_packed = _mm256_packs_epi32(evens_lo32, evens_hi32);
+    let odds_packed = _mm256_packs_epi32(odds_lo32, odds_hi32);
+
+    // packs_epi32 cross-128-bit-lane order is [a_lo_lo, b_lo_lo, a_lo_hi,
+    // b_lo_hi]; 0xD8 = 11_01_10_00 swaps qwords 1↔2 to give the natural
+    // 0..15 i16 order. Same fix barrett_reduce_x16 uses.
+    let evens = _mm256_permute4x64_epi64::<0xD8>(evens_packed);
+    let odds = _mm256_permute4x64_epi64::<0xD8>(odds_packed);
+    (evens, odds)
+}
+
+/// Inverse of [`deinterleave_x16`]: take two i16x16 vectors `c0` (even-index
+/// outputs) and `c1` (odd-index outputs) and produce two `__m256i` carrying
+/// the 32-coefficient interleaved result, ready for `_mm256_storeu_si256`.
+/// Uses `unpacklo/hi_epi16` (within-lane interleave) + `permute2x128_si256`
+/// to combine across the 128-bit lane boundary.
+#[target_feature(enable = "avx2")]
+unsafe fn interleave_back_x16(c0: __m256i, c1: __m256i) -> (__m256i, __m256i) {
+    // Within-lane interleave: lane 0 mixes c0[0..3] with c1[0..3] (lo) and
+    // c0[4..7] with c1[4..7] (hi); same in lane 1 for c[8..11] and c[12..15].
+    let unpack_lo = _mm256_unpacklo_epi16(c0, c1);
+    let unpack_hi = _mm256_unpackhi_epi16(c0, c1);
+    // Combine to natural 0..31 i16 sequence:
+    //   out_lo = low 128 of unpack_lo (c0/c1[0..3]) + low 128 of unpack_hi (c0/c1[4..7])
+    //   out_hi = high 128 of unpack_lo (c0/c1[8..11]) + high 128 of unpack_hi (c0/c1[12..15])
+    let out_lo = _mm256_permute2x128_si256::<0x20>(unpack_lo, unpack_hi);
+    let out_hi = _mm256_permute2x128_si256::<0x31>(unpack_lo, unpack_hi);
+    (out_lo, out_hi)
+}
+
+/// AVX2 16-way pointwise multiplication in the NTT domain. Processes 8 scalar
+/// reference iterations at a time (= 16 base mults = 32 output coefficients
+/// per SIMD step). Mirror of [`super::neon::ntt_mul_into_neon`], scaled from
+/// the 8-way NEON layout to AVX2's 16-way `__m256i`. Matches the scalar
+/// [`super::ntt_mul_into_scalar`] bit-for-bit; verified by
+/// `ntt_mul_avx2_matches_scalar` in [`super::tests`].
+///
+/// # Safety
+/// Caller must ensure the CPU supports AVX2.
+#[target_feature(enable = "avx2")]
+pub(super) unsafe fn ntt_mul_into_avx2(
+    a: &[i16; 256],
+    b: &[i16; 256],
+    r: &mut [i16; 256],
+) {
+    for chunk in 0..8 {
+        let off = chunk * 32;
+        let a_lo = _mm256_loadu_si256(a.as_ptr().add(off) as *const __m256i);
+        let a_hi = _mm256_loadu_si256(a.as_ptr().add(off + 16) as *const __m256i);
+        let b_lo = _mm256_loadu_si256(b.as_ptr().add(off) as *const __m256i);
+        let b_hi = _mm256_loadu_si256(b.as_ptr().add(off + 16) as *const __m256i);
+
+        let (a_even, a_odd) = deinterleave_x16(a_lo, a_hi);
+        let (b_even, b_odd) = deinterleave_x16(b_lo, b_hi);
+
+        let zeta_v = _mm256_loadu_si256(
+            ZETA_MUL_VECS_AVX2[chunk].as_ptr() as *const __m256i,
+        );
+
+        // c0 = a_even·b_even + zeta·(a_odd·b_odd)
+        let aobo = fqmul_x16(a_odd, b_odd);
+        let zaobo = fqmul_x16(zeta_v, aobo);
+        let aebe = fqmul_x16(a_even, b_even);
+        let c0 = _mm256_add_epi16(aebe, zaobo);
+
+        // c1 = a_even·b_odd + a_odd·b_even
+        let aebo = fqmul_x16(a_even, b_odd);
+        let aobe = fqmul_x16(a_odd, b_even);
+        let c1 = _mm256_add_epi16(aebo, aobe);
+
+        let (r_lo, r_hi) = interleave_back_x16(c0, c1);
+        _mm256_storeu_si256(r.as_mut_ptr().add(off) as *mut __m256i, r_lo);
+        _mm256_storeu_si256(r.as_mut_ptr().add(off + 16) as *mut __m256i, r_hi);
     }
 }

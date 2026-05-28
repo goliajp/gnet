@@ -179,7 +179,18 @@ pub fn ntt_mul_into(a: &[i16; 256], b: &[i16; 256], r: &mut [i16; 256]) {
     {
         ntt_mul_into_neon(a, b, r);
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::is_x86_feature_detected!("avx2") {
+            // SAFETY: AVX2 just detected at runtime.
+            unsafe {
+                avx2::ntt_mul_into_avx2(a, b, r);
+            }
+            return;
+        }
+        ntt_mul_into_scalar(a, b, r);
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     {
         ntt_mul_into_scalar(a, b, r);
     }
@@ -312,6 +323,33 @@ mod tests {
             let mut scalar_inv = scalar_fwd;
             super::invntt_scalar(&mut scalar_inv);
             assert_eq!(neon_inv, scalar_inv, "inv ntt seed {seed}");
+        }
+    }
+
+    /// On x86_64 with AVX2 the AVX2 ntt_mul must match the scalar reference
+    /// lane-for-lane, for any inputs (after both operands have been brought
+    /// to the NTT domain). Same contract as `ntt_mul_neon_matches_scalar`
+    /// for the aarch64 path. Skipped at runtime on hosts without AVX2.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn ntt_mul_avx2_matches_scalar() {
+        if !std::is_x86_feature_detected!("avx2") {
+            eprintln!("skipping: host has no AVX2");
+            return;
+        }
+        for seed in 0..32u64 {
+            let a = sample(seed);
+            let b = sample(seed.wrapping_add(0x9e37));
+            let mut na = a;
+            super::ntt(&mut na);
+            let mut nb = b;
+            super::ntt(&mut nb);
+
+            let mut avx2_r = [0i16; 256];
+            super::ntt_mul_into(&na, &nb, &mut avx2_r);
+            let mut scalar_r = [0i16; 256];
+            super::ntt_mul_into_scalar(&na, &nb, &mut scalar_r);
+            assert_eq!(avx2_r, scalar_r, "seed {seed}");
         }
     }
 
