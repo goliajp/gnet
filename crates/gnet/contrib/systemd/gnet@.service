@@ -37,10 +37,11 @@ KillSignal=SIGTERM
 KillMode=control-group
 TimeoutStopSec=10s
 
-# Hardening (conservative — daemon still needs root + CAP_NET_ADMIN + /dev/net/tun).
-# Wider sandbox flags (PrivateDevices, RestrictAddressFamilies, ProtectKernel*)
-# are deliberately omitted until verified not to break tun ioctl / netlink /
-# raw UDP paths; revisit once Step 1.4 cross-build deploy is green.
+# Hardening — daemon still needs root + CAP_NET_ADMIN + /dev/net/tun, so
+# PrivateDevices and DynamicUser are not compatible. The rest of the sandbox
+# was verified on Debian 13 + kernel 6.12 (v0.14): daemon starts, opens the
+# tun fd, runs the UDP socket loop, ip-route configures the overlay, all
+# under these flags.
 NoNewPrivileges=true
 ProtectSystem=strict
 ReadWritePaths=/etc/gnet
@@ -49,6 +50,19 @@ PrivateTmp=true
 LockPersonality=true
 RestrictNamespaces=true
 RestrictSUIDSGID=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictRealtime=true
+MemoryDenyWriteExecute=true
+# AF_INET/INET6 for the UDP socket and curl (HTTP coordinator), AF_NETLINK
+# for the `ip addr add` / `ip link set` calls used to configure the tun.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK
+
+# Bandwidth accounting — systemctl show exposes IPIngressBytes/IPEgressBytes
+# so operators can see per-instance traffic without external probes.
+IPAccounting=true
 
 [Install]
 WantedBy=multi-user.target
