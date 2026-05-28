@@ -165,6 +165,13 @@ as the Rust gate, so the ratios cancel hardware noise.
 | Hex decode 32B | **21.8 ns** | 26.1 ns | 28.6 ns | 58.2 ns |
 | BLAKE2s-256 64B | (gnet only) | — | 122.6 ns | — (BLAKE2b 114 ns) |
 
+### lx64 (Intel i7-10700K Comet Lake, AVX2) — 2026-05-28
+
+| 类别 | gnet | RustCrypto | Go stdlib |
+|---|---:|---:|---:|
+| AEAD seal 1400B | 1.20 µs | 2.00 µs | **0.63 µs** |
+| AEAD open 1400B | 1.20 µs | 2.02 µs | **0.61 µs** |
+
 **Honest reading**
 
 - gnet wins **5 of 8** comparable categories on Apple Silicon.
@@ -185,6 +192,17 @@ as the Rust gate, so the ratios cancel hardware noise.
   `sodium_bin2hex` uses bytewise SWAR + table lookup; the gain here is
   small absolute (10 ns) and a cold path (per-config-line, not per-packet),
   so not a polish priority.
+- **lx64 AEAD AVX2 trails Go stdlib by ~90% (1.20 µs vs 0.63 µs)** — far
+  worse than the ~7-9% Apple ARM64 gap. x86_64 AVX2 has only 16 physical
+  YMM registers vs ARM64 NEON's 32, while the 8-way ChaCha20 layout needs
+  16 state + 16 init = 32 logical vectors live simultaneously. LLVM
+  spills half the working set to stack every inner round (`subq $1608,
+  %rsp`, 9 spill slots inside the round body), and Go's `chacha_amd64.s`
+  + `sum_amd64.s` hand-rolled assembly side-steps this with manually
+  scheduled register tiling. The v0.10 pre-flight verified independent
+  SSA locals do not help on x86_64 (0.2–0.4% regression, ceiling is
+  physical not analytic) — see [ASM_NOTES.md](ASM_NOTES.md) v0.10
+  section for the data + decision update.
 
 Reproduce:
 

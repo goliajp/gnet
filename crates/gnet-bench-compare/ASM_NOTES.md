@@ -231,6 +231,108 @@ This document moves back to the deferred queue. **Reread it when**:
 Until then, v0.9 closed half the AEAD gap from the deferred list without
 spending the asm-routing engineering budget.
 
+## v0.10 update (2026-05-28) — x86_64 AVX2 pre-flight: physical ceiling
+
+Same protocol as v0.9, applied to the x86_64 AVX2 path on lx64
+(Intel i7-10700K Comet Lake, Debian 13 trixie, Go 1.24.0). Bottom-line
+result: **the v0.9 trick does not transfer**. The ceiling on x86_64 AVX2
+is physical (16 YMM registers vs ~32 logical vectors needed for 8-way
+ChaCha20), not LLVM-analytical.
+
+### lx64 baseline + Go cross-language reference (filled this cycle)
+
+Until v0.10 lx64 had no Go installed and no cross-language reference
+on x86_64. v0.10 installed Go 1.24.0 in `/tmp/go` (no apt, official
+tarball — matches the deferred handoff candidate "Phase 4 lx64 Go
+bench"). Five paired runs:
+
+| Op | gnet lx64 (AVX2) | Go stdlib lx64 | gap |
+|---|---:|---:|---:|
+| AEAD seal 1400B | 1197.7 ns | 631.5 ns | **+89.6%** |
+| AEAD open 1400B | 1201.7 ns | 605.2 ns | **+98.5%** |
+
+Both gnet and Go ran ~0.1-0.5 ns spread across 5 runs — lx64 is
+dedicated hardware without thermal throttling, so the numbers are
+near-deterministic. The 89-99% gap is *the gap*, not noise.
+
+This is ~10× the Apple ARM64 gap (7-9%). The cross-language picture
+is now complete on both target ISAs and the ARM64-priority statement
+from the original 2026-05-28 cost study is reinforced, not weakened.
+
+### Tried & rejected on x86_64 (kept for evidence)
+
+**Independent SSA locals in `chacha20::avx2::keystream8`** — the v0.9
+ARM64 winning move, ported identically to x86_64: replace the
+`[__m256i; 16]` array + indexed `qr!` macro with 16 named locals
+(`v0..v15`, `init0..init15`) and a macro that operates on idents
+directly. Measured on lx64 over 5 perf_gate runs each:
+
+| | baseline | indep-SSA | Δ |
+|---|---:|---:|---|
+| seal 5-run min | 1197.7 ns | 1202.2 ns | **+0.4% regression** |
+| open 5-run min | 1201.7 ns | 1204.6 ns | **+0.2% regression** |
+
+Asm-level changes were favourable but tiny:
+- Stack frame: 1608 → 1576 bytes (−32)
+- Inner-round-loop spills: 9 (6 store + 3 load) → 6
+- Inner-round-loop body: 157 → 153 lines
+- Arith instr count: 112 → 112 (unchanged)
+
+So LLVM did move slightly — but the gain didn't materialize at runtime
+because the rate-limiter is the physical YMM register count, not the
+SSA chain shape. **Rolled back.** Apple Silicon won this same change
+~4% because ARM64 NEON has 32 v-registers vs x86_64 AVX2's 16; on
+ARM64 the working set just fits in registers after the array indirection
+is removed, on x86_64 it never does.
+
+### What does x86_64 AVX2 keystream8 actually look like?
+
+cargo rustc --release --emit=asm dump on lx64, inner round loop
+(LBB51_1, 157 lines):
+
+- **9 spills** (6 stores to (%rsp), 3 loads from (%rsp)) inside the
+  157-instruction inner loop, vs ARM64 v0.9's 6 spills in a 35-v-reg
+  world
+- 8 unique YMM registers used **as a low-water mark**; 16-state +
+  per-iter scratch pushes the live set above the file
+- `vmovdqa .LCPI51_5(%rip), %ymm14` and `.LCPI51_6(%rip)` (the rotate
+  shuffle constants for the 16-bit and 8-bit byte-rotations) reloaded
+  from rip-relative tables **inside the hot loop** — zero spare YMM to
+  pin them across rounds
+- 1608-byte stack frame (vs ARM64 384) — sized to spill half the state
+  every round trip
+
+### Decision delta vs original ARM64-priority recommendation
+
+The original cost study put ARM64 inline-asm work at 1-2 weeks and
+x86_64 AVX2 at 1-2 weeks more. v0.10 evidence sharpens that:
+
+- **ARM64 is the right asm investment target if any.** Apple Silicon
+  gap is 7-9% and the physical register file *does* hold most of the
+  working set — meaning hand-allocated asm can close the residual.
+- **x86_64 AVX2 inline-asm has the higher payoff in absolute ns
+  (570 ns/op gap vs 100 ns on ARM64) but also the harder asm work**:
+  hand-tile through a 16-YMM file with state + initial state + temp
+  vectors juggled through scratch slots, mirroring how
+  `chacha_amd64.s` does it. The ~1-2 week estimate likely undercounts.
+- **Intrinsic schedule is exhausted on x86_64.** No further "compiler
+  hint" tweak is going to find the 90% — only ISA-level register
+  scheduling does.
+
+If a future deployment makes AEAD throughput the bottleneck, the
+ordering becomes: (1) ARM64 NEON inline asm to close the residual
+8-9% on Apple/ARM64 servers (cheapest win); (2) only if x86_64
+deployments are dominant + AEAD is throughput-bound, take on the
+x86_64 AVX2 asm port.
+
+### What v0.10 actually shipped
+
+No source changes. The pre-flight attempted indep-SSA in
+`chacha20::avx2::keystream8` and rolled back when measurement said
+it was a 0.2-0.4% regression — that's the *correct* outcome
+("data-driven abort"), not a failed attempt. Result is the README
+gap row and this ASM_NOTES section.
+
 ## 参考
 
 - Go `chacha20/chacha_arm64.s`：
