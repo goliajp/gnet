@@ -136,7 +136,8 @@ pub(super) fn uplink(
                                 g.peers[i].relay = true;
                                 g.peers[i].relay_endpoint = Some(relay_ep);
                                 eprintln!(
-                                    "peer {i} routed via relay {relay_ep} (default-relay, self_pub={self_known_public}, peer_pub={peer_known_public})"
+                                    "event=peer_routed_via_relay peer={i} alias={} relay={relay_ep} self_pub={self_known_public} peer_pub={peer_known_public}",
+                                    g.peers[i].alias
                                 );
                                 init_dg = g.initiate(i);
                             } else if g.peers[i].endpoint.is_some() {
@@ -281,7 +282,7 @@ fn handle_datagram(
                 let txid = u32::from_le_bytes(*txid);
                 let mut g = ctx.node.lock().expect("node mutex");
                 if g.note_reflexive(txid, observed) {
-                    eprintln!("discovered reflexive endpoint: {observed}");
+                    eprintln!("event=reflexive_discovered endpoint={observed}");
                 }
             }
         }

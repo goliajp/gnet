@@ -134,12 +134,12 @@ pub fn run(config: Config) -> io::Result<()> {
         configure(tun.name(), v6)?;
     }
     eprintln!(
-        "node up on {} ({}{}) with {} peer(s)",
+        "event=node_up tun={} v4={}{} peers={}",
         tun.name(),
         config.address,
         config
             .address6
-            .map(|v| format!(" + {v}"))
+            .map(|v| format!(" v6={v}"))
             .unwrap_or_default(),
         config.peers.len()
     );

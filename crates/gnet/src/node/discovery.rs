@@ -56,12 +56,12 @@ pub(super) fn spawn(node: Arc<Mutex<Node>>, coordinator: String, device_token: O
                     let (added, updated) = apply(&node, &views);
                     if added > 0 || updated > 0 {
                         eprintln!(
-                            "discovery: peer view → +{added} new, {updated} endpoint update(s) ({} from coordinator)",
+                            "event=discovery_poll added={added} updated={updated} total={}",
                             views.len()
                         );
                     }
                 }
-                Err(e) => eprintln!("discovery: poll failed: {e}"),
+                Err(e) => eprintln!("event=discovery_poll_failed error=\"{e}\""),
             }
 
             if let Some(tok) = device_token.as_deref() {
@@ -71,10 +71,10 @@ pub(super) fn spawn(node: Arc<Mutex<Node>>, coordinator: String, device_token: O
                 {
                     match report_endpoint(&coordinator, tok, ep) {
                         Ok(()) => {
-                            eprintln!("endpoint-report: {ep} -> coordinator");
+                            eprintln!("event=endpoint_reported endpoint={ep}");
                             last_reported = Some(ep);
                         }
-                        Err(e) => eprintln!("endpoint-report failed: {e}"),
+                        Err(e) => eprintln!("event=endpoint_report_failed error=\"{e}\""),
                     }
                 }
             }
@@ -205,7 +205,7 @@ pub(super) fn apply(node: &Mutex<Node>, views: &[PeerView]) -> (usize, usize) {
         {
             let p = &mut g.peers[idx];
             eprintln!(
-                "discovery: peer alias={} rotated keys (pubkey changed), resetting session",
+                "event=peer_keys_rotated alias={}",
                 v.alias
             );
             p.public = v.x25519_pubkey;
@@ -237,14 +237,10 @@ pub(super) fn apply(node: &Mutex<Node>, views: &[PeerView]) -> (usize, usize) {
             let p = &mut g.peers[idx];
             let pubkey_changed = p.public != v.x25519_pubkey;
             eprintln!(
-                "discovery: adopting static-conf peer at {} as alias={}{}",
+                "event=peer_adopted vip={} alias={} pubkey_changed={}",
                 p.vip,
                 v.alias,
-                if pubkey_changed {
-                    " (pubkey changed — resetting session)"
-                } else {
-                    ""
-                }
+                pubkey_changed
             );
             p.alias = v.alias.clone();
             p.public = v.x25519_pubkey;

@@ -134,6 +134,16 @@ pub(super) fn complete_initiation(peer: &mut Peer, body: &[u8], from: SocketAddr
             if peer.punched && peer.endpoint != Some(from) {
                 peer.endpoint = Some(from);
             }
+            // Symmetric pair to the existing `event=peer_relay_fallback`
+            // emitted by `expire_handshakes`: the path just came back up
+            // direct, which is the only operational outcome the relay-side
+            // log does not otherwise expose.
+            if peer.punched {
+                eprintln!(
+                    "event=direct_upgrade_succeeded vip={} alias={} endpoint={from}",
+                    peer.vip, peer.alias
+                );
+            }
         }
     }
 }

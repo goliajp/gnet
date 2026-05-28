@@ -199,10 +199,10 @@ impl Node {
             let public = locals.iter().any(|ip| ip == &observed.ip());
             self.self_is_nat = Some(!public);
             eprintln!(
-                "self_is_nat = {} (reflexive {} {} local interface)",
+                "event=self_nat_detected is_nat={} reflexive={} reason={}",
                 !public,
                 observed.ip(),
-                if public { "matches a" } else { "does not match any" }
+                if public { "matches_local_if" } else { "no_local_match" }
             );
         }
         changed
@@ -291,7 +291,8 @@ impl Node {
             self.peers[i].direct_upgrade_at =
                 super::punch::next_direct_upgrade_at(self.peers[i].direct_upgrade_failures);
             eprintln!(
-                "peer {i} tripped to relay fallback after {} punch failures",
+                "event=peer_relay_fallback peer={i} alias={} punch_failures={}",
+                self.peers[i].alias,
                 self.peers[i].punch_failures
             );
         }
