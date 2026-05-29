@@ -141,6 +141,15 @@ pub(super) struct Node {
     pub(super) mlkem_ek: Vec<u8>,
     pub(super) mlkem_dk: Vec<u8>,
     pub(super) peers: Vec<Peer>,
+    /// Dedicated relay servers (gnet-relay-server) advertised by the
+    /// coordinator via `/peers`. Preferred over relay_eligible peers for the
+    /// *data* plane ([`Self::relay_data_endpoint`]) when a peer trips to relay
+    /// fallback — they are always-on and purpose-built for RelayData forwarding.
+    /// NOT used for punch *signaling* (PunchConnect/PunchSync): a relay server
+    /// only honours RelayData and drops signaling frames, so DCUtR rendezvous
+    /// still routes through a gnet peer ([`Self::coordinator_endpoint`]).
+    /// Refreshed every discovery poll; empty when none configured.
+    pub(super) relay_servers: Vec<SocketAddr>,
     /// Our reflexive (public) endpoint as last reported by a peer via an
     /// EndpointReply — the basis for hole punching. `None` until discovered.
     pub(super) reflexive: Option<SocketAddr>,
@@ -276,7 +285,7 @@ impl Node {
         // trip in a second pass: picking a relay endpoint borrows &self, which
         // can't overlap the &mut iteration above.
         for i in tripped {
-            let relay_ep = self.coordinator_endpoint(i);
+            let relay_ep = self.relay_data_endpoint(i);
             self.peers[i].relay = true;
             self.peers[i].relay_endpoint = relay_ep;
             // A fresh trip back to the relay path is logically a failed
@@ -484,6 +493,7 @@ mod tests {
             mlkem_ek: ek.to_vec(),
             mlkem_dk: ek.to_vec(),
             peers,
+            relay_servers: Vec::new(),
             reflexive: None,
             probe_txid: 0,
             self_is_nat: None,

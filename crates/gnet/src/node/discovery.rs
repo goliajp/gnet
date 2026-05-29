@@ -13,9 +13,12 @@
 //! issue. v0.3 work tracks proper peer-leave.
 //!
 //! JSON parsing is hand-rolled, schema-locked to gnet-discover's `/peers`
-//! response. Kept local rather than reusing `join.rs`'s extractors to keep
-//! this module's blast radius contained while the discovery contract is
-//! still evolving.
+//! response — an object `{"peers":[...],"relays":["host:port",...]}` since
+//! v0.17, with a bare-`[...]`-array fallback for pre-v0.17 coordinators. The
+//! `relays` list is fed into `Node.relay_servers` so a peer tripping to relay
+//! fallback prefers a dedicated gnet-relay-server. Kept local rather than
+//! reusing `join.rs`'s extractors to keep this module's blast radius
+//! contained while the discovery contract is still evolving.
 
 use std::io;
 use std::net::{IpAddr, SocketAddr};
@@ -122,8 +125,27 @@ pub(super) fn spawn(
         let mut last_reported: Option<SocketAddr> = None;
         loop {
             match fetch_peers(&coordinator, &our_pk_hex) {
-                Ok(views) => {
+                Ok((views, relays)) => {
                     let (added, updated) = apply(&node, &views);
+                    // Refresh the advertised relay-server set. Cheap to compare;
+                    // logged only on change so a steady deployment stays quiet.
+                    let relays_changed = {
+                        let mut g = node.lock().expect("node mutex");
+                        if g.relay_servers != relays {
+                            g.relay_servers = relays;
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if relays_changed {
+                        let g = node.lock().expect("node mutex");
+                        eprintln!(
+                            "event=relay_servers_updated count={} relays={:?}",
+                            g.relay_servers.len(),
+                            g.relay_servers
+                        );
+                    }
                     if added > 0 || updated > 0 {
                         eprintln!(
                             "event=discovery_poll added={added} updated={updated} total={}",
@@ -202,7 +224,10 @@ pub(super) struct PeerView {
     pub relay_eligible: bool,
 }
 
-fn fetch_peers(coordinator: &str, our_pk_hex: &str) -> io::Result<Vec<PeerView>> {
+fn fetch_peers(
+    coordinator: &str,
+    our_pk_hex: &str,
+) -> io::Result<(Vec<PeerView>, Vec<SocketAddr>)> {
     let url = format!("{coordinator}/peers");
     let out = Command::new("curl")
         .arg("--silent")
@@ -224,7 +249,7 @@ fn fetch_peers(coordinator: &str, our_pk_hex: &str) -> io::Result<Vec<PeerView>>
             out.status.code()
         )));
     }
-    parse_peer_array(&String::from_utf8_lossy(&out.stdout))
+    parse_peers_response(&String::from_utf8_lossy(&out.stdout))
 }
 
 /// Apply a coordinator-provided peer view to `Node.peers`. Returns
@@ -361,11 +386,52 @@ pub(super) fn apply(node: &Mutex<Node>, views: &[PeerView]) -> (usize, usize) {
 
 // ── JSON parsing — schema-locked to /peers response ───────────
 
+/// Parse a `/peers` response into `(peers, relays)`.
+///
+/// The current coordinator returns an object
+/// `{"peers":[...],"relays":["host:port",...]}`. A pre-v0.17 coordinator
+/// returns a bare `[...]` array with no relays. We detect the object shape by
+/// the presence of a top-level `"peers"` key and fall back to the bare-array
+/// parse otherwise, so a node upgraded ahead of its coordinator keeps working
+/// through the rollout window (and vice versa — the relays field is optional).
+fn parse_peers_response(body: &str) -> io::Result<(Vec<PeerView>, Vec<SocketAddr>)> {
+    if find_key(body, "peers").is_some() {
+        let peers_arr = extract_array_after(body, "peers")
+            .ok_or_else(|| io::Error::other("/peers: missing peers array"))?;
+        let mut peers = Vec::new();
+        for obj in split_objects(peers_arr) {
+            peers.push(parse_peer_object(obj)?);
+        }
+        let relays = match extract_array_after(body, "relays") {
+            Some(arr) => parse_relays(arr)?,
+            None => Vec::new(),
+        };
+        Ok((peers, relays))
+    } else {
+        // legacy bare array — no relays advertised.
+        Ok((parse_peer_array(body)?, Vec::new()))
+    }
+}
+
 fn parse_peer_array(body: &str) -> io::Result<Vec<PeerView>> {
     let arr = extract_array(body).ok_or_else(|| io::Error::other("expected JSON array"))?;
     let mut out = Vec::new();
     for obj in split_objects(arr) {
         out.push(parse_peer_object(obj)?);
+    }
+    Ok(out)
+}
+
+/// Parse a JSON array of `host:port` strings into socket addresses. IPv6
+/// literals carry their own `[...]` brackets inside the quotes; `split_strings`
+/// is string-aware so those are not mistaken for array delimiters.
+fn parse_relays(arr: &str) -> io::Result<Vec<SocketAddr>> {
+    let mut out = Vec::new();
+    for s in split_strings(arr) {
+        let addr = s
+            .parse::<SocketAddr>()
+            .map_err(|_| io::Error::other(format!("/peers: bad relay addr {s:?}")))?;
+        out.push(addr);
     }
     Ok(out)
 }
@@ -494,6 +560,46 @@ fn extract_array(body: &str) -> Option<&str> {
         i += 1;
     }
     None
+}
+
+/// Extract the `[...]` array that is the value of `key`, scanning from the
+/// key's position so a *later* array (e.g. `"relays"` after `"peers"`) is
+/// found rather than the body's first array. Returns the array's inner slice
+/// (delimiters excluded), like [`extract_array`].
+fn extract_array_after<'a>(body: &'a str, key: &str) -> Option<&'a str> {
+    let key_pos = find_key(body, key)?;
+    let val = skip_to_value(body, key_pos)?;
+    extract_array(body.get(val..)?)
+}
+
+/// Split a JSON array of strings into the inner text of each quoted element.
+/// Escape-aware enough for our wire (`\\`-escaped chars are skipped); brackets
+/// and colons inside a string (IPv6 endpoints) are treated as content.
+fn split_strings(arr: &str) -> Vec<&str> {
+    let bytes = arr.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] != b'"' {
+            i += 1;
+            continue;
+        }
+        let start = i + 1;
+        let mut j = start;
+        while j < bytes.len() && bytes[j] != b'"' {
+            // skip an escaped char so an escaped quote does not end the string.
+            if bytes[j] == b'\\' {
+                j += 1;
+            }
+            j += 1;
+        }
+        if j >= bytes.len() {
+            break;
+        }
+        out.push(&arr[start..j]);
+        i = j + 1;
+    }
+    out
 }
 
 fn split_objects(arr: &str) -> Vec<&str> {
@@ -652,6 +758,7 @@ mod tests {
             mlkem_ek,
             mlkem_dk,
             peers: Vec::new(),
+            relay_servers: Vec::new(),
             reflexive: None,
             probe_txid: 0,
             self_is_nat: None,
@@ -697,6 +804,51 @@ mod tests {
     fn parse_empty_array() {
         let views = parse_peer_array("[]").unwrap();
         assert!(views.is_empty());
+    }
+
+    #[test]
+    fn parse_response_object_with_relays() {
+        // v0.17 coordinator shape: object carrying peers + relays. IPv6 relay
+        // endpoints bring their own brackets inside the string — the parser
+        // must not mistake them for array delimiters.
+        let ek_hex = hex::encode(&[0x11; mlkem::EK_LEN]);
+        let body = format!(
+            r#"{{"peers":[{{"alias":"alpha","x25519_pubkey":"{pk}","mlkem_ek":"{ek_hex}","overlay_v4":"10.42.42.7","overlay_v6":null,"endpoint":null}}],"relays":["198.51.100.9:65433","[2001:db8::1]:65433"]}}"#,
+            pk = hex::encode(&[0xab; 32]),
+        );
+        let (peers, relays) = parse_peers_response(&body).unwrap();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].alias, "alpha");
+        assert_eq!(
+            relays,
+            vec![
+                "198.51.100.9:65433".parse::<SocketAddr>().unwrap(),
+                "[2001:db8::1]:65433".parse::<SocketAddr>().unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_response_object_empty_relays() {
+        let body = r#"{"peers":[],"relays":[]}"#;
+        let (peers, relays) = parse_peers_response(body).unwrap();
+        assert!(peers.is_empty());
+        assert!(relays.is_empty());
+    }
+
+    #[test]
+    fn parse_response_legacy_bare_array() {
+        // pre-v0.17 coordinator returns a bare array and no relays — a node
+        // upgraded ahead of its coordinator must still parse it.
+        let ek_hex = hex::encode(&[0x11; mlkem::EK_LEN]);
+        let body = format!(
+            r#"[{{"alias":"beta","x25519_pubkey":"{pk}","mlkem_ek":"{ek_hex}","overlay_v4":"10.42.42.8","overlay_v6":null,"endpoint":null}}]"#,
+            pk = hex::encode(&[0xcd; 32]),
+        );
+        let (peers, relays) = parse_peers_response(&body).unwrap();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].alias, "beta");
+        assert!(relays.is_empty(), "bare array advertises no relays");
     }
 
     #[test]

@@ -212,6 +212,7 @@ mod tests {
                 direct_upgrade_at: Instant::now() + super::super::punch::DIRECT_UPGRADE_BASE,
                 direct_upgrade_failures: 0,
             }],
+            relay_servers: Vec::new(),
             reflexive: None,
             probe_txid: 0,
             self_is_nat: None,

@@ -10,7 +10,9 @@
 //! - `POST   /endpoint-report`        — device Bearer; updates own underlay endpoint.
 //! - `POST   /devices/self/rotate`    — device Bearer; swaps own static keys in place,
 //!   keeps alias + overlay + device_token. Used by `gnet rotate-key`.
-//! - `GET    /peers`                  — `x-device-pubkey` header; current peer list.
+//! - `GET    /peers`                  — `x-device-pubkey` header; returns
+//!   `{"peers":[...],"relays":["host:port",...]}` — the peer list plus any
+//!   coordinator-configured relay servers (see `GNET_DISCOVER_RELAYS`).
 
 use std::sync::Arc;
 
@@ -167,6 +169,16 @@ struct PeerView {
     overlay_v6: String,
     endpoint: Option<String>,
     relay_eligible: bool,
+}
+
+/// `GET /peers` response. An object (not a bare array) so the coordinator can
+/// advertise dedicated relay servers alongside the peer list — mirrors the
+/// `peers` field already present in the `/join` response.
+#[derive(Serialize)]
+struct PeersResp {
+    peers: Vec<PeerView>,
+    /// `host:port` of each advertised gnet-relay-server. Empty if none configured.
+    relays: Vec<String>,
 }
 
 async fn join(state: Arc<AppState>, req: Request) -> Response {
@@ -442,13 +454,14 @@ async fn peers(state: Arc<AppState>, req: Request) -> Response {
     if !snapshot.devices.iter().any(|d| d.x25519_pubkey == pk) {
         return Response::text(401, "Unauthorized", "unknown device");
     }
-    let list: Vec<PeerView> = snapshot
+    let peers: Vec<PeerView> = snapshot
         .devices
         .iter()
         .filter(|d| d.x25519_pubkey != pk)
         .map(peer_view)
         .collect();
-    Response::json(&list)
+    let relays = state.config.relays.iter().map(|r| r.to_string()).collect();
+    Response::json(&PeersResp { peers, relays })
 }
 
 // ── helpers ───────────────────────────────────────────────────
@@ -493,6 +506,12 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
 
     async fn spawn_test_server() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        spawn_test_server_with_relays(vec![]).await
+    }
+
+    async fn spawn_test_server_with_relays(
+        relays: Vec<std::net::SocketAddr>,
+    ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
         let mut p = std::env::temp_dir();
         let mut r = [0u8; 8];
         gnet_rand::fill(&mut r);
@@ -506,6 +525,7 @@ mod tests {
                 admin_token: "test-token-1234567890".into(),
                 overlay_v4_prefix: [10, 42, 42],
                 overlay_v6_prefix: [0xfd8d, 0xf090, 0x2ebb, 0],
+                relays,
             },
             store,
             join_tokens: JoinTokenStore::new(),
@@ -627,9 +647,11 @@ mod tests {
         let (st, body) = raw(addr, req_str.as_bytes()).await;
         assert_eq!(st, 200);
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        let peers = v.as_array().unwrap();
+        let peers = v["peers"].as_array().unwrap();
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0]["alias"], "beta");
+        // /peers is an object carrying a relays field (empty by default here).
+        assert_eq!(v["relays"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]
@@ -809,7 +831,7 @@ mod tests {
         let probe = format!("GET /peers HTTP/1.1\r\nhost: x\r\nx-device-pubkey: {pk_other}\r\n\r\n");
         let (_, body) = raw(addr, probe.as_bytes()).await;
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        let alpha = v.as_array().unwrap().iter().find(|p| p["alias"] == "alpha").unwrap();
+        let alpha = v["peers"].as_array().unwrap().iter().find(|p| p["alias"] == "alpha").unwrap();
         assert_eq!(alpha["relay_eligible"], false);
 
         // PATCH alpha → relay_eligible: true
@@ -823,8 +845,33 @@ mod tests {
         // /peers now shows it true
         let (_, body) = raw(addr, probe.as_bytes()).await;
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        let alpha = v.as_array().unwrap().iter().find(|p| p["alias"] == "alpha").unwrap();
+        let alpha = v["peers"].as_array().unwrap().iter().find(|p| p["alias"] == "alpha").unwrap();
         assert_eq!(alpha["relay_eligible"], true);
+    }
+
+    #[tokio::test]
+    async fn peers_advertises_configured_relays() {
+        let relays = vec![
+            "198.51.100.9:65433".parse().unwrap(),
+            "[2001:db8::1]:65433".parse().unwrap(),
+        ];
+        let (addr, _t) = spawn_test_server_with_relays(relays).await;
+        let pk = "a".repeat(64);
+        let _ = enrol_and_join(addr, "alpha", &pk, &"aa".repeat(32)).await;
+
+        let probe = format!("GET /peers HTTP/1.1\r\nhost: x\r\nx-device-pubkey: {pk}\r\n\r\n");
+        let (st, body) = raw(addr, probe.as_bytes()).await;
+        assert_eq!(st, 200);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        // peer list excludes self → empty, but the relays field is populated.
+        assert_eq!(v["peers"].as_array().unwrap().len(), 0);
+        let advertised: Vec<&str> = v["relays"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.as_str().unwrap())
+            .collect();
+        assert_eq!(advertised, vec!["198.51.100.9:65433", "[2001:db8::1]:65433"]);
     }
 
     #[tokio::test]
@@ -888,7 +935,7 @@ mod tests {
         let probe = format!("GET /peers HTTP/1.1\r\nhost: x\r\nx-device-pubkey: {pk_other}\r\n\r\n");
         let (_, body) = raw(addr, probe.as_bytes()).await;
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        let alpha = v.as_array().unwrap().iter().find(|p| p["alias"] == "alpha").unwrap();
+        let alpha = v["peers"].as_array().unwrap().iter().find(|p| p["alias"] == "alpha").unwrap();
         assert_eq!(alpha["x25519_pubkey"], old_pk);
 
         // rotate
@@ -900,7 +947,7 @@ mod tests {
         // /peers now shows the new keys, alias unchanged
         let (_, body) = raw(addr, probe.as_bytes()).await;
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        let alpha = v.as_array().unwrap().iter().find(|p| p["alias"] == "alpha").unwrap();
+        let alpha = v["peers"].as_array().unwrap().iter().find(|p| p["alias"] == "alpha").unwrap();
         assert_eq!(alpha["x25519_pubkey"], new_pk);
         assert_eq!(alpha["mlkem_ek"], new_ek);
     }
@@ -955,7 +1002,7 @@ mod tests {
         let (st, body) = raw(addr, req.as_bytes()).await;
         assert_eq!(st, 200);
         let peers: serde_json::Value = serde_json::from_str(&body).unwrap();
-        let alpha = peers
+        let alpha = peers["peers"]
             .as_array()
             .unwrap()
             .iter()

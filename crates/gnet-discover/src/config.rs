@@ -22,6 +22,11 @@ pub struct Config {
     pub admin_token: String,
     pub overlay_v4_prefix: [u8; 3],
     pub overlay_v6_prefix: [u16; 4],
+    /// Dedicated relay servers (gnet-relay-server) this coordinator advertises
+    /// to its devices via `/peers`. Static config — relay servers hold no gnet
+    /// identity, so they cannot be modelled as devices. Empty = no relay
+    /// advertised (nodes fall back to relay_eligible peers).
+    pub relays: Vec<SocketAddr>,
 }
 
 impl Config {
@@ -44,12 +49,30 @@ impl Config {
             return Err(ConfigError::WeakToken);
         }
 
+        // Comma-separated `host:port` list; empty/unset means no relay servers.
+        // Whitespace around entries is tolerated; a blank entry is skipped.
+        let relays: Vec<SocketAddr> = match std::env::var("GNET_DISCOVER_RELAYS") {
+            Ok(raw) => raw
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    s.parse().map_err(|source| ConfigError::BadAddr {
+                        var: "GNET_DISCOVER_RELAYS",
+                        source,
+                    })
+                })
+                .collect::<Result<_, _>>()?,
+            Err(_) => Vec::new(),
+        };
+
         Ok(Self {
             bind,
             state_path,
             admin_token,
             overlay_v4_prefix: [10, 42, 42],
             overlay_v6_prefix: [0xfd8d, 0xf090, 0x2ebb, 0],
+            relays,
         })
     }
 }

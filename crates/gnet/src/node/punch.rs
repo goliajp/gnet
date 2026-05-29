@@ -92,6 +92,24 @@ impl Node {
             .and_then(|(_, p)| p.endpoint)
     }
 
+    /// A relay endpoint for the *data* plane: where to wrap this peer's traffic
+    /// as `RelayData` when it trips to relay fallback. Prefers a dedicated
+    /// gnet-relay-server (DERP-style, always-on, purpose-built for forwarding
+    /// by dst key), falling back to [`Self::coordinator_endpoint`]'s peer-based
+    /// logic so a deployment that advertises no relay server still relays
+    /// through a `relay_eligible` peer.
+    ///
+    /// Distinct from `coordinator_endpoint` because the two planes have
+    /// different reachability requirements: a relay server forwards only
+    /// `RelayData` and drops punch signaling, so it can carry data but never
+    /// rendezvous — see [`Node::relay_servers`].
+    pub(super) fn relay_data_endpoint(&self, exclude: usize) -> Option<SocketAddr> {
+        self.relay_servers
+            .first()
+            .copied()
+            .or_else(|| self.coordinator_endpoint(exclude))
+    }
+
     /// Handle an inbound PunchConnect that arrived from `from`. Three cases:
     /// relay it (we are the coordinator, not the target); treat it as the reply
     /// we awaited (we are the origin mid-`Connecting`) — measure RTT and send
@@ -308,6 +326,7 @@ mod tests {
             mlkem_ek,
             mlkem_dk,
             peers,
+            relay_servers: Vec::new(),
             reflexive,
             probe_txid: 0,
             self_is_nat: None,
@@ -383,6 +402,42 @@ mod tests {
             None,
         );
         assert!(n2.start_punch(0).is_none());
+    }
+
+    #[test]
+    fn relay_data_endpoint_prefers_relay_server_over_eligible_peer() {
+        let (peer_pub, peer_ek) = identity(6);
+        let (relay_peer_pub, relay_peer_ek) = identity(5);
+        let eligible_ep: SocketAddr = "203.0.113.9:65432".parse().unwrap();
+        let relay_server: SocketAddr = "198.51.100.1:65433".parse().unwrap();
+
+        // peer 0 = a peer with no path; peer 1 = a relay_eligible gnet peer.
+        let mut relay_peer = peer(relay_peer_pub, relay_peer_ek, Some(eligible_ep));
+        relay_peer.relay_eligible = true;
+        let mut n = node(
+            [1u8; 32],
+            vec![peer(peer_pub, peer_ek, None), relay_peer],
+            None,
+        );
+
+        // no relay server configured → falls back to the relay_eligible peer.
+        assert_eq!(n.relay_data_endpoint(0), Some(eligible_ep));
+
+        // a configured relay server wins for the data plane …
+        n.relay_servers = vec![relay_server];
+        assert_eq!(n.relay_data_endpoint(0), Some(relay_server));
+
+        // … but punch signaling still routes through the gnet peer, because a
+        // relay server only forwards RelayData and drops PunchConnect/Sync.
+        assert_eq!(n.coordinator_endpoint(0), Some(eligible_ep));
+    }
+
+    #[test]
+    fn relay_data_endpoint_none_without_relay_or_peer() {
+        let (peer_pub, peer_ek) = identity(6);
+        // single peer, no endpoint, no relay server → nowhere to relay through.
+        let n = node([1u8; 32], vec![peer(peer_pub, peer_ek, None)], None);
+        assert_eq!(n.relay_data_endpoint(0), None);
     }
 
     #[test]

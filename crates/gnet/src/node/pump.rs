@@ -132,7 +132,7 @@ pub(super) fn uplink(
                                 && g.peers[i].endpoint.is_some()
                             {
                                 init_dg = g.initiate(i);
-                            } else if let Some(relay_ep) = g.coordinator_endpoint(i) {
+                            } else if let Some(relay_ep) = g.relay_data_endpoint(i) {
                                 g.peers[i].relay = true;
                                 g.peers[i].relay_endpoint = Some(relay_ep);
                                 eprintln!(
