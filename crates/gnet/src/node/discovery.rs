@@ -146,7 +146,7 @@ pub(super) fn spawn(
                         );
                         last_good = idx;
                     }
-                    let (added, updated) = apply(&node, &views);
+                    let (added, updated, removed) = apply(&node, &views);
                     // Refresh the advertised relay-server set. Cheap to compare;
                     // logged only on change so a steady deployment stays quiet.
                     let relays_changed = {
@@ -166,13 +166,14 @@ pub(super) fn spawn(
                             g.relay_servers
                         );
                     }
-                    if added > 0 || updated > 0 {
+                    if added > 0 || updated > 0 || removed > 0 {
                         eprintln!(
-                            "event=discovery_poll added={added} updated={updated} total={}",
+                            "event=discovery_poll added={added} updated={updated} removed={removed} total={}",
                             views.len()
                         );
                         // the peer set changed — refresh the managed hosts
-                        // block so newly-joined aliases resolve immediately.
+                        // block so newly-joined aliases resolve (and departed
+                        // ones disappear) immediately.
                         hosts.sync(&node);
                     }
                 }
@@ -299,8 +300,14 @@ fn fetch_peers(
 }
 
 /// Apply a coordinator-provided peer view to `Node.peers`. Returns
-/// `(added, updated)` counts for telemetry. Self is filtered server-side, so
-/// any view here is a remote peer.
+/// `(added, updated, removed)` counts for telemetry. Self is filtered
+/// server-side, so any view here is a remote peer.
+///
+/// After the add/update pass, a reconcile drops coordinator-sourced peers
+/// (`pinned == false`) no longer present in `views` — that's peer-leave.
+/// `apply` is only called on a *successful* poll, so a coordinator outage
+/// (which surfaces as an `Err` upstream, skipping `apply`) never mass-removes
+/// the peer table.
 ///
 /// Match order, in priority:
 ///   1. by pubkey — the common case (endpoint/flag refresh)
@@ -315,7 +322,7 @@ fn fetch_peers(
 ///      unknown on the relay's peer table. Production fault, observed
 ///      mini ↔ lx64 100% loss with stale static `peer` line in mini's
 ///      conf.
-pub(super) fn apply(node: &Mutex<Node>, views: &[PeerView]) -> (usize, usize) {
+pub(super) fn apply(node: &Mutex<Node>, views: &[PeerView]) -> (usize, usize, usize) {
     let mut g = node.lock().expect("node mutex");
     let mut added = 0usize;
     let mut updated = 0usize;
@@ -408,6 +415,8 @@ pub(super) fn apply(node: &Mutex<Node>, views: &[PeerView]) -> (usize, usize) {
         // 4. genuinely new peer.
         g.peers.push(Peer {
             alias: v.alias.clone(),
+            // coordinator-sourced — eligible for peer-leave removal.
+            pinned: false,
             public: v.x25519_pubkey,
             mlkem_ek: v.mlkem_ek.clone(),
             vip: v.overlay_v4,
@@ -427,7 +436,17 @@ pub(super) fn apply(node: &Mutex<Node>, views: &[PeerView]) -> (usize, usize) {
         });
         added += 1;
     }
-    (added, updated)
+    // peer-leave reconcile — drop coordinator-sourced peers (pinned == false)
+    // that are no longer advertised. The add/update pass above has already
+    // moved any rotated peer's `public` to its new key, so matching the live
+    // set by pubkey keeps rotations and adoptions; only genuinely-vanished
+    // coordinator peers fall out. Pinned (static-conf) peers always survive.
+    let present: std::collections::HashSet<[u8; 32]> =
+        views.iter().map(|v| v.x25519_pubkey).collect();
+    let before = g.peers.len();
+    g.peers.retain(|p| p.pinned || present.contains(&p.public));
+    let removed = before - g.peers.len();
+    (added, updated, removed)
 }
 
 // ── JSON parsing — schema-locked to /peers response ───────────
@@ -936,6 +955,89 @@ mod tests {
     }
 
     #[test]
+    fn apply_removes_vanished_coordinator_peer() {
+        // alpha + beta arrive from the coordinator; a later poll drops beta —
+        // beta (pinned=false) must be reconciled out, alpha stays.
+        let node = make_node_with_self_key([0xcd; 32]);
+        let alpha = PeerView {
+            alias: "alpha".into(),
+            x25519_pubkey: fake_pk(0xaa),
+            mlkem_ek: fake_ek(),
+            overlay_v4: "10.42.42.2".parse().unwrap(),
+            overlay_v6: None,
+            endpoint: None,
+            relay_eligible: false,
+        };
+        let beta = PeerView {
+            alias: "beta".into(),
+            x25519_pubkey: fake_pk(0xbb),
+            mlkem_ek: fake_ek(),
+            overlay_v4: "10.42.42.3".parse().unwrap(),
+            overlay_v6: None,
+            endpoint: None,
+            relay_eligible: false,
+        };
+        let (added, _, removed) = apply(&node, &[alpha.clone(), beta]);
+        assert_eq!(added, 2);
+        assert_eq!(removed, 0);
+
+        // next poll: only alpha present → beta leaves
+        let (added, updated, removed) = apply(&node, &[alpha]);
+        assert_eq!(added, 0);
+        assert_eq!(updated, 0);
+        assert_eq!(removed, 1, "vanished coordinator peer is reconciled out");
+        let g = node.lock().unwrap();
+        assert_eq!(g.peers.len(), 1);
+        assert_eq!(g.peers[0].alias, "alpha");
+    }
+
+    #[test]
+    fn reconcile_never_removes_pinned_static_peer() {
+        // a static-conf peer (pinned=true) must survive a poll that doesn't
+        // mention it — the conf is the operator's explicit intent.
+        let node = make_node_with_self_key([0xcd; 32]);
+        {
+            let mut g = node.lock().unwrap();
+            g.peers.push(Peer {
+                alias: String::new(),
+                pinned: true,
+                public: fake_pk(0x11),
+                mlkem_ek: fake_ek(),
+                vip: "10.42.42.9".parse().unwrap(),
+                vip6: None,
+                endpoint: Some("1.1.1.1:65432".parse().unwrap()),
+                rx_index: 0,
+                tx_index: 0,
+                session: Session::Idle,
+                punch: PunchState::Idle,
+                punched: false,
+                punch_failures: 0,
+                relay: false,
+                relay_endpoint: None,
+                relay_eligible: false,
+                direct_upgrade_at: Instant::now() + DIRECT_UPGRADE_BASE,
+                direct_upgrade_failures: 0,
+            });
+        }
+        // a coordinator poll that lists a different peer entirely
+        let other = PeerView {
+            alias: "other".into(),
+            x25519_pubkey: fake_pk(0xaa),
+            mlkem_ek: fake_ek(),
+            overlay_v4: "10.42.42.2".parse().unwrap(),
+            overlay_v6: None,
+            endpoint: None,
+            relay_eligible: false,
+        };
+        let (added, _, removed) = apply(&node, &[other]);
+        assert_eq!(added, 1);
+        assert_eq!(removed, 0, "pinned static peer is never reconciled out");
+        let g = node.lock().unwrap();
+        assert_eq!(g.peers.len(), 2, "static peer + the new coordinator peer");
+        assert!(g.peers.iter().any(|p| p.pinned && p.public == fake_pk(0x11)));
+    }
+
+    #[test]
     fn apply_adds_new_peer() {
         let node = make_node_with_self_key([0xcd; 32]);
         let v = PeerView {
@@ -947,7 +1049,7 @@ mod tests {
             endpoint: Some("1.2.3.4:51820".parse().unwrap()),
             relay_eligible: false,
         };
-        let (added, updated) = apply(&node, &[v]);
+        let (added, updated, _) = apply(&node, &[v]);
         assert_eq!(added, 1);
         assert_eq!(updated, 0);
         let g = node.lock().unwrap();
@@ -981,7 +1083,7 @@ mod tests {
             endpoint: Some("2.2.2.2:51820".parse().unwrap()),
             relay_eligible: false,
         };
-        let (added, updated) = apply(&node, &[v1]);
+        let (added, updated, _) = apply(&node, &[v1]);
         assert_eq!(added, 0);
         assert_eq!(updated, 1);
         let g = node.lock().unwrap();
@@ -1005,7 +1107,7 @@ mod tests {
             relay_eligible: false,
         };
         let _ = apply(&node, std::slice::from_ref(&v));
-        let (added, updated) = apply(&node, &[v]);
+        let (added, updated, _) = apply(&node, &[v]);
         assert_eq!(added, 0);
         assert_eq!(updated, 0);
         assert_eq!(node.lock().unwrap().peers.len(), 1);
@@ -1028,7 +1130,7 @@ mod tests {
             endpoint: Some("1.1.1.1:51820".parse().unwrap()),
             relay_eligible: false,
         };
-        let (added, _) = apply(&node, &[v0]);
+        let (added, _, _) = apply(&node, &[v0]);
         assert_eq!(added, 1);
 
         // simulate an active session + non-zero indices so we can verify
@@ -1051,7 +1153,7 @@ mod tests {
             endpoint: Some("2.2.2.2:51820".parse().unwrap()),
             relay_eligible: false,
         };
-        let (added, updated) = apply(&node, &[v1]);
+        let (added, updated, _) = apply(&node, &[v1]);
         assert_eq!(added, 0, "rotation must not push a second peer entry");
         assert_eq!(updated, 1);
 
@@ -1081,6 +1183,7 @@ mod tests {
             let mut g = node.lock().unwrap();
             g.peers.push(Peer {
                 alias: String::new(),
+                pinned: true, // static-conf seed — must survive reconcile
                 public: fake_pk(0xab), // ORIGINAL key
                 mlkem_ek: fake_ek(),
                 vip: "10.42.42.5".parse().unwrap(),
@@ -1109,7 +1212,7 @@ mod tests {
             endpoint: Some("2.2.2.2:65432".parse().unwrap()),
             relay_eligible: false,
         };
-        let (added, updated) = apply(&node, &[v]);
+        let (added, updated, _) = apply(&node, &[v]);
         assert_eq!(added, 0, "static-conf row must be adopted, not duplicated");
         assert_eq!(updated, 1);
         let g = node.lock().unwrap();
@@ -1149,7 +1252,7 @@ mod tests {
             endpoint: None,
             relay_eligible: false,
         };
-        let (added, updated) = apply(&node, &[with_alias]);
+        let (added, updated, _) = apply(&node, &[with_alias]);
         assert_eq!(added, 0);
         assert_eq!(updated, 1, "alias backfill counts as one update");
         assert_eq!(node.lock().unwrap().peers[0].alias, "alpha");

@@ -338,6 +338,7 @@ mod tests {
     fn peer(public: [u8; 32], ek: Vec<u8>, endpoint: Option<SocketAddr>) -> Peer {
         Peer {
             alias: String::new(),
+            pinned: false,
             public,
             mlkem_ek: ek
                 .into_boxed_slice()

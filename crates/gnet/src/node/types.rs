@@ -80,6 +80,13 @@ pub(super) struct Peer {
     /// same peer with rotated keys and resets the session in-place.
     /// Empty string for peers loaded from static conf (no alias source).
     pub(super) alias: String,
+    /// True for peers written in the static conf — discovery's reconcile never
+    /// removes them, even if the coordinator stops advertising them (the conf
+    /// is the operator's explicit intent and outranks coordinator removal; a
+    /// static peer the coordinator later adopts keeps `pinned = true`). False
+    /// for peers added from a `/peers` poll: those are coordinator-authoritative
+    /// and get removed when they vanish from a successful poll (peer-leave).
+    pub(super) pinned: bool,
     pub(super) public: [u8; 32],
     pub(super) mlkem_ek: Box<[u8; mlkem::EK_LEN]>,
     pub(super) vip: IpAddr,
@@ -491,6 +498,7 @@ mod tests {
     pub(super) fn test_peer(ek: &[u8], session: Session, endpoint: Option<SocketAddr>) -> Peer {
         Peer {
             alias: String::new(),
+            pinned: false,
             public: [0u8; 32],
             mlkem_ek: Box::<[u8; mlkem::EK_LEN]>::try_from(ek.to_vec().into_boxed_slice())
                 .expect("test ek must be EK_LEN bytes"),

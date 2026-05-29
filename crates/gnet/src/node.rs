@@ -168,6 +168,8 @@ pub fn run(config: Config) -> io::Result<()> {
             // on the first coordinator poll. Empty string is a sentinel that
             // means "not yet known", distinct from "explicit empty alias".
             alias: String::new(),
+            // from static conf — pin against discovery's peer-leave reconcile.
+            pinned: true,
             public: p.public,
             mlkem_ek: p.mlkem_ek,
             vip: p.vip,
