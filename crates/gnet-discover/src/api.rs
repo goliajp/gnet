@@ -16,6 +16,10 @@
 //! - `GET    /admin/state`            — admin Bearer; returns the full `State`
 //!   (every device row including `device_token`). A warm-standby coordinator
 //!   polls this to mirror the primary (see A6 backup pull-sync).
+//!
+//! When `Config::primary` is set this instance is a read-only standby: every
+//! non-GET request is refused with `503` so a write can't be accepted and then
+//! silently overwritten by the next pull-sync. The reads above stay available.
 
 use std::sync::Arc;
 
@@ -36,6 +40,22 @@ pub struct AppState {
 pub fn handler() -> Handler<AppState> {
     Arc::new(|req: Request, state: Arc<AppState>| {
         Box::pin(async move {
+            // Warm-standby read-only guard. A standby (`primary` configured)
+            // is a pure read mirror — it pulls the primary's state and would
+            // overwrite any local write on the next sync, so accepting writes
+            // would silently lose them when the primary returns. Every read
+            // endpoint is a GET (/healthz, /peers, /admin/state) and every
+            // write endpoint is non-GET (POST/PATCH/DELETE), so rejecting all
+            // non-GET requests cleanly fences the standby with no per-route
+            // upkeep. Nodes that try to write here fail over to the primary
+            // (see node-side discovery `try_in_order`).
+            if state.config.primary.is_some() && req.method != "GET" {
+                return Response::text(
+                    503,
+                    "Service Unavailable",
+                    "read-only standby: writes go to the primary coordinator",
+                );
+            }
             // dynamic-segment routes first (path-prefix match), then static routes.
             if req.method == "DELETE"
                 && let Some(alias) = req.path.strip_prefix("/admin/devices/")
@@ -548,6 +568,37 @@ mod tests {
                 overlay_v6_prefix: [0xfd8d, 0xf090, 0x2ebb, 0],
                 relays,
                 primary: None,
+                sync_interval: std::time::Duration::from_secs(10),
+            },
+            store,
+            join_tokens: JoinTokenStore::new(),
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let h = handler();
+        let task = tokio::spawn(async move {
+            let _ = crate::http::serve(listener, state, h).await;
+        });
+        (addr, task)
+    }
+
+    /// A standby instance: `primary` configured ⇒ the read-only guard is on.
+    async fn spawn_standby_server() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let mut p = std::env::temp_dir();
+        let mut r = [0u8; 8];
+        gnet_rand::fill(&mut r);
+        p.push(format!("gnet-discover-standbytest-{}.json", gnet_hex::encode(&r)));
+
+        let store = Store::load(&p).await.unwrap();
+        let state = Arc::new(AppState {
+            config: Config {
+                bind: "127.0.0.1:0".parse().unwrap(),
+                state_path: p.clone(),
+                admin_token: "test-token-1234567890".into(),
+                overlay_v4_prefix: [10, 42, 42],
+                overlay_v6_prefix: [0xfd8d, 0xf090, 0x2ebb, 0],
+                relays: vec![],
+                primary: Some("http://127.0.0.1:1".into()),
                 sync_interval: std::time::Duration::from_secs(10),
             },
             store,
@@ -1112,6 +1163,29 @@ mod tests {
         let (addr, _t) = spawn_test_server().await;
         let (st, _) = raw(addr, &admin_state_req("wrong-token-12345")).await;
         assert_eq!(st, 401);
+    }
+
+    #[tokio::test]
+    async fn standby_rejects_writes_with_503() {
+        let (addr, _t) = spawn_standby_server().await;
+        // POST write fenced off
+        let (st, _) = raw(addr, &enrol_req("alpha", "test-token-1234567890")).await;
+        assert_eq!(st, 503, "standby must refuse enrol");
+        // dynamic-segment write (DELETE /admin/devices/<alias>) also fenced
+        let (st, _) = raw(addr, &delete_device_req("alpha", "test-token-1234567890")).await;
+        assert_eq!(st, 503, "standby must refuse device delete");
+    }
+
+    #[tokio::test]
+    async fn standby_allows_reads() {
+        let (addr, _t) = spawn_standby_server().await;
+        // liveness probe
+        let (st, _) = raw(addr, b"GET /healthz HTTP/1.1\r\nhost: x\r\n\r\n").await;
+        assert_eq!(st, 200);
+        // state export (a GET) is exactly what a downstream standby-of-a-standby
+        // or an operator would read — must stay available.
+        let (st, body) = raw(addr, &admin_state_req("test-token-1234567890")).await;
+        assert_eq!(st, 200, "{body}");
     }
 
     #[tokio::test]
