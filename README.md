@@ -10,13 +10,12 @@ validated against its published RFC / NIST known-answer vectors.
 
 ## Status
 
-Pre-1.0. Tagged `gnet-v0.12` (May 2026). See [crates/PUBLISH.md](crates/PUBLISH.md)
-for the publish topology — Tier 0 leaf crates first, then Tier 1, then the
-daemon. The `gnet` daemon itself runs internally on a small fleet
-(macOS arm64 + Linux x86_64 + AWS Graviton aarch64); public crates.io
-releases follow the open-source-readiness milestone (KAT vectors,
-SECURITY.md, fuzzing harness — see the v1.0 roadmap in this repo's
-RFC dir once it lands).
+Pre-1.0. Tagged `gnet-v0.17` (May 2026). The `gnet` daemon runs internally on
+a small fleet (macOS arm64 + Linux x86_64 + AWS Graviton aarch64). The path to
+**gnet 1.0 — going public on GitHub** is tracked in [ROADMAP.md](ROADMAP.md).
+Publishing the zero-dependency library crates ("stones") to crates.io is a
+separate, post-1.0 effort; see [crates/PUBLISH.md](crates/PUBLISH.md) for the
+publish topology when that lands.
 
 ## What's in the box
 
