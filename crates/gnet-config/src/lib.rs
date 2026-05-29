@@ -20,6 +20,14 @@
 //!                            # Absent = auto-detect (reflexive vs. local IFs).
 //!                            # Set false on AWS / 1:1-NAT hosts where the
 //!                            # heuristic would mis-classify as NAT'd.
+//! alias    <name>            # optional: this node's coordinator alias; written
+//!                            # as our own `gnet-<alias>` entry in the managed
+//!                            # /etc/hosts block. Absent = no self entry.
+//! manage_hosts <true|false>  # optional: keep the gnet block in the hosts file
+//!                            # fresh as the coordinator peer set changes
+//!                            # (default true). false = never touch hosts.
+//! hosts_path <path>          # optional: file to splice the gnet block into
+//!                            # (default /etc/hosts).
 //! peer <pubkey-64hex> <mlkem-ek-hex> <vip4>[,<vip6>] [endpoint]
 //! peer <pubkey-64hex> <mlkem-ek-hex> <vip4>[,<vip6>] [endpoint]
 //! ```
@@ -35,6 +43,7 @@
 #![forbid(unsafe_code)]
 
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use gnet_crypto::mlkem;
@@ -95,6 +104,21 @@ pub struct Config {
     /// local interface IP — the auto-detection would mis-classify them as
     /// NAT'd and pay the DCUtR coordinator round-trip needlessly.
     pub behind_nat: Option<bool>,
+    /// This node's coordinator alias, used to write our own
+    /// `gnet-<alias>` → overlay-IP entry into the managed `/etc/hosts`
+    /// block. `None` (no `alias` directive) writes peer entries only — the
+    /// daemon still resolves other peers, just not its own overlay name.
+    pub alias: Option<String>,
+    /// Whether the daemon keeps the gnet-managed block in the hosts file
+    /// fresh as the coordinator peer set changes. Defaults to `true`
+    /// (directive absent) so a coordinator-driven node self-heals a stale
+    /// `/etc/hosts` without operator action; `manage_hosts false` opts out
+    /// (mirrors `gnet join --no-hosts`). Only consulted when a `coordinator`
+    /// is set — a purely static node never runs the discovery splice.
+    pub manage_hosts: bool,
+    /// Override for the hosts file the managed block is spliced into.
+    /// `None` uses the default `/etc/hosts`. Mirrors `gnet join --hosts`.
+    pub hosts_path: Option<PathBuf>,
     /// Configured peers.
     pub peers: Vec<PeerConfig>,
 }
@@ -109,6 +133,9 @@ pub fn parse(text: &str) -> Result<Config, String> {
     let mut coordinator: Option<String> = None;
     let mut device_token: Option<String> = None;
     let mut behind_nat: Option<bool> = None;
+    let mut alias: Option<String> = None;
+    let mut manage_hosts: Option<bool> = None;
+    let mut hosts_path: Option<PathBuf> = None;
     let mut peers = Vec::new();
 
     for (lineno, raw) in text.lines().enumerate() {
@@ -168,6 +195,22 @@ pub fn parse(text: &str) -> Result<Config, String> {
                     _ => return Err(err("behind_nat: must be `true` or `false`")),
                 });
             }
+            "alias" => {
+                let a = t.next().ok_or_else(|| err("alias: missing name"))?;
+                alias = Some(a.to_string());
+            }
+            "manage_hosts" => {
+                let v = t.next().ok_or_else(|| err("manage_hosts: missing value"))?;
+                manage_hosts = Some(match v {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err(err("manage_hosts: must be `true` or `false`")),
+                });
+            }
+            "hosts_path" => {
+                let p = t.next().ok_or_else(|| err("hosts_path: missing path"))?;
+                hosts_path = Some(PathBuf::from(p));
+            }
             "peer" => {
                 let pk = t.next().ok_or_else(|| err("peer: missing public key"))?;
                 let public = hex::decode_32(pk).ok_or_else(|| err("peer: bad 32-byte hex"))?;
@@ -221,6 +264,9 @@ pub fn parse(text: &str) -> Result<Config, String> {
         coordinator,
         device_token,
         behind_nat,
+        alias,
+        manage_hosts: manage_hosts.unwrap_or(true),
+        hosts_path,
         peers,
     })
 }
@@ -321,6 +367,35 @@ peer 0000000000000000000000000000000000000000000000000000000000000003 {ek3} 10.8
         );
         // non-numeric is an error
         assert!(parse(&format!("{base}keepalive soon")).is_err());
+    }
+
+    #[test]
+    fn alias_and_hosts_directives() {
+        let base = "private 0000000000000000000000000000000000000000000000000000000000000001\naddress 10.42.42.7\nlisten 0.0.0.0:65432\n";
+        // defaults: no alias, manage_hosts ON (self-heal by default), no override
+        let c = parse(base).unwrap();
+        assert_eq!(c.alias, None);
+        assert!(c.manage_hosts, "manage_hosts defaults true when absent");
+        assert_eq!(c.hosts_path, None);
+        // explicit values
+        let c = parse(&format!(
+            "{base}alias mini\nmanage_hosts false\nhosts_path /etc/hosts.d/gnet\n"
+        ))
+        .unwrap();
+        assert_eq!(c.alias.as_deref(), Some("mini"));
+        assert!(!c.manage_hosts, "manage_hosts false opts out");
+        assert_eq!(c.hosts_path, Some(PathBuf::from("/etc/hosts.d/gnet")));
+        // manage_hosts true is also accepted explicitly
+        assert!(
+            parse(&format!("{base}manage_hosts true"))
+                .unwrap()
+                .manage_hosts
+        );
+        // bad / missing values error
+        assert!(parse(&format!("{base}manage_hosts maybe")).is_err());
+        assert!(parse(&format!("{base}manage_hosts")).is_err());
+        assert!(parse(&format!("{base}alias")).is_err());
+        assert!(parse(&format!("{base}hosts_path")).is_err());
     }
 
     #[test]

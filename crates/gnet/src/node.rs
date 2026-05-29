@@ -25,6 +25,7 @@ mod types;
 
 use std::io;
 use std::net::{IpAddr, UdpSocket};
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -147,6 +148,12 @@ pub fn run(config: Config) -> io::Result<()> {
     let keepalive = config.keepalive;
     let coordinator = config.coordinator.clone();
     let device_token = config.device_token.clone();
+    // hosts-sync inputs, captured before `config.peers` is moved below.
+    let manage_hosts = config.manage_hosts;
+    let hosts_path = config.hosts_path.clone();
+    let self_alias = config.alias.clone();
+    let self_v4 = config.address;
+    let self_v6 = config.address6;
     let peers = config
         .peers
         .into_iter()
@@ -281,7 +288,18 @@ pub fn run(config: Config) -> io::Result<()> {
     // start the discovery thread if a coordinator URL is configured —
     // it polls /peers and hot-adds newly-joined peers to `Node.peers`.
     if let Some(url) = coordinator.clone() {
-        discovery::spawn(node.clone(), url, device_token.clone());
+        discovery::spawn(
+            node.clone(),
+            url,
+            device_token.clone(),
+            discovery::HostsSync {
+                manage: manage_hosts,
+                path: hosts_path.unwrap_or_else(|| PathBuf::from("/etc/hosts")),
+                self_alias,
+                self_v4,
+                self_v6,
+            },
+        );
     }
 
     let up = pump::uplink(tun.clone(), socket.clone(), node.clone());

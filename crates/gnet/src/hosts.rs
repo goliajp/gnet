@@ -17,8 +17,14 @@
 //! # ---END gnet---
 //! ```
 //!
-//! Pure functions — no I/O. The caller decides where the file lives
-//! and how to write it atomically (see `join.rs`).
+//! The block-shaping functions are pure (no I/O); `splice_atomic` is the
+//! one I/O entry point — it reads the target, splices, and writes back via
+//! a tmp-file rename so a concurrent reader never sees a half-written file.
+//! Both `gnet join` (one-shot) and the daemon's discovery loop (on every
+//! peer-set change) call it.
+
+use std::io;
+use std::path::Path;
 
 const BEGIN_MARKER: &str = "# ---BEGIN gnet---";
 const END_MARKER: &str = "# ---END gnet---";
@@ -34,6 +40,7 @@ pub const HOST_PREFIX: &str = "gnet-";
 /// Either family may be absent (e.g. a v4-only peer), in which case
 /// that line is not emitted. `alias` is the bare coordinator alias
 /// (no `gnet-` prefix) — the prefix is added on splice.
+#[derive(Clone, Debug)]
 pub struct Entry {
     pub alias: String,
     pub v4: Option<String>,
@@ -42,12 +49,13 @@ pub struct Entry {
 
 /// Render the body of the gnet block — no outer markers (those are
 /// added by [`splice_block`]). Each entry contributes up to two lines
-/// (one A, one AAAA); a missing family contributes none.
-pub fn format_block(self_e: &Entry, peers: &[Entry]) -> String {
+/// (one A, one AAAA); a missing family contributes none. Entries are
+/// emitted in slice order, so callers that want their own host first
+/// simply place it first.
+pub fn format_entries(entries: &[Entry]) -> String {
     let mut out = String::new();
-    push_entry(&mut out, self_e);
-    for p in peers {
-        push_entry(&mut out, p);
+    for e in entries {
+        push_entry(&mut out, e);
     }
     out
 }
@@ -128,6 +136,50 @@ pub fn remove_block(existing: &str) -> String {
     out
 }
 
+/// Splice the gnet-managed marker block into `path`, replacing any prior
+/// block in place (idempotent). Uses an atomic write+rename so the system
+/// resolver never reads a half-written file, and never touches file
+/// permissions: `/etc/hosts` is world-readable and must stay that way.
+///
+/// A missing target is treated as empty (the block is still written). When
+/// the spliced result equals the current contents the rename is skipped
+/// entirely — so a no-op poll in the daemon's discovery loop costs one read
+/// and nothing else.
+pub fn splice_atomic(path: &Path, entries: &[Entry]) -> io::Result<()> {
+    let existing = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        // missing hosts file: treat as empty so we still write our block
+        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
+    let body = format_entries(entries);
+    let next = splice_block(&existing, &body);
+    if next == existing {
+        // already in the desired state — skip the rename entirely so
+        // we don't race with other readers of the file for no reason
+        return Ok(());
+    }
+    let final_name = path
+        .file_name()
+        .ok_or_else(|| io::Error::other("hosts path has no filename component"))?
+        .to_string_lossy()
+        .into_owned();
+    let mut tmp = path.to_path_buf();
+    tmp.set_file_name(format!(".{final_name}.gnet.tmp"));
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&tmp)?;
+        f.write_all(next.as_bytes())?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,10 +196,10 @@ mod tests {
     fn format_block_emits_both_families_per_entry() {
         // entries carry bare aliases; the splice automatically prefixes them
         // with `gnet-` so they don't collide with Tailscale MagicDNS / mDNS.
-        let body = format_block(
-            &e("mini", Some("10.42.42.7"), Some("fd8d:f090:2ebb::7")),
-            &[e("lx64", Some("10.42.42.8"), Some("fd8d:f090:2ebb::8"))],
-        );
+        let body = format_entries(&[
+            e("mini", Some("10.42.42.7"), Some("fd8d:f090:2ebb::7")),
+            e("lx64", Some("10.42.42.8"), Some("fd8d:f090:2ebb::8")),
+        ]);
         assert_eq!(body.lines().count(), 4);
         assert!(body.contains("10.42.42.7\tgnet-mini"));
         assert!(body.contains("fd8d:f090:2ebb::7\tgnet-mini"));
@@ -160,13 +212,11 @@ mod tests {
 
     #[test]
     fn format_block_skips_absent_family() {
-        let body = format_block(
-            &e("self", Some("10.0.0.1"), None),
-            &[
-                e("v4only", Some("10.0.0.2"), None),
-                e("v6only", None, Some("fd00::3")),
-            ],
-        );
+        let body = format_entries(&[
+            e("self", Some("10.0.0.1"), None),
+            e("v4only", Some("10.0.0.2"), None),
+            e("v6only", None, Some("fd00::3")),
+        ]);
         assert_eq!(body.lines().count(), 3);
         assert!(body.contains("10.0.0.1\tgnet-self"));
         assert!(body.contains("10.0.0.2\tgnet-v4only"));
@@ -268,5 +318,43 @@ mod tests {
         let out = splice_block(existing, "10.0.0.1\tfoo\n");
         // the missing \n was added before the visual separator + block
         assert!(out.contains("127.0.0.1\tlocalhost\n\n# ---BEGIN gnet---\n"));
+    }
+
+    #[test]
+    fn splice_atomic_writes_and_replaces_block() {
+        // drives the real atomic-splice I/O path used by `gnet join` and the
+        // daemon discovery loop. Round-trips through a real tmpfile rename so
+        // the rename step is exercised too.
+        let tmpdir = std::env::temp_dir().join(format!(
+            "gnet-hosts-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmpdir).unwrap();
+        let path = tmpdir.join("hosts");
+        std::fs::write(&path, "127.0.0.1\tlocalhost\n").unwrap();
+
+        // bare aliases — splice adds `gnet-` prefix automatically (HOST_PREFIX)
+        let self_e = e("self", Some("10.42.42.1"), Some("fd8d::1"));
+        let peer = e("peer", Some("10.42.42.2"), Some("fd8d::2"));
+        // first splice: appends the block
+        splice_atomic(&path, &[self_e.clone(), peer]).unwrap();
+        let contents_1 = std::fs::read_to_string(&path).unwrap();
+        assert!(contents_1.contains(BEGIN_MARKER));
+        assert!(contents_1.contains("10.42.42.1\tgnet-self"));
+        assert!(contents_1.contains("fd8d::2\tgnet-peer"));
+
+        // second splice dropping the peer: block shrinks, still one marker pair
+        splice_atomic(&path, &[self_e]).unwrap();
+        let contents_2 = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents_2.matches(BEGIN_MARKER).count(), 1);
+        assert!(!contents_2.contains("gnet-peer"));
+        // original hand-written line untouched
+        assert!(contents_2.starts_with("127.0.0.1\tlocalhost\n"));
+
+        std::fs::remove_dir_all(&tmpdir).ok();
     }
 }
