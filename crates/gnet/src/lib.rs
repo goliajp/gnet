@@ -11,6 +11,9 @@
 pub(crate) const MTU_BUF: usize = 2048;
 
 pub mod channel;
+/// `/etc/hosts` block splicing — shared by `gnet join` (one-shot) and the
+/// daemon's discovery loop (re-splice on every peer-set change).
+pub mod hosts;
 pub mod keys;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod node;

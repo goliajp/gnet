@@ -19,6 +19,7 @@
 
 use std::io;
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -34,6 +35,70 @@ use super::types::{Node, Peer, Session};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(30);
 
+/// Hosts-file maintenance handed to the discovery loop. When `manage` is
+/// true, every poll that changes the peer set re-splices the gnet-managed
+/// block in `path`, so `gnet-<alias>` names track the live coordinator peer
+/// set without a re-join. `gnet join` writes the block once at onboard time;
+/// this keeps it current as peers come and go — the production gap that left
+/// already-joined hosts with a stale block.
+pub(super) struct HostsSync {
+    pub(super) manage: bool,
+    pub(super) path: PathBuf,
+    /// Our own alias, for the self entry. `None` (a conf without an `alias`
+    /// directive — e.g. a pre-v0.16 join or a hand-written conf) writes peer
+    /// entries only; the daemon still resolves other peers by name.
+    pub(super) self_alias: Option<String>,
+    pub(super) self_v4: IpAddr,
+    pub(super) self_v6: Option<IpAddr>,
+}
+
+impl HostsSync {
+    /// Re-splice the managed hosts block from the current peer set. Best
+    /// effort: a write failure (insufficient privilege, read-only FS) is
+    /// logged and the daemon keeps running — name resolution is advisory,
+    /// the overlay itself is unaffected.
+    fn sync(&self, node: &Mutex<Node>) {
+        if !self.manage {
+            return;
+        }
+        let mut entries: Vec<crate::hosts::Entry> = Vec::new();
+        // our own host first, mirroring `gnet join`'s ordering.
+        if let Some(alias) = &self.self_alias {
+            entries.push(crate::hosts::Entry {
+                alias: alias.clone(),
+                v4: Some(self.self_v4.to_string()),
+                v6: self.self_v6.map(|ip| ip.to_string()),
+            });
+        }
+        {
+            let g = node.lock().expect("node mutex");
+            for p in &g.peers {
+                // a peer carried over from static conf has an empty alias
+                // until the coordinator names it — nothing to write yet.
+                if p.alias.is_empty() {
+                    continue;
+                }
+                entries.push(crate::hosts::Entry {
+                    alias: p.alias.clone(),
+                    v4: Some(p.vip.to_string()),
+                    v6: p.vip6.map(|ip| ip.to_string()),
+                });
+            }
+        }
+        match crate::hosts::splice_atomic(&self.path, &entries) {
+            Ok(()) => eprintln!(
+                "event=hosts_synced path={} entries={}",
+                self.path.display(),
+                entries.len()
+            ),
+            Err(e) => eprintln!(
+                "event=hosts_sync_failed path={} error=\"{e}\"",
+                self.path.display()
+            ),
+        }
+    }
+}
+
 /// Start the discovery thread. The thread runs for the process lifetime; if
 /// the coordinator is unreachable it logs and retries on the next interval.
 ///
@@ -43,7 +108,12 @@ const POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// other via the coordinator. A `None` token (legacy join, public peer)
 /// silently disables the reporter — peers configured with a static `endpoint`
 /// already advertise themselves via the conf at startup.
-pub(super) fn spawn(node: Arc<Mutex<Node>>, coordinator: String, device_token: Option<String>) {
+pub(super) fn spawn(
+    node: Arc<Mutex<Node>>,
+    coordinator: String,
+    device_token: Option<String>,
+    hosts: HostsSync,
+) {
     let our_pk_hex = {
         let g = node.lock().expect("node mutex");
         hex::encode(&g.public)
@@ -59,6 +129,9 @@ pub(super) fn spawn(node: Arc<Mutex<Node>>, coordinator: String, device_token: O
                             "event=discovery_poll added={added} updated={updated} total={}",
                             views.len()
                         );
+                        // the peer set changed — refresh the managed hosts
+                        // block so newly-joined aliases resolve immediately.
+                        hosts.sync(&node);
                     }
                 }
                 Err(e) => eprintln!("event=discovery_poll_failed error=\"{e}\""),
@@ -844,5 +917,107 @@ mod tests {
         assert_eq!(added, 0);
         assert_eq!(updated, 1, "alias backfill counts as one update");
         assert_eq!(node.lock().unwrap().peers[0].alias, "alpha");
+    }
+
+    #[test]
+    fn hosts_sync_writes_self_and_coordinator_peers() {
+        let node = make_node_with_self_key([0x55; 32]);
+        // a coordinator-named peer lands via apply()
+        apply(
+            &node,
+            &[PeerView {
+                alias: "alpha".into(),
+                x25519_pubkey: fake_pk(0xab),
+                mlkem_ek: fake_ek(),
+                overlay_v4: "10.42.42.2".parse().unwrap(),
+                overlay_v6: Some("fd8d::2".parse().unwrap()),
+                endpoint: None,
+                relay_eligible: false,
+            }],
+        );
+
+        let dir = std::env::temp_dir().join(format!(
+            "gnet-discovery-hosts-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hosts");
+        std::fs::write(&path, "127.0.0.1\tlocalhost\n").unwrap();
+
+        let sync = HostsSync {
+            manage: true,
+            path: path.clone(),
+            self_alias: Some("mini".into()),
+            self_v4: "10.42.42.4".parse().unwrap(),
+            self_v6: Some("fd8d::4".parse().unwrap()),
+        };
+        sync.sync(&node);
+
+        let out = std::fs::read_to_string(&path).unwrap();
+        // self entry (both families) plus the coordinator-named peer
+        assert!(out.contains("10.42.42.4\tgnet-mini"));
+        assert!(out.contains("fd8d::4\tgnet-mini"));
+        assert!(out.contains("10.42.42.2\tgnet-alpha"));
+        assert!(out.contains("fd8d::2\tgnet-alpha"));
+        // hand-written line preserved outside the managed block
+        assert!(out.starts_with("127.0.0.1\tlocalhost\n"));
+
+        // manage:false is a no-op — a fresh path is never created
+        let off_path = dir.join("hosts-off");
+        HostsSync {
+            manage: false,
+            path: off_path.clone(),
+            self_alias: Some("mini".into()),
+            self_v4: "10.42.42.4".parse().unwrap(),
+            self_v6: None,
+        }
+        .sync(&node);
+        assert!(!off_path.exists(), "manage:false must not touch the fs");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn hosts_sync_without_self_alias_writes_peers_only() {
+        let node = make_node_with_self_key([0x77; 32]);
+        apply(
+            &node,
+            &[PeerView {
+                alias: "beta".into(),
+                x25519_pubkey: fake_pk(0xcd),
+                mlkem_ek: fake_ek(),
+                overlay_v4: "10.42.42.3".parse().unwrap(),
+                overlay_v6: None,
+                endpoint: None,
+                relay_eligible: false,
+            }],
+        );
+        let dir = std::env::temp_dir().join(format!(
+            "gnet-discovery-hosts-noalias-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hosts");
+        HostsSync {
+            manage: true,
+            path: path.clone(),
+            self_alias: None, // pre-v0.16 conf without an `alias` directive
+            self_v4: "10.42.42.9".parse().unwrap(),
+            self_v6: None,
+        }
+        .sync(&node);
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("10.42.42.3\tgnet-beta"), "peer entry written");
+        // our own address is absent — no alias means no self entry
+        assert!(!out.contains("10.42.42.9"), "no self entry without alias");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

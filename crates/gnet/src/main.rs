@@ -13,10 +13,9 @@ use std::io::{self, BufRead};
 use std::net::{SocketAddr, UdpSocket};
 use std::process::ExitCode;
 
-use gnet::{channel, keys};
+use gnet::{channel, hosts, keys};
 use gnet_hex as hex;
 
-mod hosts;
 mod join;
 mod rotate;
 mod status;

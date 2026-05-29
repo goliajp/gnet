@@ -110,9 +110,14 @@ Minimal viable:
 ```text
 private  <64-hex>                  # from `gnet keygen`
 address  10.42.0.1                 # overlay v4 — becomes tun's IP
-listen   0.0.0.0:51820             # UDP bind
+listen   0.0.0.0:65432             # UDP bind
 # coordinator http://discover.example:8443     # optional
-# peer <pubkey-64> <mlkem-ek-hex> 10.42.0.2 1.2.3.4:51820
+# peer <pubkey-64> <mlkem-ek-hex> 10.42.0.2 1.2.3.4:65432
+# alias    mini                    # optional: our coordinator alias; written by
+#                                  # `gnet join`. Used for the self /etc/hosts entry.
+# manage_hosts false               # optional: opt out of daemon /etc/hosts upkeep
+#                                  # (default: on for coordinator-driven nodes)
+# hosts_path /etc/hosts.d/gnet     # optional: splice target override (default /etc/hosts)
 ```
 
 Modes:
@@ -122,6 +127,47 @@ Modes:
 - **Coordinator-driven**: set `coordinator <url>` (and `device_token`
   if `/endpoint-report` is wanted). Discovery thread hot-adds peers via
   `GET /peers`. Initial registration is the one-shot `gnet join` command.
+
+### Managed `/etc/hosts`
+
+A coordinator-driven daemon keeps a marker-delimited block in `/etc/hosts`
+in sync with the live peer set, so `ssh gnet-<alias>` resolves through the
+overlay without a re-join:
+
+```text
+# ---BEGIN gnet---
+10.42.42.2        gnet-t01
+fd8d:f090:2ebb::2 gnet-t01
+…
+# ---END gnet---
+```
+
+`gnet join` writes this block once at onboard time; the daemon's discovery
+loop **re-splices it on every peer-set change** (a peer joining, leaving, or
+rotating keys). Only the block between the markers is touched — hand-edited
+lines outside it are preserved. The write is atomic (tmp-file + rename) so the
+system resolver never reads a half-written file. Names carry a `gnet-` prefix
+so they never collide with Tailscale MagicDNS / mDNS.
+
+Controls (conf directives above): `manage_hosts false` opts out entirely;
+`hosts_path` redirects the splice (e.g. a dnsmasq sidecar include); `alias`
+names this host's own self entry (absent → peer entries only). A purely
+static node (no `coordinator`) never runs the discovery loop, so it never
+auto-manages hosts — it keeps whatever `gnet join` wrote.
+
+> **AWS / cloud-init gotcha.** Debian/Ubuntu cloud images ship
+> `manage_etc_hosts: true`, which **rewrites `/etc/hosts` from a template on
+> every boot** — wiping the gnet block until the next discovery poll re-adds
+> it. Set it to `false` so the managed block survives a reboot:
+>
+> ```bash
+> # /etc/cloud/cloud.cfg.d/99-gnet.cfg
+> manage_etc_hosts: false
+> ```
+>
+> The daemon would eventually re-splice on its next 30 s poll regardless, but
+> disabling the rewrite avoids a post-boot window where `gnet-<alias>` names
+> don't resolve.
 
 ## Relay daemon — `gnet-relay-server`
 
