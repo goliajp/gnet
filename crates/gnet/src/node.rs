@@ -206,6 +206,7 @@ pub fn run(config: Config) -> io::Result<()> {
         mlkem_dk,
         peers,
         relay_servers: Vec::new(),
+        relay_health: Default::default(),
         reflexive: None,
         probe_txid: 0,
         self_is_nat,
