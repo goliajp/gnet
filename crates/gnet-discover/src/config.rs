@@ -1,5 +1,6 @@
 use std::net::{AddrParseError, SocketAddr};
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -27,6 +28,14 @@ pub struct Config {
     /// identity, so they cannot be modelled as devices. Empty = no relay
     /// advertised (nodes fall back to relay_eligible peers).
     pub relays: Vec<SocketAddr>,
+    /// Base URL (`http://host:port`) of the primary coordinator this instance
+    /// mirrors. `Some` ⇒ this is a warm-standby that periodically pulls
+    /// `GET /admin/state` from the primary and overwrites its own state.
+    /// `None` ⇒ this is itself a primary (the default).
+    pub primary: Option<String>,
+    /// How often a standby pulls the primary's state. Ignored when `primary`
+    /// is `None`.
+    pub sync_interval: Duration,
 }
 
 impl Config {
@@ -66,6 +75,20 @@ impl Config {
             Err(_) => Vec::new(),
         };
 
+        // Warm-standby config. `GNET_DISCOVER_PRIMARY` unset ⇒ this is a
+        // primary (no pull-sync loop). When set, it's the base URL of the
+        // coordinator to mirror, e.g. `http://10.0.0.1:65432`.
+        let primary = match std::env::var("GNET_DISCOVER_PRIMARY") {
+            Ok(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+            _ => None,
+        };
+        let sync_interval = Duration::from_secs(
+            std::env::var("GNET_DISCOVER_SYNC_INTERVAL_SECS")
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .unwrap_or(10),
+        );
+
         Ok(Self {
             bind,
             state_path,
@@ -73,6 +96,8 @@ impl Config {
             overlay_v4_prefix: [10, 42, 42],
             overlay_v6_prefix: [0xfd8d, 0xf090, 0x2ebb, 0],
             relays,
+            primary,
+            sync_interval,
         })
     }
 }
