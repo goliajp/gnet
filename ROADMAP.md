@@ -6,9 +6,12 @@
 
 ## Where we are
 
-- **Tag line:** `gnet-v0.17` (daemon/system milestones). The 9 data-plane
-  library crates ("stones") carry the workspace version `2.0.0-alpha.2`,
-  inherited verbatim from the pre-split portal monorepo.
+- **Tag line:** `gnet-v0.20` (daemon/system milestones). Track A is
+  feature-complete as of v0.20 — A6 coordinator state sync/failover with a
+  read-only warm-standby fence (v0.18–v0.19), discovery peer-leave, and relay
+  health probing/failover (v0.20). The 9 data-plane library crates ("stones")
+  carry the workspace version `2.0.0-alpha.2`, inherited verbatim from the
+  pre-split portal monorepo.
 - Standalone workspace since the split from `goliajp/portal`. Runs
   internally on a small fleet (macOS arm64, Linux x86_64, AWS Graviton
   aarch64).
@@ -83,13 +86,20 @@ open-source release.
 Versions are indicative, not contractual; the *order* and the *trigger* are
 the commitment. A checkpoint goes hot only when its trigger is observed.
 
-| Checkpoint | Content | Trigger to go hot |
-|---|---|---|
-| **v0.18** | Track A core: A6 state sync/failover + relay keepalive | v0.17 shipped + deferred items named — **met now** |
-| **v0.19** | Track A remainder (relay reliability, peer-leave) + Track C observability | v0.18 verified stable on the fleet |
-| **v0.20** | Track B quality gate (KAT freeze, fuzzing, SECURITY.md, CT review) | daemon feature-frozen, no pending wire changes |
-| **v0.21** | Track E presentation (CI enable, rustfmt pin, CONTRIBUTING, deploy docs, README) | quality gate green |
-| **gnet-v1.0** | Flip the GitHub repo to public; tag the release | all four tracks green + CI running |
+A6 split into two checkpoints (state sync/failover, then the read-only standby
+fence), which pushed the later checkpoints down one slot from the original
+plan — versions are indicative, so the numbers shifted while the track order
+held.
+
+| Checkpoint | Content | Trigger to go hot | Status |
+|---|---|---|---|
+| **v0.18** | Track A: A6 state sync/failover + relay registration keepalive | v0.17 shipped + deferred items named | ✓ shipped |
+| **v0.19** | Track A: A6 warm-standby read-only fence (failover self-consistent, no silent data loss on primary recovery) | A6 core landed | ✓ shipped |
+| **v0.20** | Track A remainder: discovery peer-leave/reconcile + relay health probing & failover (keepalive echo) | v0.18–v0.19 verified stable on the fleet | ✓ shipped |
+| **v0.21** | Track C observability (metrics surface, health checks, `gnet status` enrichment) — does not touch the wire | v0.20 fleet-stable + relay echo validated | next |
+| **v0.22** | Track B quality gate (KAT freeze, fuzzing, SECURITY.md, CT review) | daemon feature-frozen, relay echo wire-change frozen | |
+| **v0.23** | Track E presentation (CI enable, rustfmt pin, CONTRIBUTING, deploy docs, README) | quality gate green | |
+| **gnet-v1.0** | Flip the GitHub repo to public; tag the release | all four tracks green + CI running | |
 
 ## Out of scope for 1.0 (deferred)
 
