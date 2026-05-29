@@ -157,6 +157,12 @@ pub(super) struct Node {
     /// still routes through a gnet peer ([`Self::coordinator_endpoint`]).
     /// Refreshed every discovery poll; empty when none configured.
     pub(super) relay_servers: Vec<SocketAddr>,
+    /// Last time each relay server echoed our self-addressed keepalive — its
+    /// health pong. `relay_data_endpoint` prefers a relay whose last pong is
+    /// within `RELAY_HEALTH_WINDOW`, so a dead relay is routed around. Keyed by
+    /// the relay's advertised endpoint; entries for relays no longer advertised
+    /// just go stale and are ignored (the map is small — fleet has a handful).
+    pub(super) relay_health: std::collections::HashMap<SocketAddr, Instant>,
     /// Our reflexive (public) endpoint as last reported by a peer via an
     /// EndpointReply — the basis for hole punching. `None` until discovered.
     pub(super) reflexive: Option<SocketAddr>,
@@ -449,6 +455,13 @@ impl Node {
             .collect()
     }
 
+    /// Record a health pong from `relay` — a self-addressed RelayData echo the
+    /// relay sent back for our keepalive. Marks the relay alive as of now so
+    /// `relay_data_endpoint` keeps (or resumes) routing through it.
+    pub(super) fn note_relay_pong(&mut self, relay: SocketAddr) {
+        self.relay_health.insert(relay, Instant::now());
+    }
+
     /// Build an EndpointProbe aimed at any reachable peer to discover our
     /// reflexive (public) endpoint, recording the txid so the reply matches.
     /// Returns `(endpoint, datagram)`, or `None` if no peer has a known
@@ -527,6 +540,7 @@ mod tests {
             mlkem_dk: ek.to_vec(),
             peers,
             relay_servers: Vec::new(),
+            relay_health: Default::default(),
             reflexive: None,
             probe_txid: 0,
             self_is_nat: None,

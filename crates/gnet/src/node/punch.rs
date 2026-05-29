@@ -35,6 +35,13 @@ pub(super) const DIRECT_UPGRADE_BASE: Duration = Duration::from_secs(30);
 /// still recovers within bounded time without an operator nudge.
 pub(super) const DIRECT_UPGRADE_MAX: Duration = Duration::from_secs(300);
 
+/// A relay server counts as alive if it echoed our self-addressed keepalive
+/// within this window. Three keepalive intervals (3 × 25s, the node-side
+/// `RELAY_REGISTER_INTERVAL`): tolerates two consecutive lost keepalive/echo
+/// round-trips before a relay is treated as down and routed around, so a single
+/// dropped UDP datagram never flaps the relay route.
+pub(super) const RELAY_HEALTH_WINDOW: Duration = Duration::from_secs(75);
+
 /// Next direct-upgrade attempt deadline: `now + DIRECT_UPGRADE_BASE × 1.5^failures`
 /// clamped to `DIRECT_UPGRADE_MAX`. The 1.5× step is realised as `× 3 / 2`
 /// on `Duration` so the precision tracks `Instant`'s nanosecond units
@@ -104,9 +111,21 @@ impl Node {
     /// `RelayData` and drops punch signaling, so it can carry data but never
     /// rendezvous — see [`Node::relay_servers`].
     pub(super) fn relay_data_endpoint(&self, exclude: usize) -> Option<SocketAddr> {
-        self.relay_servers
-            .first()
-            .copied()
+        // Prefer a healthy relay server — one that echoed our keepalive within
+        // RELAY_HEALTH_WINDOW — so a dead relay is routed around. The first
+        // healthy entry wins (stable: no churn between equally-live relays;
+        // RTT-ranked selection is deliberately deferred — overkill for a
+        // handful of relays and a source of needless route flapping). When no
+        // relay has ponged yet (cold start, before the first probe round), fall
+        // back to first() so we still attempt a relay rather than stalling.
+        let now = Instant::now();
+        let healthy = self.relay_servers.iter().copied().find(|addr| {
+            self.relay_health
+                .get(addr)
+                .is_some_and(|t| now.duration_since(*t) < RELAY_HEALTH_WINDOW)
+        });
+        healthy
+            .or_else(|| self.relay_servers.first().copied())
             .or_else(|| self.coordinator_endpoint(exclude))
     }
 
@@ -327,6 +346,7 @@ mod tests {
             mlkem_dk,
             peers,
             relay_servers: Vec::new(),
+            relay_health: Default::default(),
             reflexive,
             probe_txid: 0,
             self_is_nat: None,
@@ -431,6 +451,27 @@ mod tests {
         // … but punch signaling still routes through the gnet peer, because a
         // relay server only forwards RelayData and drops PunchConnect/Sync.
         assert_eq!(n.coordinator_endpoint(0), Some(eligible_ep));
+    }
+
+    #[test]
+    fn relay_data_endpoint_routes_around_dead_relay() {
+        let (peer_pub, peer_ek) = identity(6);
+        let r1: SocketAddr = "198.51.100.1:65433".parse().unwrap();
+        let r2: SocketAddr = "198.51.100.2:65433".parse().unwrap();
+        let mut n = node([1u8; 32], vec![peer(peer_pub, peer_ek, None)], None);
+        n.relay_servers = vec![r1, r2];
+
+        // cold start: no relay has echoed yet → fall back to first() so we
+        // still attempt a relay rather than stalling.
+        assert_eq!(n.relay_data_endpoint(0), Some(r1));
+
+        // only r2 echoed our keepalive (r1 is dead/silent) → route around r1.
+        n.note_relay_pong(r2);
+        assert_eq!(n.relay_data_endpoint(0), Some(r2), "dead r1 is routed around");
+
+        // both healthy → stable preference for the first (no churn).
+        n.note_relay_pong(r1);
+        assert_eq!(n.relay_data_endpoint(0), Some(r1), "prefer first when both live");
     }
 
     #[test]

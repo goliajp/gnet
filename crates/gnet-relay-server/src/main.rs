@@ -199,7 +199,16 @@ fn run(cfg: Config) -> io::Result<()> {
         };
 
         match register_and_route(&mut peers, src, dst, from, now) {
-            Route::SelfAddressed => stats.self_addressed += 1,
+            Route::Echo(ep) => {
+                stats.self_addressed += 1;
+                // Echo the self-addressed keepalive back unchanged so the
+                // sender can measure this relay's liveness + RTT and route
+                // around a dead relay. The node identifies it by src==dst==self.
+                match sock.send_to(&buf[..n], ep) {
+                    Ok(sent) => stats.bytes_out = stats.bytes_out.saturating_add(sent as u64),
+                    Err(e) => eprintln!("gnet-relay-server: echo to {ep} failed: {e}"),
+                }
+            }
             Route::UnknownDst => stats.unknown_dst += 1,
             Route::Forward(endpoint) => {
                 // Forward the whole datagram unchanged. We don't rewrite
@@ -224,8 +233,11 @@ fn run(cfg: Config) -> io::Result<()> {
 enum Route {
     /// `dst` resolves to the same endpoint the datagram arrived from — a
     /// self-addressed envelope (`src == dst`, the idle-node registration
-    /// keepalive). Registered, not forwarded.
-    SelfAddressed,
+    /// keepalive). Registered, then echoed straight back to the sender: the
+    /// echo is the health pong that lets the node probe this relay's liveness
+    /// and RTT and route around a dead relay (see node-side relay selection).
+    /// Carries the endpoint to echo to (the datagram's source).
+    Echo(SocketAddr),
     /// `dst` is not in the registry yet — nothing to forward to.
     UnknownDst,
     /// Forward the datagram unchanged to this endpoint.
@@ -258,7 +270,7 @@ fn register_and_route(
         },
     );
     match peers.get(dst) {
-        Some(entry) if entry.endpoint == from => Route::SelfAddressed,
+        Some(entry) if entry.endpoint == from => Route::Echo(from),
         Some(entry) => Route::Forward(entry.endpoint),
         None => Route::UnknownDst,
     }
@@ -273,20 +285,21 @@ mod tests {
     }
 
     #[test]
-    fn self_addressed_registers_then_drops() {
+    fn self_addressed_registers_and_echoes() {
         // The idle-node registration keepalive: a node sends RelayData with
-        // src == dst. The relay must record its endpoint (so peers can later
-        // relay to it) and then drop the datagram rather than loop it back.
+        // src == dst. The relay records its endpoint (so peers can later relay
+        // to it) and echoes the datagram back to the sender — the health pong
+        // the node uses to probe this relay's liveness + RTT.
         let mut peers = HashMap::new();
         let a = key(0xAA);
         let from: SocketAddr = "203.0.113.5:40000".parse().unwrap();
 
         let route = register_and_route(&mut peers, &a, &a, from, Instant::now());
-        assert_eq!(route, Route::SelfAddressed, "src==dst is dropped, not forwarded");
+        assert_eq!(route, Route::Echo(from), "src==dst echoes back to the sender");
         assert_eq!(
             peers.get(&a).map(|e| e.endpoint),
             Some(from),
-            "but the node is now registered and reachable"
+            "and the node is now registered and reachable"
         );
     }
 

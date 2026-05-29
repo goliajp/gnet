@@ -319,6 +319,13 @@ fn handle_datagram(
             };
             let me = ctx.node.lock().expect("node mutex").public;
             if dst == &me {
+                // self-addressed echo (src==dst==me): a relay's health pong for
+                // our keepalive. Record liveness and stop — there's no inner
+                // payload to dispatch (the keepalive carries an empty inner).
+                if src == &me {
+                    ctx.node.lock().expect("node mutex").note_relay_pong(from);
+                    return Ok(());
+                }
                 // addressed to us: copy the inner out and re-dispatch it as if it
                 // had arrived directly (relay_src suppresses roaming + routes the
                 // resp by key).
