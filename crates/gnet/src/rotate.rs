@@ -26,9 +26,12 @@ pub fn run(args: &[String]) -> io::Result<()> {
         .map_err(|e| io::Error::other(format!("read {}: {e}", opts.conf.display())))?;
     let config = gnet_config::parse(&text).map_err(io::Error::other)?;
 
+    // Rotation talks to the primary (first) coordinator — that's where this
+    // device's row and token live; standbys mirror it read-only.
     let coordinator = config
-        .coordinator
-        .as_deref()
+        .coordinators
+        .first()
+        .map(String::as_str)
         .ok_or_else(|| io::Error::other("conf has no `coordinator` — rotation requires one"))?;
     let device_token = config.device_token.as_deref().ok_or_else(|| {
         io::Error::other("conf has no `device_token` — re-`gnet join` first (legacy join)")
