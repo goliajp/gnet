@@ -1,11 +1,19 @@
 //! Background peer discovery — polls the gnet-discover coordinator and
 //! hot-adds newly-joined peers / refreshes endpoints on `Node.peers`.
 //!
-//! When `Config::coordinator` is set, [`spawn`] starts a daemon thread that
-//! issues `GET <coordinator>/peers` on a fixed interval (and once immediately
-//! at startup). New peers absent from `Node.peers` are pushed in `Session::Idle`
-//! so the outbound pump initiates a Noise_IK handshake on the next packet to
-//! them. Known peers whose `endpoint` changed are updated in place.
+//! When `Config::coordinators` is non-empty, [`spawn`] starts a daemon thread
+//! that issues `GET <coordinator>/peers` on a fixed interval (and once
+//! immediately at startup). New peers absent from `Node.peers` are pushed in
+//! `Session::Idle` so the outbound pump initiates a Noise_IK handshake on the
+//! next packet to them. Known peers whose `endpoint` changed are updated in
+//! place.
+//!
+//! Multiple coordinators (primary + warm-standbys, see the A6 failover work)
+//! are tried in order, starting from the last one that answered, so a dead
+//! primary transparently fails the daemon over to a standby — and it sticks
+//! with whichever coordinator is currently up rather than re-probing the dead
+//! primary every poll. Both `/peers` polling and `/endpoint-report` target the
+//! same chosen coordinator each cycle, keeping reads and writes consistent.
 //!
 //! Removal of vanished peers is deliberately *not* implemented in v0.2.1: the
 //! coordinator does not currently expose a stable "device left" signal, and
@@ -113,7 +121,7 @@ impl HostsSync {
 /// already advertise themselves via the conf at startup.
 pub(super) fn spawn(
     node: Arc<Mutex<Node>>,
-    coordinator: String,
+    coordinators: Vec<String>,
     device_token: Option<String>,
     hosts: HostsSync,
 ) {
@@ -123,9 +131,21 @@ pub(super) fn spawn(
     };
     thread::spawn(move || {
         let mut last_reported: Option<SocketAddr> = None;
+        // Index into `coordinators` of the one that last answered. Each poll
+        // starts here and wraps, so we stay on a working standby instead of
+        // hammering a dead primary, but still drift back to the primary once
+        // it recovers and answers ahead of the standby in order.
+        let mut last_good = 0usize;
         loop {
-            match fetch_peers(&coordinator, &our_pk_hex) {
-                Ok((views, relays)) => {
+            match try_in_order(&coordinators, last_good, |c| fetch_peers(c, &our_pk_hex)) {
+                Ok(((views, relays), idx)) => {
+                    if idx != last_good {
+                        eprintln!(
+                            "event=coordinator_failover from={} to={}",
+                            coordinators[last_good], coordinators[idx]
+                        );
+                        last_good = idx;
+                    }
                     let (added, updated) = apply(&node, &views);
                     // Refresh the advertised relay-server set. Cheap to compare;
                     // logged only on change so a steady deployment stays quiet.
@@ -164,9 +184,13 @@ pub(super) fn spawn(
                 if let Some(ep) = current
                     && last_reported != Some(ep)
                 {
-                    match report_endpoint(&coordinator, tok, ep) {
-                        Ok(()) => {
-                            eprintln!("event=endpoint_reported endpoint={ep}");
+                    match try_in_order(&coordinators, last_good, |c| report_endpoint(c, tok, ep)) {
+                        Ok(((), idx)) => {
+                            eprintln!(
+                                "event=endpoint_reported endpoint={ep} coordinator={}",
+                                coordinators[idx]
+                            );
+                            last_good = idx;
                             last_reported = Some(ep);
                         }
                         Err(e) => eprintln!("event=endpoint_report_failed error=\"{e}\""),
@@ -177,6 +201,28 @@ pub(super) fn spawn(
             thread::sleep(POLL_INTERVAL);
         }
     });
+}
+
+/// Try `f` against each coordinator in preference order, starting at `start`
+/// (the last-good index) and wrapping, until one succeeds. Returns the result
+/// paired with the index that produced it (so the caller can pin `last_good`),
+/// or the final error when every coordinator fails. An empty list yields an
+/// error — callers gate on a non-empty list before reaching here.
+fn try_in_order<T>(
+    coordinators: &[String],
+    start: usize,
+    mut f: impl FnMut(&str) -> io::Result<T>,
+) -> io::Result<(T, usize)> {
+    let n = coordinators.len();
+    let mut last_err: Option<io::Error> = None;
+    for off in 0..n {
+        let idx = (start + off) % n;
+        match f(&coordinators[idx]) {
+            Ok(v) => return Ok((v, idx)),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| io::Error::other("no coordinators configured")))
 }
 
 /// POST our reflexive endpoint to `<coordinator>/endpoint-report` with the
@@ -764,6 +810,44 @@ mod tests {
             self_is_nat: None,
             nat_override: false,
         }))
+    }
+
+    #[test]
+    fn try_in_order_fails_over_to_second_when_primary_down() {
+        let coords = vec!["http://t01".to_string(), "http://t02".to_string()];
+        let (val, idx) = try_in_order(&coords, 0, |c| {
+            if c == "http://t01" {
+                Err(io::Error::other("primary down"))
+            } else {
+                Ok(c.to_string())
+            }
+        })
+        .unwrap();
+        assert_eq!(idx, 1, "failover selects the second coordinator");
+        assert_eq!(val, "http://t02");
+    }
+
+    #[test]
+    fn try_in_order_sticks_to_last_good() {
+        // start=1 (a prior failover) → the standby is tried first and answers,
+        // so the dead primary is never re-probed this cycle.
+        let coords = vec!["http://t01".to_string(), "http://t02".to_string()];
+        let mut tried = Vec::new();
+        let (_, idx) = try_in_order(&coords, 1, |c| {
+            tried.push(c.to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(idx, 1);
+        assert_eq!(tried, vec!["http://t02"]);
+    }
+
+    #[test]
+    fn try_in_order_errors_when_all_down() {
+        let coords = vec!["http://t01".to_string(), "http://t02".to_string()];
+        let r: io::Result<((), usize)> =
+            try_in_order(&coords, 0, |_| Err(io::Error::other("down")));
+        assert!(r.is_err(), "all coordinators down surfaces an error");
     }
 
     #[test]

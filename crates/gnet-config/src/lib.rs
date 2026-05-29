@@ -12,7 +12,10 @@
 //! keepalive <secs>           # optional: send an empty transport packet to each
 //!                            # established peer every <secs> to hold NAT mappings
 //!                            # open (0 disables); absent = disabled
-//! coordinator <url>          # optional: gnet-discover base URL for peer polling
+//! coordinator <url>          # optional, repeatable: gnet-discover base URL for
+//!                            # peer polling. List multiple (one per line) for
+//!                            # failover — the daemon tries them in order, first
+//!                            # = primary, and sticks to the last one that worked.
 //! device_token <hex>         # optional: long-lived secret returned by `/join`;
 //!                            # the daemon uses it as Bearer auth on
 //!                            # `POST /endpoint-report` (reflexive endpoint updates)
@@ -85,12 +88,14 @@ pub struct Config {
     /// sent to every established peer each interval to keep NAT mappings open.
     /// `None` disables keepalive.
     pub keepalive: Option<Duration>,
-    /// gnet-discover coordinator base URL — when set, the daemon spawns a
-    /// background discovery thread that polls `GET <coordinator>/peers`
-    /// periodically and hot-adds newly-joined peers to the in-memory routing
-    /// table. `None` keeps the daemon entirely conf-driven (legacy / offline
-    /// deployments).
-    pub coordinator: Option<String>,
+    /// gnet-discover coordinator base URLs, in preference order (first =
+    /// primary). When non-empty, the daemon spawns a background discovery
+    /// thread that polls `GET <coordinator>/peers` periodically and hot-adds
+    /// newly-joined peers to the in-memory routing table; it tries each
+    /// coordinator in turn until one answers and stays on the last good one
+    /// (see node-side failover). Empty keeps the daemon entirely conf-driven
+    /// (legacy / offline deployments).
+    pub coordinators: Vec<String>,
     /// Long-lived secret issued by `gnet-discover` at `/join`. The daemon
     /// presents it as a Bearer token on `POST /endpoint-report` so that the
     /// coordinator can authenticate reflexive-endpoint updates. `None` keeps
@@ -130,7 +135,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
     let mut address6: Option<IpAddr> = None;
     let mut listen: Option<SocketAddr> = None;
     let mut keepalive: Option<Duration> = None;
-    let mut coordinator: Option<String> = None;
+    let mut coordinators: Vec<String> = Vec::new();
     let mut device_token: Option<String> = None;
     let mut behind_nat: Option<bool> = None;
     let mut alias: Option<String> = None;
@@ -178,7 +183,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
                 if !(url.starts_with("http://") || url.starts_with("https://")) {
                     return Err(err("coordinator: url must start with http:// or https://"));
                 }
-                coordinator = Some(url.trim_end_matches('/').to_string());
+                coordinators.push(url.trim_end_matches('/').to_string());
             }
             "device_token" => {
                 let tok = t.next().ok_or_else(|| err("device_token: missing value"))?;
@@ -261,7 +266,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
         address6,
         listen: listen.ok_or("missing `listen`")?,
         keepalive,
-        coordinator,
+        coordinators,
         device_token,
         behind_nat,
         alias,
@@ -430,16 +435,30 @@ peer 0000000000000000000000000000000000000000000000000000000000000003 {ek3} 10.8
     #[test]
     fn coordinator_directive() {
         let base = "private 0000000000000000000000000000000000000000000000000000000000000001\naddress 10.0.0.1\nlisten 0.0.0.0:1\n";
-        // absent → None
-        assert_eq!(parse(base).unwrap().coordinator, None);
+        // absent → empty
+        assert!(parse(base).unwrap().coordinators.is_empty());
         // valid http url
         let c = parse(&format!("{base}coordinator http://gnet.golia.jp:44520")).unwrap();
-        assert_eq!(c.coordinator.as_deref(), Some("http://gnet.golia.jp:44520"));
+        assert_eq!(c.coordinators, vec!["http://gnet.golia.jp:44520"]);
         // trailing slash stripped (cosmetic — keeps URLs canonical for downstream concat)
         let c = parse(&format!("{base}coordinator https://example.test:443/")).unwrap();
-        assert_eq!(c.coordinator.as_deref(), Some("https://example.test:443"));
+        assert_eq!(c.coordinators, vec!["https://example.test:443"]);
         // unsupported scheme rejected
         assert!(parse(&format!("{base}coordinator ftp://x/")).is_err());
+    }
+
+    #[test]
+    fn coordinator_directive_repeatable_keeps_order() {
+        // multiple coordinator lines collect into an ordered Vec, first = primary.
+        let base = "private 0000000000000000000000000000000000000000000000000000000000000001\naddress 10.0.0.1\nlisten 0.0.0.0:1\n";
+        let c = parse(&format!(
+            "{base}coordinator http://t01.golia.jp:44520\ncoordinator http://t02.golia.jp:44520\n"
+        ))
+        .unwrap();
+        assert_eq!(
+            c.coordinators,
+            vec!["http://t01.golia.jp:44520", "http://t02.golia.jp:44520"]
+        );
     }
 
     #[test]

@@ -64,7 +64,11 @@ fn print_self(path: &Path, c: &gnet_config::Config, alias: Option<&str>, pubkey_
     }
     println!(
         "  coordinator  {}",
-        c.coordinator.as_deref().unwrap_or("(none)")
+        if c.coordinators.is_empty() {
+            "(none)".to_string()
+        } else {
+            c.coordinators.join(", ")
+        }
     );
     println!(
         "  device_token {}",
@@ -92,37 +96,60 @@ fn print_daemon() {
 }
 
 fn print_coordinator(c: &gnet_config::Config, our_pubkey_hex: &str) {
-    let Some(coord) = &c.coordinator else {
+    if c.coordinators.is_empty() {
         println!("coordinator  (none configured — `gnet status` shows local conf only)");
         return;
+    }
+    // Probe in preference order (primary first), showing which one answered —
+    // mirrors the daemon's failover so status reflects the live coordinator.
+    let mut last_err = None;
+    let mut answered = None;
+    for coord in &c.coordinators {
+        match fetch_peers(coord, our_pubkey_hex) {
+            Ok(body) => {
+                answered = Some((coord.as_str(), body));
+                break;
+            }
+            Err(e) => last_err = Some(e),
+        }
+    }
+    let (coord, body) = match answered {
+        Some(v) => v,
+        None => {
+            println!("coordinator {}", c.coordinators.join(", "));
+            println!(
+                "  unreachable: {}",
+                last_err
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "no coordinators answered".into())
+            );
+            return;
+        }
     };
     println!("coordinator {coord}");
-    match fetch_peers(coord, our_pubkey_hex) {
-        Ok(body) => {
-            let relays = parse_relay_list(&body);
-            if relays.is_empty() {
-                println!("  relays       (none advertised)");
-            } else {
-                println!("  relays       {}", relays.join(", "));
-            }
-            let peers = parse_peer_summaries(&body);
-            if peers.is_empty() {
-                println!("  (empty peer list)");
-            } else {
-                println!("  {} peer(s):", peers.len());
-                for p in &peers {
-                    let endpoint = p.endpoint.as_deref().unwrap_or("(unreported)");
-                    let relay = if p.relay_eligible { " [relay]" } else { "" };
-                    println!(
-                        "    {:6} {:14} endpoint={}{relay}",
-                        format!("gnet-{}", p.alias),
-                        p.overlay_v4,
-                        endpoint,
-                    );
-                }
+    {
+        let relays = parse_relay_list(&body);
+        if relays.is_empty() {
+            println!("  relays       (none advertised)");
+        } else {
+            println!("  relays       {}", relays.join(", "));
+        }
+        let peers = parse_peer_summaries(&body);
+        if peers.is_empty() {
+            println!("  (empty peer list)");
+        } else {
+            println!("  {} peer(s):", peers.len());
+            for p in &peers {
+                let endpoint = p.endpoint.as_deref().unwrap_or("(unreported)");
+                let relay = if p.relay_eligible { " [relay]" } else { "" };
+                println!(
+                    "    {:6} {:14} endpoint={}{relay}",
+                    format!("gnet-{}", p.alias),
+                    p.overlay_v4,
+                    endpoint,
+                );
             }
         }
-        Err(e) => println!("  unreachable: {e}"),
     }
 }
 

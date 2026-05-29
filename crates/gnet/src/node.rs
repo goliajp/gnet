@@ -152,7 +152,7 @@ pub fn run(config: Config) -> io::Result<()> {
     );
 
     let keepalive = config.keepalive;
-    let coordinator = config.coordinator.clone();
+    let coordinators = config.coordinators.clone();
     let device_token = config.device_token.clone();
     // hosts-sync inputs, captured before `config.peers` is moved below.
     let manage_hosts = config.manage_hosts;
@@ -306,12 +306,13 @@ pub fn run(config: Config) -> io::Result<()> {
         });
     }
 
-    // start the discovery thread if a coordinator URL is configured —
-    // it polls /peers and hot-adds newly-joined peers to `Node.peers`.
-    if let Some(url) = coordinator.clone() {
+    // start the discovery thread if any coordinator URL is configured —
+    // it polls /peers and hot-adds newly-joined peers to `Node.peers`,
+    // failing over across the configured coordinators in order.
+    if !coordinators.is_empty() {
         discovery::spawn(
             node.clone(),
-            url,
+            coordinators,
             device_token.clone(),
             discovery::HostsSync {
                 manage: manage_hosts,
