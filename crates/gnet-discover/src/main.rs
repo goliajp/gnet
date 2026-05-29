@@ -62,11 +62,43 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let store = Store::load(&config.state_path).await?;
     let bind = config.bind;
 
+    // Warm-standby: if a primary is configured, mirror its state on an interval.
+    // Pulled out before `config` moves into `AppState`.
+    let standby = config.primary.clone().map(|primary| {
+        (primary, config.sync_interval, config.admin_token.clone())
+    });
+
     let state = Arc::new(AppState {
         config,
         store,
         join_tokens: JoinTokenStore::new(),
     });
+
+    if let Some((primary, interval, admin_token)) = standby {
+        eprintln!(
+            "gnet-discover: warm-standby, mirroring {primary} every {}s",
+            interval.as_secs()
+        );
+        let store = state.store.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                match gnet_discover::sync::fetch_state(&primary, &admin_token).await {
+                    Ok(new) => {
+                        // Overwrite the whole table — the primary is authoritative.
+                        // Reuses the store's atomic persist so a standby's on-disk
+                        // state.json is always a valid restore point.
+                        if let Err(e) = store.mutate(move |st| *st = new).await {
+                            eprintln!("event=state_sync_persist_failed error=\"{e}\"");
+                        }
+                    }
+                    // Keep serving the last good snapshot on transient failure.
+                    Err(e) => eprintln!("event=state_sync_failed primary={primary} error=\"{e}\""),
+                }
+            }
+        });
+    }
+
     let listener = tokio::net::TcpListener::bind(bind).await?;
     eprintln!("gnet-discover: listening on {bind}");
     serve(listener, state, handler()).await?;

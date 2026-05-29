@@ -13,6 +13,9 @@
 //! - `GET    /peers`                  — `x-device-pubkey` header; returns
 //!   `{"peers":[...],"relays":["host:port",...]}` — the peer list plus any
 //!   coordinator-configured relay servers (see `GNET_DISCOVER_RELAYS`).
+//! - `GET    /admin/state`            — admin Bearer; returns the full `State`
+//!   (every device row including `device_token`). A warm-standby coordinator
+//!   polls this to mirror the primary (see A6 backup pull-sync).
 
 use std::sync::Arc;
 
@@ -51,6 +54,7 @@ pub fn handler() -> Handler<AppState> {
                 ("POST", "/endpoint-report") => endpoint_report(state, req).await,
                 ("POST", "/devices/self/rotate") => rotate_self(state, req).await,
                 ("GET", "/peers") => peers(state, req).await,
+                ("GET", "/admin/state") => admin_state(state, req).await,
                 _ => Response::text(404, "Not Found", "not found"),
             }
         })
@@ -138,6 +142,23 @@ fn allocate_v4_octet_with_pending(
         }
     }
     (2u8..=254u8).find(|n| !used.contains(n))
+}
+
+// ── admin state export ────────────────────────────────────────
+
+/// `GET /admin/state` — return the full `State` for a warm-standby coordinator
+/// to mirror. The body carries every device's long-lived `device_token` (the
+/// backup needs them to keep authenticating `endpoint-report` after failover),
+/// so this is admin-gated: its trust level equals possession of the on-disk
+/// state.json itself. Auth block mirrors `admin_enrol`.
+async fn admin_state(state: Arc<AppState>, req: Request) -> Response {
+    let Some(provided) = bearer(&req) else {
+        return Response::text(401, "Unauthorized", "missing bearer");
+    };
+    if !admin_token_matches(&state.config.admin_token, provided) {
+        return Response::text(401, "Unauthorized", "bad admin token");
+    }
+    Response::json(&state.store.snapshot().await)
 }
 
 // ── join ──────────────────────────────────────────────────────
@@ -526,6 +547,8 @@ mod tests {
                 overlay_v4_prefix: [10, 42, 42],
                 overlay_v6_prefix: [0xfd8d, 0xf090, 0x2ebb, 0],
                 relays,
+                primary: None,
+                sync_interval: std::time::Duration::from_secs(10),
             },
             store,
             join_tokens: JoinTokenStore::new(),
@@ -1050,6 +1073,44 @@ mod tests {
             body.len()
         );
         let (st, _) = raw(addr, req.as_bytes()).await;
+        assert_eq!(st, 401);
+    }
+
+    fn admin_state_req(admin_token: &str) -> Vec<u8> {
+        format!(
+            "GET /admin/state HTTP/1.1\r\nhost: x\r\nauthorization: Bearer {admin_token}\r\n\r\n"
+        )
+        .into_bytes()
+    }
+
+    #[tokio::test]
+    async fn admin_state_export_returns_full_state_with_token() {
+        let (addr, _t) = spawn_test_server().await;
+        let pk = "a".repeat(64);
+        let device_token = enrol_and_join(addr, "alpha", &pk, &"aa".repeat(32)).await;
+
+        let (st, body) = raw(addr, &admin_state_req("test-token-1234567890")).await;
+        assert_eq!(st, 200, "{body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let devices = v["devices"].as_array().unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0]["alias"], "alpha");
+        // the export MUST carry device_token so a backup can keep authenticating
+        // endpoint-report after failover.
+        assert_eq!(devices[0]["device_token"], device_token);
+    }
+
+    #[tokio::test]
+    async fn admin_state_export_rejects_missing_token() {
+        let (addr, _t) = spawn_test_server().await;
+        let (st, _) = raw(addr, b"GET /admin/state HTTP/1.1\r\nhost: x\r\n\r\n").await;
+        assert_eq!(st, 401);
+    }
+
+    #[tokio::test]
+    async fn admin_state_export_rejects_bad_token() {
+        let (addr, _t) = spawn_test_server().await;
+        let (st, _) = raw(addr, &admin_state_req("wrong-token-12345")).await;
         assert_eq!(st, 401);
     }
 
