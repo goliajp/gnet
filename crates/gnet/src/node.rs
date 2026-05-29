@@ -62,6 +62,12 @@ const DIAL_IDLE_WAIT: Duration = Duration::from_secs(3600);
 /// How often to probe a peer to discover our reflexive (public) endpoint.
 const PROBE_INTERVAL: Duration = Duration::from_secs(5);
 
+/// How often to re-register with each advertised relay server. Must stay well
+/// under the relay's `STALE_AFTER` (default 300s) so an idle node never ages
+/// out of the relay's table; 25s also matches the conventional NAT-keepalive
+/// cadence, holding the pinhole toward the relay open so it can reach us.
+const RELAY_REGISTER_INTERVAL: Duration = Duration::from_secs(25);
+
 /// Overlay subnet prefix length for an address family: a /24 (IPv4) or /64
 /// (IPv6) subnet routes the whole overlay range into the TUN.
 fn overlay_prefix(address: IpAddr) -> u8 {
@@ -221,6 +227,12 @@ pub fn run(config: Config) -> io::Result<()> {
             let mut last_probe = Instant::now()
                 .checked_sub(PROBE_INTERVAL)
                 .unwrap_or_else(Instant::now);
+            // register with relays on the first tick too, so an idle node that
+            // just learned a relay server becomes reachable without waiting a
+            // full interval.
+            let mut last_relay_register = Instant::now()
+                .checked_sub(RELAY_REGISTER_INTERVAL)
+                .unwrap_or_else(Instant::now);
             loop {
                 thread::sleep(MAINT_TICK);
                 // crypto/state under the lock; send syscalls run unlocked.
@@ -246,6 +258,14 @@ pub fn run(config: Config) -> io::Result<()> {
                     if keepalive.is_some_and(|interval| last_keepalive.elapsed() >= interval) {
                         last_keepalive = Instant::now();
                         sends.extend(g.keepalive_datagrams());
+                    }
+                    // relay registration runs unconditionally on its own
+                    // cadence (independent of the operator's NAT-keepalive
+                    // directive); the method itself no-ops when there is no
+                    // relay server to register with or we are confirmed public.
+                    if last_relay_register.elapsed() >= RELAY_REGISTER_INTERVAL {
+                        last_relay_register = Instant::now();
+                        sends.extend(g.relay_register_datagrams());
                     }
                     sends
                 };

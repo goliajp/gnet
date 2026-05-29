@@ -198,53 +198,123 @@ fn run(cfg: Config) -> io::Result<()> {
             continue;
         };
 
-        // Trust-on-first-use registration. Refresh on every packet so a
-        // peer's NAT mapping change rolls forward immediately. We never
-        // verify *who* `src` claims to be — but the relay also never
-        // decrypts the inner payload, so a spoofed `src` only redirects
-        // future replies to the spoofer's endpoint, not eavesdrops the
-        // session. The compromised peer's own next outbound refreshes
-        // the entry back.
-        peers.insert(
-            *src,
-            PeerEntry {
-                endpoint: from,
-                last_seen: now,
-            },
-        );
-
-        // Self-addressed envelopes (dst == relay's own pubkey) make no
-        // sense — relay servers don't run a gnet identity, they only
-        // forward. Drop and count.
-        if let Some(entry) = peers.get(dst) {
-            if entry.endpoint == from {
-                stats.self_addressed += 1;
-                continue;
-            }
-            // Forward the whole datagram unchanged. We don't rewrite
-            // anything: the receiver's gnet daemon parses `RelayData ‖
-            // src ‖ dst ‖ inner` exactly as it would from any path.
-            match sock.send_to(&buf[..n], entry.endpoint) {
-                Ok(sent) => {
-                    stats.forwarded += 1;
-                    stats.bytes_out = stats.bytes_out.saturating_add(sent as u64);
-                }
-                Err(e) => {
-                    eprintln!(
-                        "gnet-relay-server: send to {} failed: {e}",
-                        entry.endpoint
-                    );
+        match register_and_route(&mut peers, src, dst, from, now) {
+            Route::SelfAddressed => stats.self_addressed += 1,
+            Route::UnknownDst => stats.unknown_dst += 1,
+            Route::Forward(endpoint) => {
+                // Forward the whole datagram unchanged. We don't rewrite
+                // anything: the receiver's gnet daemon parses `RelayData ‖
+                // src ‖ dst ‖ inner` exactly as it would from any path.
+                match sock.send_to(&buf[..n], endpoint) {
+                    Ok(sent) => {
+                        stats.forwarded += 1;
+                        stats.bytes_out = stats.bytes_out.saturating_add(sent as u64);
+                    }
+                    Err(e) => {
+                        eprintln!("gnet-relay-server: send to {endpoint} failed: {e}");
+                    }
                 }
             }
-        } else {
-            stats.unknown_dst += 1;
         }
+    }
+}
+
+/// Outcome of a single RelayData datagram after registration.
+#[derive(Debug, PartialEq, Eq)]
+enum Route {
+    /// `dst` resolves to the same endpoint the datagram arrived from — a
+    /// self-addressed envelope (`src == dst`, the idle-node registration
+    /// keepalive). Registered, not forwarded.
+    SelfAddressed,
+    /// `dst` is not in the registry yet — nothing to forward to.
+    UnknownDst,
+    /// Forward the datagram unchanged to this endpoint.
+    Forward(SocketAddr),
+}
+
+/// Trust-on-first-use registration, then routing decision for one RelayData
+/// datagram. `src@from` is recorded (refreshed on every packet so a NAT
+/// mapping change rolls forward immediately); we never verify *who* `src`
+/// claims to be, but since the relay never decrypts the inner payload a
+/// spoofed `src` only redirects future replies to the spoofer, and that
+/// peer's own next outbound refreshes the entry back.
+///
+/// A datagram whose `dst` resolves to the sender's own endpoint is
+/// self-addressed (`gnet` nodes send `src == dst` to register without
+/// forwarding — the relay-registration keepalive) and is dropped, not
+/// looped back.
+fn register_and_route(
+    peers: &mut HashMap<[u8; KEY_LEN], PeerEntry>,
+    src: &[u8; KEY_LEN],
+    dst: &[u8; KEY_LEN],
+    from: SocketAddr,
+    now: Instant,
+) -> Route {
+    peers.insert(
+        *src,
+        PeerEntry {
+            endpoint: from,
+            last_seen: now,
+        },
+    );
+    match peers.get(dst) {
+        Some(entry) if entry.endpoint == from => Route::SelfAddressed,
+        Some(entry) => Route::Forward(entry.endpoint),
+        None => Route::UnknownDst,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn key(b: u8) -> [u8; KEY_LEN] {
+        [b; KEY_LEN]
+    }
+
+    #[test]
+    fn self_addressed_registers_then_drops() {
+        // The idle-node registration keepalive: a node sends RelayData with
+        // src == dst. The relay must record its endpoint (so peers can later
+        // relay to it) and then drop the datagram rather than loop it back.
+        let mut peers = HashMap::new();
+        let a = key(0xAA);
+        let from: SocketAddr = "203.0.113.5:40000".parse().unwrap();
+
+        let route = register_and_route(&mut peers, &a, &a, from, Instant::now());
+        assert_eq!(route, Route::SelfAddressed, "src==dst is dropped, not forwarded");
+        assert_eq!(
+            peers.get(&a).map(|e| e.endpoint),
+            Some(from),
+            "but the node is now registered and reachable"
+        );
+    }
+
+    #[test]
+    fn registered_dst_forwards_after_keepalive() {
+        // After A has registered (via its keepalive), a datagram B→A forwards
+        // to A's recorded endpoint — the reachability the keepalive buys.
+        let mut peers = HashMap::new();
+        let (a, b) = (key(0xAA), key(0xBB));
+        let a_ep: SocketAddr = "203.0.113.5:40000".parse().unwrap();
+        let b_ep: SocketAddr = "198.51.100.7:50000".parse().unwrap();
+
+        // A's self-addressed keepalive registers it.
+        register_and_route(&mut peers, &a, &a, a_ep, Instant::now());
+        // B now relays to A.
+        let route = register_and_route(&mut peers, &b, &a, b_ep, Instant::now());
+        assert_eq!(route, Route::Forward(a_ep));
+    }
+
+    #[test]
+    fn unknown_dst_is_dropped() {
+        let mut peers = HashMap::new();
+        let (a, b) = (key(0xAA), key(0xBB));
+        let from: SocketAddr = "203.0.113.5:40000".parse().unwrap();
+        // A→B but B never registered → nothing to forward to.
+        let route = register_and_route(&mut peers, &a, &b, from, Instant::now());
+        assert_eq!(route, Route::UnknownDst);
+    }
 
     /// CLI parsing: defaults, custom listen, idle-secs, errors.
     #[test]

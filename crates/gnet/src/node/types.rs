@@ -417,6 +417,31 @@ impl Node {
         out
     }
 
+    /// Registration keepalives for the dedicated relay servers: one
+    /// `RelayData` envelope addressed to ourselves (`src == dst == our static
+    /// key`) per advertised relay. The relay registers our endpoint from the
+    /// `src` key on receipt, then drops the datagram as self-addressed (`dst`
+    /// resolves to the endpoint it just recorded) — so it never forwards, it
+    /// only refreshes our entry. Without this an idle node that originates no
+    /// other `RelayData` ages out of the relay's table after `STALE_AFTER` and
+    /// becomes unreachable through the relay until it next speaks first.
+    ///
+    /// The cadence also holds the NAT pinhole toward the relay open, so the
+    /// relay can actually reach us. Empty when no relay server is advertised,
+    /// or when we are confirmed public (`self_is_nat == Some(false)`) — a
+    /// public node is reached directly and is never a relay target.
+    pub(super) fn relay_register_datagrams(&self) -> Vec<(SocketAddr, Vec<u8>)> {
+        if self.relay_servers.is_empty() || self.self_is_nat == Some(false) {
+            return Vec::new();
+        }
+        let envelope = gnet_relay::encode(&self.public, &self.public, &[]);
+        let framed = wire::frame(Kind::RelayData, &envelope);
+        self.relay_servers
+            .iter()
+            .map(|addr| (*addr, framed.clone()))
+            .collect()
+    }
+
     /// Build an EndpointProbe aimed at any reachable peer to discover our
     /// reflexive (public) endpoint, recording the txid so the reply matches.
     /// Returns `(endpoint, datagram)`, or `None` if no peer has a known
@@ -877,5 +902,42 @@ mod tests {
         // the recorded txid matches the datagram, so its reply is accepted
         let txid = u32::from_le_bytes(dg[wire::HEADER..].try_into().unwrap());
         assert_eq!(node.probe_txid, txid);
+    }
+
+    #[test]
+    fn relay_register_datagrams_target_each_relay_with_self_envelope() {
+        let (ek, _dk) = keys::derive_mlkem(&[9u8; 32]);
+        let r1: SocketAddr = "198.51.100.1:65433".parse().unwrap();
+        let r2: SocketAddr = "[2001:db8::1]:65433".parse().unwrap();
+        let mut node = test_node(&ek, vec![]);
+        node.public = [0xAB; 32];
+
+        // no relay servers advertised → nothing to register.
+        assert!(node.relay_register_datagrams().is_empty());
+
+        node.relay_servers = vec![r1, r2];
+
+        // self_is_nat unknown (None) → register conservatively to both relays.
+        let dgs = node.relay_register_datagrams();
+        assert_eq!(dgs.len(), 2);
+        assert_eq!(dgs[0].0, r1);
+        assert_eq!(dgs[1].0, r2);
+        // each datagram is RelayData carrying a src==dst==our-key envelope with
+        // an empty inner — the relay registers us, then drops it self-addressed.
+        for (_, dg) in &dgs {
+            assert_eq!(dg[0], Kind::RelayData as u8);
+            let (src, dst, inner) = gnet_relay::decode(&dg[1..]).expect("envelope decodes");
+            assert_eq!(src, &node.public);
+            assert_eq!(dst, &node.public);
+            assert!(inner.is_empty(), "registration carries no payload");
+        }
+
+        // confirmed public → never a relay target, so no registration traffic.
+        node.self_is_nat = Some(false);
+        assert!(node.relay_register_datagrams().is_empty());
+
+        // behind NAT → register.
+        node.self_is_nat = Some(true);
+        assert_eq!(node.relay_register_datagrams().len(), 2);
     }
 }
