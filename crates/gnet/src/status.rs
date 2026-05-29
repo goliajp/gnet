@@ -99,6 +99,12 @@ fn print_coordinator(c: &gnet_config::Config, our_pubkey_hex: &str) {
     println!("coordinator {coord}");
     match fetch_peers(coord, our_pubkey_hex) {
         Ok(body) => {
+            let relays = parse_relay_list(&body);
+            if relays.is_empty() {
+                println!("  relays       (none advertised)");
+            } else {
+                println!("  relays       {}", relays.join(", "));
+            }
             let peers = parse_peer_summaries(&body);
             if peers.is_empty() {
                 println!("  (empty peer list)");
@@ -174,12 +180,105 @@ fn fetch_peers(coordinator: &str, our_pubkey_hex: &str) -> io::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// Narrow a `/peers` body to the peer-array text the object scanner walks.
+/// v0.17 coordinators wrap the list in `{"peers":[...],"relays":[...]}`;
+/// pre-v0.17 ones return a bare `[...]`. For the object shape we return the
+/// inner peers array so the wrapper object and the relays list don't confuse
+/// the brace scanner; for the bare-array shape we return the body unchanged.
+fn peers_scan_slice(body: &str) -> &str {
+    if body.trim_start().starts_with('{') {
+        array_after(body, "peers").unwrap_or("")
+    } else {
+        body
+    }
+}
+
+/// Inner text of the `[...]` array following the first `"<key>"`, string- and
+/// depth-aware so brackets inside quoted strings (IPv6 endpoints) and nested
+/// arrays are handled. `None` if the key or a balanced array is absent.
+fn array_after<'a>(body: &'a str, key: &str) -> Option<&'a str> {
+    let needle = format!("\"{key}\"");
+    let after_key = body.find(&needle)? + needle.len();
+    let bytes = body.as_bytes();
+    let mut i = after_key;
+    while i < bytes.len() && bytes[i] != b'[' {
+        i += 1;
+    }
+    let start = i + 1;
+    let mut depth = 1i32;
+    let mut in_string = false;
+    let mut escape = false;
+    i = start;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if escape {
+            escape = false;
+            i += 1;
+            continue;
+        }
+        if in_string {
+            match c {
+                b'\\' => escape = true,
+                b'"' => in_string = false,
+                _ => {}
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'"' => in_string = true,
+            b'[' => depth += 1,
+            b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&body[start..i]);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Advertised relay servers from a `/peers` object's `"relays"` array. Empty
+/// for a bare-array (pre-v0.17) response or when none are configured.
+fn parse_relay_list(body: &str) -> Vec<String> {
+    let Some(arr) = array_after(body, "relays") else {
+        return Vec::new();
+    };
+    let bytes = arr.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] != b'"' {
+            i += 1;
+            continue;
+        }
+        let start = i + 1;
+        let mut j = start;
+        while j < bytes.len() && bytes[j] != b'"' {
+            if bytes[j] == b'\\' {
+                j += 1;
+            }
+            j += 1;
+        }
+        if j >= bytes.len() {
+            break;
+        }
+        out.push(arr[start..j].to_string());
+        i = j + 1;
+    }
+    out
+}
+
 /// Minimal hand-rolled parser for the `/peers` array. Schema-locked: same
 /// fields as `node::discovery::parse_peer_object` but only the columns
 /// `gnet status` displays (alias, overlay_v4, endpoint, relay_eligible).
 /// Designed to be lenient — any parse failure on a single object skips that
 /// row rather than aborting the whole status output.
 fn parse_peer_summaries(body: &str) -> Vec<PeerSummary> {
+    let body = peers_scan_slice(body);
     let mut out = Vec::new();
     let bytes = body.as_bytes();
     let mut i = 0usize;
@@ -383,6 +482,38 @@ mod tests {
     #[test]
     fn parses_empty_array() {
         assert!(parse_peer_summaries("[]").is_empty());
+    }
+
+    #[test]
+    fn parses_peer_summaries_v017_object_shape() {
+        // v0.17 wraps peers in an object alongside a relays list — the scanner
+        // must read the peers array, not the wrapper object, and must not be
+        // tripped by the relays strings (incl. an IPv6 endpoint with brackets).
+        let body = r#"{"peers":[
+            {"alias":"t01","x25519_pubkey":"aa","mlkem_ek":"bb","overlay_v4":"10.42.42.2","overlay_v6":"fd8d::2","endpoint":"1.2.3.4:65432","relay_eligible":true},
+            {"alias":"t02","x25519_pubkey":"cc","mlkem_ek":"dd","overlay_v4":"10.42.42.3","overlay_v6":null,"endpoint":null,"relay_eligible":false}
+        ],"relays":["198.51.100.9:65433","[2001:db8::1]:65433"]}"#;
+        let peers = parse_peer_summaries(body);
+        assert_eq!(peers.len(), 2, "both peers parsed from the object shape");
+        assert_eq!(peers[0].alias, "t01");
+        assert_eq!(peers[0].endpoint.as_deref(), Some("1.2.3.4:65432"));
+        assert_eq!(peers[1].alias, "t02");
+
+        let relays = parse_relay_list(body);
+        assert_eq!(relays, vec!["198.51.100.9:65433", "[2001:db8::1]:65433"]);
+    }
+
+    #[test]
+    fn parse_relay_list_absent_for_bare_array() {
+        // pre-v0.17 bare array has no relays key → empty list, no panic.
+        assert!(parse_relay_list("[]").is_empty());
+        assert!(parse_relay_list(r#"[{"alias":"t01"}]"#).is_empty());
+    }
+
+    #[test]
+    fn parses_object_with_empty_peers_and_relays() {
+        assert!(parse_peer_summaries(r#"{"peers":[],"relays":[]}"#).is_empty());
+        assert!(parse_relay_list(r#"{"peers":[],"relays":[]}"#).is_empty());
     }
 
     #[test]

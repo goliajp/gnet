@@ -35,7 +35,7 @@
 //! Usage:
 //!
 //! ```text
-//! gnet-relay-server [--listen 0.0.0.0:51820] [--idle-secs 300]
+//! gnet-relay-server [--listen 0.0.0.0:65433] [--idle-secs 300]
 //! ```
 
 #![forbid(unsafe_code)]
@@ -89,7 +89,7 @@ struct Config {
 
 impl Config {
     fn from_argv(args: Vec<String>) -> Result<Self, String> {
-        let mut listen: SocketAddr = "0.0.0.0:51820"
+        let mut listen: SocketAddr = "0.0.0.0:65433"
             .parse()
             .expect("hardcoded default is valid");
         let mut stale_after = STALE_AFTER_DEFAULT;
@@ -250,7 +250,7 @@ mod tests {
     #[test]
     fn cli_default() {
         let c = Config::from_argv(vec![]).unwrap();
-        assert_eq!(c.listen.port(), 51820);
+        assert_eq!(c.listen.port(), 65433);
         assert_eq!(c.stale_after, Duration::from_secs(300));
     }
 

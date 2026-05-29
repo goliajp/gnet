@@ -184,7 +184,7 @@ sudo systemctl enable --now gnet-relay-server
 
 ```bash
 systemctl status gnet-relay-server
-ss -ulpn | grep 51820            # UDP 51820 bound
+ss -ulpn | grep 65433            # UDP 65433 bound
 journalctl -u gnet-relay-server -n 20
 ```
 
