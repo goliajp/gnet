@@ -45,6 +45,12 @@ TimeoutStopSec=10s
 NoNewPrivileges=true
 ProtectSystem=strict
 ReadWritePaths=/etc/gnet
+# Admin IPC unix socket — systemd materialises /run/gnet/ (0755, root-owned)
+# on start and removes it on stop, so the daemon can bind admin.sock without
+# punching a hole in ProtectSystem=strict. /var/run -> /run symlink on Debian
+# 13 makes the daemon-side path (/var/run/gnet/admin.sock) resolve here.
+RuntimeDirectory=gnet
+RuntimeDirectoryMode=0755
 ProtectHome=true
 PrivateTmp=true
 LockPersonality=true
@@ -57,8 +63,9 @@ ProtectControlGroups=true
 RestrictRealtime=true
 MemoryDenyWriteExecute=true
 # AF_INET/INET6 for the UDP socket and curl (HTTP coordinator), AF_NETLINK
-# for the `ip addr add` / `ip link set` calls used to configure the tun.
-RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK
+# for the `ip addr add` / `ip link set` calls used to configure the tun,
+# AF_UNIX for the admin IPC socket (v0.21).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
 
 # Bandwidth accounting — systemctl show exposes IPIngressBytes/IPEgressBytes
 # so operators can see per-instance traffic without external probes.
