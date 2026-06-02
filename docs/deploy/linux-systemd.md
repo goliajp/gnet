@@ -88,8 +88,9 @@ The unit drops into a sandbox after start. Notable flags:
 |---|---|
 | `NoNewPrivileges=true` | Forbids `setuid`/`setcap` escalation |
 | `ProtectSystem=strict` + `ReadWritePaths=/etc/gnet` | Whole FS read-only except `/etc/gnet` |
+| `RuntimeDirectory=gnet` | systemd creates `/run/gnet/` on start (0755, root) and removes it on stop — used for the admin IPC socket `/run/gnet/admin.sock` (v0.21) |
 | `ProtectKernelTunables`/`Modules`/`Logs` + `ProtectControlGroups` | No `/proc/sys` writes, no module ops, no cgroup mutation |
-| `RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK` | Only the families the daemon actually uses (UDP, HTTP, ip-route) |
+| `RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX` | Only the families the daemon actually uses (UDP, HTTP, ip-route, admin IPC) |
 | `RestrictNamespaces=true` + `LockPersonality` + `RestrictRealtime` | No namespace/personality/realtime escalation |
 | `MemoryDenyWriteExecute=true` | No `mmap(W+X)` — safe because the Rust binary doesn't JIT |
 | `IPAccounting=true` | Per-instance IP byte counters via `systemctl show` |
