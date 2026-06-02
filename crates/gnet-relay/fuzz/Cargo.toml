@@ -1,0 +1,26 @@
+[package]
+name = "gnet-relay-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+# fuzz harnesses live outside the main workspace — they depend on a
+# nightly toolchain (libfuzzer-sys) and on dev-only crates.io packages,
+# both of which would break the zero-deps posture of the parent crate.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.gnet-relay]
+path = ".."
+
+[[bin]]
+name = "relay_decode"
+path = "fuzz_targets/relay_decode.rs"
+test = false
+doc = false
+bench = false
