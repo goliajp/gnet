@@ -10,12 +10,23 @@
 //!
 //! 1. conf parses (`hard fail` — without conf nothing else makes sense)
 //! 2. private key derives
-//! 3. coordinator reachable (HTTP GET /healthz, multi-coord failover)
-//! 4. device_token accepted (POST /endpoint-report) — only when conf has one
-//! 5. admin socket reachable (unix-socket connect + read)
-//! 6. /etc/hosts gnet block present (only when conf has coordinator +
+//! 3. coordinator known us (GET /peers with X-Device-Pubkey — tests
+//!    reachability AND that our pubkey is in the coord's roster, in one
+//!    syscall; multi-coord failover)
+//! 4. admin socket reachable (unix-socket connect + read)
+//! 5. /etc/hosts gnet block present (only when conf has coordinator +
 //!    `manage_hosts` not turned off)
-//! 7. service unit state (systemctl on Linux, launchctl on macOS)
+//! 6. service unit state (systemctl on Linux, launchctl on macOS)
+//!
+//! Notes on what's *not* checked:
+//!
+//! - `device_token` write capability — no read-only probe on the coord
+//!   side; a misconfigured token surfaces in the daemon's event log as
+//!   `event=endpoint_report_failed` and via `gnet status`, so a redundant
+//!   doctor check isn't worth a write-mutation probe.
+//! - Relay UDP reachability — no echo protocol on the relay; the daemon's
+//!   own `event=relay_*` logs and `gnet metrics`'s
+//!   `gnet_relay_health_age_ms` already cover it.
 //!
 //! Each check yields PASS / WARN / FAIL with a one-line detail. Exit code:
 //! 0 if zero FAILs, 1 otherwise. WARNs do not flip the verdict — they are
@@ -125,9 +136,6 @@ fn run_checks(conf_path: &Path) -> Vec<Check> {
     ));
 
     checks.push(check_coordinator(&config, &pubkey_hex));
-    if config.device_token.is_some() {
-        checks.push(check_device_token(&config, &pubkey_hex));
-    }
     checks.push(check_admin_socket());
 
     if !config.coordinators.is_empty() && config.manage_hosts {
@@ -174,16 +182,19 @@ fn check_coordinator(config: &gnet_config::Config, pubkey_hex: &str) -> Check {
             "none configured (static-conf-only — peers must be hand-written)",
         );
     }
+    // GET /peers tests reachability AND that this device's pubkey is in the
+    // coord's roster (the handler returns 401 for an unknown pubkey). A
+    // successful response carries the peer count too, which is a useful
+    // sanity number in the doctor's output.
     let mut errs = Vec::new();
     for coord in &config.coordinators {
-        match http_get(&format!("{coord}/healthz"), pubkey_hex) {
-            Ok(_) => {
+        match http_get(&format!("{coord}/peers"), pubkey_hex) {
+            Ok(body) => {
+                let peer_count = body.matches("\"x25519_pubkey\"").count();
                 return Check::pass(
                     "coordinator",
                     format!(
-                        "{coord} /healthz OK ({}/{} configured reachable)",
-                        1,
-                        config.coordinators.len()
+                        "{coord} /peers OK (pubkey recognised, {peer_count} peer(s))"
                     ),
                 );
             }
@@ -191,53 +202,6 @@ fn check_coordinator(config: &gnet_config::Config, pubkey_hex: &str) -> Check {
         }
     }
     Check::fail("coordinator", format!("none reachable: {}", errs.join("; ")))
-}
-
-fn check_device_token(config: &gnet_config::Config, pubkey_hex: &str) -> Check {
-    let Some(coord) = config.coordinators.first() else {
-        return Check::warn(
-            "device_token",
-            "set but no coordinator configured to validate against",
-        );
-    };
-    let token = config.device_token.as_ref().expect("checked by caller");
-    // a minimal probe of /endpoint-report — empty body just means "no new
-    // endpoint to report". A coordinator that recognises the token answers
-    // 200 / 204; an unknown token gets a 401 or 403. We don't decode the
-    // body, just the HTTP status via curl's exit code.
-    let url = format!("{coord}/endpoint-report");
-    let out = Command::new("curl")
-        .arg("--silent")
-        .arg("--show-error")
-        .arg("--fail-with-body")
-        .arg("--connect-timeout")
-        .arg("5")
-        .arg("--max-time")
-        .arg("10")
-        .arg("-X")
-        .arg("POST")
-        .arg("-H")
-        .arg(format!("X-Device-Pubkey: {pubkey_hex}"))
-        .arg("-H")
-        .arg(format!("X-Device-Token: {token}"))
-        .arg("-d")
-        .arg("")
-        .arg(&url)
-        .output();
-    match out {
-        Ok(o) if o.status.success() => Check::pass(
-            "device_token",
-            format!("{coord}/endpoint-report accepted"),
-        ),
-        Ok(o) => Check::fail(
-            "device_token",
-            format!(
-                "{coord}/endpoint-report rejected (curl exit {:?})",
-                o.status.code()
-            ),
-        ),
-        Err(e) => Check::fail("device_token", format!("curl failed: {e}")),
-    }
 }
 
 fn check_admin_socket() -> Check {
