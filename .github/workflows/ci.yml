@@ -19,7 +19,14 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: workspace tests (debug)
-        run: cargo test --workspace
+        # exclude gnet-bench-compare — its perf_gate tests calibrate against
+        # SOTA-competitor crates and only make sense in --release; running
+        # them in debug mode means the ratios are wildly different (debug
+        # code runs ~10× slower than release for both sides at roughly the
+        # same rate, but the noise envelope explodes), so a 2% over-cap is
+        # microbench debug noise, not a real regression. The same crate
+        # runs in release in the dedicated perf_gate step below.
+        run: cargo test --workspace --exclude gnet-bench-compare
       - name: rustdoc — every public surface renders cleanly
         run: cargo doc --no-deps --workspace
       # The perf_gate is the ceiling enforcement: every category must stay
