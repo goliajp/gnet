@@ -26,7 +26,10 @@ fn main() {
     assert_eq!(got_origin, origin_pk);
     assert_eq!(got_target, target_pk);
     assert_eq!(got_refl, origin_refl);
-    println!("PunchConnect: {} bytes (32 + 32 + addr)", connect_body.len());
+    println!(
+        "PunchConnect: {} bytes (32 + 32 + addr)",
+        connect_body.len()
+    );
 
     // Step the origin-side state machine.
     let sent_at = Instant::now() - Duration::from_millis(40); // back-dated RTT

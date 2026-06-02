@@ -51,9 +51,13 @@ fn main() -> ExitCode {
                 "  gnet join --token <T> --coordinator <URL> [--endpoint EP] [--out PATH] [--no-hosts] [--hosts PATH]"
             );
             eprintln!("  gnet status [--conf PATH]        (self + coordinator-side peer view)");
-            eprintln!("  gnet metrics                     (Prometheus text from the daemon's admin socket)");
+            eprintln!(
+                "  gnet metrics                     (Prometheus text from the daemon's admin socket)"
+            );
             eprintln!("  gnet doctor [--conf PATH]        (pre-flight green/red verdict)");
-            eprintln!("  gnet rotate-key [--conf PATH]    (mint new identity, swap on coordinator + conf)");
+            eprintln!(
+                "  gnet rotate-key [--conf PATH]    (mint new identity, swap on coordinator + conf)"
+            );
             eprintln!("  gnet purge-hosts [--hosts PATH]  (remove the gnet block from /etc/hosts)");
             return ExitCode::FAILURE;
         }

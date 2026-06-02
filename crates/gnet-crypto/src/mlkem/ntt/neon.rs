@@ -26,10 +26,7 @@ use core::arch::aarch64::*;
 /// # Safety
 /// NEON intrinsics; available unconditionally on aarch64.
 #[inline]
-pub(super) unsafe fn montgomery_reduce_x8(
-    lo: int32x4_t,
-    hi: int32x4_t,
-) -> int16x8_t {
+pub(super) unsafe fn montgomery_reduce_x8(lo: int32x4_t, hi: int32x4_t) -> int16x8_t {
     unsafe {
         let qinv_v = vdupq_n_s16(QINV);
         // a_low16: truncate each i32 to its low 16 bits (signed).
@@ -95,12 +92,7 @@ pub(super) unsafe fn barrett_reduce_x8(a: int16x8_t) -> int16x8_t {
 /// # Safety
 /// NEON intrinsics; aarch64-only.
 #[inline]
-unsafe fn ntt_layer_uniform(
-    r: &mut [i16; 256],
-    start: usize,
-    len: usize,
-    zeta: i16,
-) {
+unsafe fn ntt_layer_uniform(r: &mut [i16; 256], start: usize, len: usize, zeta: i16) {
     unsafe {
         let z_v = vdupq_n_s16(zeta);
         let mut j = start;
@@ -127,12 +119,7 @@ unsafe fn ntt_layer_uniform(
 /// # Safety
 /// NEON intrinsics; aarch64-only.
 #[inline]
-unsafe fn invntt_layer_uniform(
-    r: &mut [i16; 256],
-    start: usize,
-    len: usize,
-    zeta: i16,
-) {
+unsafe fn invntt_layer_uniform(r: &mut [i16; 256], start: usize, len: usize, zeta: i16) {
     unsafe {
         let z_v = vdupq_n_s16(zeta);
         let mut j = start;
@@ -281,11 +268,7 @@ static ZETA_MUL_VECS: [[i16; 8]; 16] = build_zeta_mul_vecs();
 ///
 /// Matches the scalar `super::ntt_mul_into_scalar` bit-for-bit on every
 /// input; verified by `ntt_mul_neon_matches_scalar` in the test module.
-pub(super) fn ntt_mul_into_neon(
-    a: &[i16; 256],
-    b: &[i16; 256],
-    r: &mut [i16; 256],
-) {
+pub(super) fn ntt_mul_into_neon(a: &[i16; 256], b: &[i16; 256], r: &mut [i16; 256]) {
     // SAFETY: aarch64-only module; ptr arithmetic is bounded by the
     // 16-i16 stride over a 256-element slice (16 iters × 16 i16 = 256).
     unsafe {

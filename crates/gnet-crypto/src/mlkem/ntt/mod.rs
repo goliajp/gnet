@@ -214,7 +214,6 @@ fn ntt_mul_into_scalar(a: &[i16; 256], b: &[i16; 256], r: &mut [i16; 256]) {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,10 +480,14 @@ mod tests {
         }
         let scalar_inv_ns = start.elapsed().as_nanos() as u64 / iters as u64;
 
-        eprintln!("ntt    NEON: {neon_fwd_ns} ns  scalar: {scalar_fwd_ns} ns  speedup {:.2}×",
-            scalar_fwd_ns as f64 / neon_fwd_ns as f64);
-        eprintln!("invntt NEON: {neon_inv_ns} ns  scalar: {scalar_inv_ns} ns  speedup {:.2}×",
-            scalar_inv_ns as f64 / neon_inv_ns as f64);
+        eprintln!(
+            "ntt    NEON: {neon_fwd_ns} ns  scalar: {scalar_fwd_ns} ns  speedup {:.2}×",
+            scalar_fwd_ns as f64 / neon_fwd_ns as f64
+        );
+        eprintln!(
+            "invntt NEON: {neon_inv_ns} ns  scalar: {scalar_inv_ns} ns  speedup {:.2}×",
+            scalar_inv_ns as f64 / neon_inv_ns as f64
+        );
     }
 
     /// invntt(ntt(a)) = a · 2^16 mod q (Montgomery factor); stripping it

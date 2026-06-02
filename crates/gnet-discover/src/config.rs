@@ -52,8 +52,8 @@ impl Config {
             .unwrap_or_else(|_| "/var/lib/gnet-discover/state.json".to_string())
             .into();
 
-        let admin_token =
-            std::env::var("GNET_DISCOVER_ADMIN_TOKEN").map_err(|_| ConfigError::Missing("GNET_DISCOVER_ADMIN_TOKEN"))?;
+        let admin_token = std::env::var("GNET_DISCOVER_ADMIN_TOKEN")
+            .map_err(|_| ConfigError::Missing("GNET_DISCOVER_ADMIN_TOKEN"))?;
         if admin_token.len() < 16 {
             return Err(ConfigError::WeakToken);
         }

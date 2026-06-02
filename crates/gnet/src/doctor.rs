@@ -193,15 +193,16 @@ fn check_coordinator(config: &gnet_config::Config, pubkey_hex: &str) -> Check {
                 let peer_count = body.matches("\"x25519_pubkey\"").count();
                 return Check::pass(
                     "coordinator",
-                    format!(
-                        "{coord} /peers OK (pubkey recognised, {peer_count} peer(s))"
-                    ),
+                    format!("{coord} /peers OK (pubkey recognised, {peer_count} peer(s))"),
                 );
             }
             Err(e) => errs.push(format!("{coord}: {e}")),
         }
     }
-    Check::fail("coordinator", format!("none reachable: {}", errs.join("; ")))
+    Check::fail(
+        "coordinator",
+        format!("none reachable: {}", errs.join("; ")),
+    )
 }
 
 fn check_admin_socket() -> Check {
@@ -214,10 +215,7 @@ fn check_admin_socket() -> Check {
                 let est = snap
                     .lines()
                     .filter(|l| l.starts_with("peer "))
-                    .filter(|l| {
-                        l.split(' ')
-                            .any(|t| t == "session=established")
-                    })
+                    .filter(|l| l.split(' ').any(|t| t == "session=established"))
                     .count();
                 Check::pass(
                     "admin socket",
@@ -227,8 +225,9 @@ fn check_admin_socket() -> Check {
                     ),
                 )
             }
-            Err(e) if e.kind() == io::ErrorKind::NotFound
-                || e.kind() == io::ErrorKind::ConnectionRefused =>
+            Err(e)
+                if e.kind() == io::ErrorKind::NotFound
+                    || e.kind() == io::ErrorKind::ConnectionRefused =>
             {
                 Check::warn(
                     "admin socket",
@@ -286,7 +285,10 @@ fn check_hosts_block(config: &gnet_config::Config, _pubkey_hex: &str) -> Check {
     let Some(end) = text[begin..].find("# ---END gnet---") else {
         return Check::fail(
             "hosts splice",
-            format!("BEGIN marker without matching END in {}", hosts_path.display()),
+            format!(
+                "BEGIN marker without matching END in {}",
+                hosts_path.display()
+            ),
         );
     };
     let block = &text[begin..begin + end];
@@ -316,10 +318,7 @@ fn check_service_unit() -> Check {
                     Check::warn("service unit", format!("gnet@main: {state}"))
                 }
             }
-            Err(e) => Check::warn(
-                "service unit",
-                format!("systemctl not available: {e}"),
-            ),
+            Err(e) => Check::warn("service unit", format!("systemctl not available: {e}")),
         }
     }
     #[cfg(target_os = "macos")]
@@ -426,7 +425,7 @@ mod tests {
 
     #[test]
     fn verdict_aggregation_red_when_any_fail() {
-        let checks = vec![
+        let checks = [
             Check::pass("a", ""),
             Check::warn("b", ""),
             Check::fail("c", ""),
@@ -437,7 +436,7 @@ mod tests {
 
     #[test]
     fn verdict_aggregation_amber_when_warn_no_fail() {
-        let checks = vec![Check::pass("a", ""), Check::warn("b", "")];
+        let checks = [Check::pass("a", ""), Check::warn("b", "")];
         let fail = checks.iter().any(|c| c.verdict == Verdict::Fail);
         let warn = checks.iter().any(|c| c.verdict == Verdict::Warn);
         assert!(!fail && warn);

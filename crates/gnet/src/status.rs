@@ -284,10 +284,7 @@ fn format_live_tag(live: Option<&str>) -> String {
 /// either — there is nothing to say.
 fn print_local_only_peers(admin: Option<&str>) {
     let Some(snap) = admin else { return };
-    let peer_lines: Vec<&str> = snap
-        .lines()
-        .filter(|l| l.starts_with("peer "))
-        .collect();
+    let peer_lines: Vec<&str> = snap.lines().filter(|l| l.starts_with("peer ")).collect();
     if peer_lines.is_empty() {
         return;
     }
@@ -576,10 +573,7 @@ fn pgrep_gnet_up() -> io::Result<Vec<String>> {
     // other `gnet` subcommands like `gnet status` (this very invocation) are
     // excluded automatically since their cmdline carries "gnet status",
     // not "gnet up". pgrep self-excludes its own pid.
-    let out = Command::new("pgrep")
-        .arg("-af")
-        .arg("gnet up")
-        .output()?;
+    let out = Command::new("pgrep").arg("-af").arg("gnet up").output()?;
     if !out.status.success() && out.stdout.is_empty() {
         return Ok(Vec::new());
     }
@@ -641,8 +635,14 @@ mod tests {
 
     #[test]
     fn parses_alias_comment() {
-        assert_eq!(parse_alias_comment("# alias gnet-mini\nprivate ..."), Some("gnet-mini".into()));
-        assert_eq!(parse_alias_comment("# alias   t01   \n"), Some("t01".into()));
+        assert_eq!(
+            parse_alias_comment("# alias gnet-mini\nprivate ..."),
+            Some("gnet-mini".into())
+        );
+        assert_eq!(
+            parse_alias_comment("# alias   t01   \n"),
+            Some("t01".into())
+        );
         assert_eq!(parse_alias_comment("private ...\n"), None);
         assert_eq!(parse_alias_comment("# alias \n"), None);
     }

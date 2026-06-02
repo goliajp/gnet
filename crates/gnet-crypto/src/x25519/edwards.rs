@@ -12,7 +12,7 @@
 //! caller can do a fixed-base scalar multiplication without leaking any
 //! scalar bits through timing or branches.
 
-use super::field::{Fe, FE_ONE, FE_ZERO, MASK51, fadd, finvert, fmul, fsqr, fsub, reduce_loose};
+use super::field::{FE_ONE, FE_ZERO, Fe, MASK51, fadd, finvert, fmul, fsqr, fsub, reduce_loose};
 
 /// Extended-coordinate Edwards point `(X, Y, Z, T)` with `T = XY/Z`.
 #[derive(Clone, Copy, Debug)]
@@ -76,8 +76,8 @@ pub(super) const D2: Fe = {
 /// Identical layout to [`super::field::unpack`] but `const fn`.
 const fn unpack_le_const(b: &[u8; 32]) -> Fe {
     let l0 = u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) & MASK51;
-    let l1 = (u64::from_le_bytes([b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13]]) >> 3)
-        & MASK51;
+    let l1 =
+        (u64::from_le_bytes([b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13]]) >> 3) & MASK51;
     let l2 = (u64::from_le_bytes([b[12], b[13], b[14], b[15], b[16], b[17], b[18], b[19]]) >> 6)
         & MASK51;
     let l3 = (u64::from_le_bytes([b[19], b[20], b[21], b[22], b[23], b[24], b[25], b[26]]) >> 1)
@@ -100,9 +100,9 @@ pub(super) const BASEPOINT: Point = {
 
     // RFC 8032 §5.1 — Ed25519 basepoint X (parity 0), little-endian.
     let x_bytes: [u8; 32] = [
-        0x1a, 0xd5, 0x25, 0x8f, 0x60, 0x2d, 0x56, 0xc9, 0xb2, 0xa7, 0x25, 0x95, 0x60, 0xc7,
-        0x2c, 0x69, 0x5c, 0xdc, 0xd6, 0xfd, 0x31, 0xe2, 0xa4, 0xc0, 0xfe, 0x53, 0x6e, 0xcd,
-        0xd3, 0x36, 0x69, 0x21,
+        0x1a, 0xd5, 0x25, 0x8f, 0x60, 0x2d, 0x56, 0xc9, 0xb2, 0xa7, 0x25, 0x95, 0x60, 0xc7, 0x2c,
+        0x69, 0x5c, 0xdc, 0xd6, 0xfd, 0x31, 0xe2, 0xa4, 0xc0, 0xfe, 0x53, 0x6e, 0xcd, 0xd3, 0x36,
+        0x69, 0x21,
     ];
     let x = unpack_le_const(&x_bytes);
 
@@ -291,8 +291,8 @@ pub(super) fn ed_to_mont_u_pair(p1: &Point, p2: &Point) -> ([u8; 32], [u8; 32]) 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::field::pack;
+    use super::*;
 
     /// Variable-time double-and-add scalar mult for test only (do not use
     /// in prod — leaks scalar bits via branches).

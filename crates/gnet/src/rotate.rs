@@ -63,7 +63,12 @@ pub fn run(args: &[String]) -> io::Result<()> {
     Ok(())
 }
 
-fn post_rotate(url: &str, device_token: &str, new_pk_hex: &str, new_ek_hex: &str) -> io::Result<()> {
+fn post_rotate(
+    url: &str,
+    device_token: &str,
+    new_pk_hex: &str,
+    new_ek_hex: &str,
+) -> io::Result<()> {
     let body = format!(r#"{{"x25519_pubkey":"{new_pk_hex}","mlkem_ek":"{new_ek_hex}"}}"#);
     let out = Command::new("curl")
         .arg("--silent")
@@ -219,7 +224,10 @@ peer abc def 10.42.42.2 1.2.3.4:65432
         assert!(after.contains("device_token aaaaaaaa"));
         assert!(after.contains("peer abc def 10.42.42.2 1.2.3.4:65432"));
         // single `private` directive remains
-        assert_eq!(after.matches("\nprivate ").count() + after.starts_with("private ") as usize, 1);
+        assert_eq!(
+            after.matches("\nprivate ").count() + after.starts_with("private ") as usize,
+            1
+        );
     }
 
     #[test]

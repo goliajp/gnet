@@ -211,12 +211,7 @@ mod tests {
             slot[32] = (k as u8) % 3;
             slot[33] = (k as u8) / 3;
         }
-        let seed_refs: [&[u8]; 4] = [
-            &seeds_buf[0],
-            &seeds_buf[1],
-            &seeds_buf[2],
-            &seeds_buf[3],
-        ];
+        let seed_refs: [&[u8]; 4] = [&seeds_buf[0], &seeds_buf[1], &seeds_buf[2], &seeds_buf[3]];
 
         // warm
         for _ in 0..50 {
@@ -262,12 +257,7 @@ mod tests {
             slot[32] = i;
             slot[33] = j;
         }
-        let seed_refs: [&[u8]; 4] = [
-            &seeds_buf[0],
-            &seeds_buf[1],
-            &seeds_buf[2],
-            &seeds_buf[3],
-        ];
+        let seed_refs: [&[u8]; 4] = [&seeds_buf[0], &seeds_buf[1], &seeds_buf[2], &seeds_buf[3]];
         let parallel = sample_ntt_x4(seed_refs);
         for k in 0..4 {
             let serial = sample_ntt(&seeds_buf[k]);

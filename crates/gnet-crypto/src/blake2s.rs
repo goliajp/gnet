@@ -294,7 +294,9 @@ mod tests {
     /// cases (empty, sub-block, exact-block, multi-block, partial fills).
     #[test]
     fn streaming_matches_oneshot() {
-        for len in [0usize, 1, 31, 32, 63, 64, 65, 127, 128, 129, 200, 1000, 4096] {
+        for len in [
+            0usize, 1, 31, 32, 63, 64, 65, 127, 128, 129, 200, 1000, 4096,
+        ] {
             let msg: Vec<u8> = (0..len).map(|i| (i as u8).wrapping_mul(7) ^ 0xa5).collect();
             let one = hash(32, &msg);
             let mut streamed = [0u8; 32];

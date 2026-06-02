@@ -132,7 +132,11 @@ mod tests {
         let mut p = std::env::temp_dir();
         let mut r = [0u8; 8];
         gnet_rand::fill(&mut r);
-        p.push(format!("gnet-discover-test-{}-{}.json", suffix, gnet_hex::encode(&r)));
+        p.push(format!(
+            "gnet-discover-test-{}-{}.json",
+            suffix,
+            gnet_hex::encode(&r)
+        ));
         p
     }
 

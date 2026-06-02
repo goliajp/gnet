@@ -389,8 +389,7 @@ mod tests {
         let mut prng = Lcg::new(0xdead_beef_cafe_babe);
         let mut hits = 0u32;
         for trial in 0..TRIALS {
-            let actual_nat_port =
-                LINUX_EPHEMERAL_BASE + ((prng.next_u32() % span) as u16);
+            let actual_nat_port = LINUX_EPHEMERAL_BASE + ((prng.next_u32() % span) as u16);
             let target = ep(actual_nat_port);
             let set = CandidateSet::new(ep(40_000), 0, K, trial as u64);
             if set.iter().skip(1).any(|c| c == target) {

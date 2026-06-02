@@ -112,14 +112,14 @@ mod tests {
     #[test]
     #[ignore = "informational keygen profiling; opt in with `--ignored --nocapture --release`"]
     fn keygen_breakdown_microbench() {
-        use std::time::Instant;
-        use crate::sha3::sha3_512;
         use super::kpke;
         use super::poly::{
             K, PolyVec, add_in_place, dot_into, gen_matrix, polyvec_ntt_in_place, reduce_in_place,
             to_mont_in_place,
         };
         use super::sample::sample_cbd_eta2;
+        use crate::sha3::sha3_512;
+        use std::time::Instant;
 
         let d = [0x11u8; 32];
 

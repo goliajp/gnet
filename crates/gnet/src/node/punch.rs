@@ -469,11 +469,19 @@ mod tests {
 
         // only r2 echoed our keepalive (r1 is dead/silent) → route around r1.
         n.note_relay_pong(r2);
-        assert_eq!(n.relay_data_endpoint(0), Some(r2), "dead r1 is routed around");
+        assert_eq!(
+            n.relay_data_endpoint(0),
+            Some(r2),
+            "dead r1 is routed around"
+        );
 
         // both healthy → stable preference for the first (no churn).
         n.note_relay_pong(r1);
-        assert_eq!(n.relay_data_endpoint(0), Some(r1), "prefer first when both live");
+        assert_eq!(
+            n.relay_data_endpoint(0),
+            Some(r1),
+            "prefer first when both live"
+        );
     }
 
     #[test]
@@ -635,7 +643,10 @@ mod tests {
         let dials = o.poll_punch_dials();
         let fanout_len = 1 + 2 * PUNCH_SEQUENTIAL_RADIUS as usize;
         assert_eq!(dials.len(), fanout_len);
-        assert_eq!(dials[0].0, target_refl, "first dial is the observed reflexive");
+        assert_eq!(
+            dials[0].0, target_refl,
+            "first dial is the observed reflexive"
+        );
         for d in &dials {
             assert_eq!(d.1[0], Kind::HandshakeInit as u8);
             assert_eq!(d.1, dials[0].1, "all candidates share the same msg1 bytes");
@@ -766,11 +777,7 @@ mod tests {
         let coord_ep: SocketAddr = "203.0.113.9:7777".parse().unwrap();
 
         let mut n = upgrade_fixture(
-            target_pub,
-            target_ek,
-            coord_pub,
-            coord_ek,
-            coord_ep,
+            target_pub, target_ek, coord_pub, coord_ek, coord_ep,
             None, // no reflexive endpoint discovered yet
         );
         n.peers[0].direct_upgrade_at = Instant::now() - Duration::from_secs(1);
@@ -805,11 +812,7 @@ mod tests {
 
         let mut n = node(
             [1u8; 32],
-            vec![
-                direct,
-                not_yet,
-                peer(coord_pub, coord_ek, Some(coord_ep)),
-            ],
+            vec![direct, not_yet, peer(coord_pub, coord_ek, Some(coord_ep))],
             Some(my_refl),
         );
         assert!(
@@ -883,7 +886,10 @@ mod tests {
         let dials = n.poll_punch_dials();
         let fanout_len = 1 + 2 * PUNCH_SEQUENTIAL_RADIUS as usize;
         assert_eq!(dials.len(), fanout_len);
-        assert_eq!(dials[0].0, target_refl, "first dial is the observed reflexive");
+        assert_eq!(
+            dials[0].0, target_refl,
+            "first dial is the observed reflexive"
+        );
         for d in &dials {
             assert_eq!(d.1[0], Kind::HandshakeInit as u8);
             assert_eq!(d.1, dials[0].1, "all candidates share the same msg1 bytes");

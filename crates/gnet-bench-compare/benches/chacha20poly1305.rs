@@ -10,10 +10,7 @@
 //!
 //! Run: `cargo bench -p gnet-bench-compare --bench chacha20poly1305`.
 
-use chacha20poly1305::{
-    AeadInPlace, ChaCha20Poly1305, KeyInit, Nonce,
-    aead::Aead,
-};
+use chacha20poly1305::{AeadInPlace, ChaCha20Poly1305, KeyInit, Nonce, aead::Aead};
 use gnet_bench_compare::{bench, bench_vs, opaque, section};
 use gnet_rand::random_32;
 

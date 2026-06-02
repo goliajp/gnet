@@ -426,8 +426,16 @@ peer 0000000000000000000000000000000000000000000000000000000000000003 {ek3} 10.8
     fn behind_nat_directive() {
         let base = "private 0000000000000000000000000000000000000000000000000000000000000001\naddress 10.0.0.1\nlisten 0.0.0.0:1\n";
         assert_eq!(parse(base).unwrap().behind_nat, None);
-        assert_eq!(parse(&format!("{base}behind_nat true")).unwrap().behind_nat, Some(true));
-        assert_eq!(parse(&format!("{base}behind_nat false")).unwrap().behind_nat, Some(false));
+        assert_eq!(
+            parse(&format!("{base}behind_nat true")).unwrap().behind_nat,
+            Some(true)
+        );
+        assert_eq!(
+            parse(&format!("{base}behind_nat false"))
+                .unwrap()
+                .behind_nat,
+            Some(false)
+        );
         assert!(parse(&format!("{base}behind_nat maybe")).is_err());
         assert!(parse(&format!("{base}behind_nat")).is_err());
     }

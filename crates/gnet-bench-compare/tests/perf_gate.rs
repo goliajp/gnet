@@ -252,7 +252,11 @@ fn mlkem_keygen_hardgate() {
     // keygen specifically). The slow-cluster envelope shrunk from
     // 1.08-1.13 to 0.79-0.80 because the absolute time is shorter and
     // the same scheduling spike weighs less.
-    let cap = if cfg!(target_arch = "aarch64") { 0.70 } else { 0.90 };
+    let cap = if cfg!(target_arch = "aarch64") {
+        0.70
+    } else {
+        0.90
+    };
     assert_ratio("ML-KEM keygen", gnet_ns, comp_ns, cap);
 }
 
@@ -317,7 +321,11 @@ fn mlkem_encaps_hardgate() {
     // the absolute time is shorter and CPU scheduling spikes weigh more
     // relatively. Cap 0.90 catches any real regression while passing the
     // slow-cluster envelope.
-    let cap = if cfg!(target_arch = "aarch64") { 0.65 } else { 0.90 };
+    let cap = if cfg!(target_arch = "aarch64") {
+        0.65
+    } else {
+        0.90
+    };
     assert_ratio("ML-KEM encaps", gnet_ns, comp_ns, cap);
 }
 
@@ -377,7 +385,11 @@ fn mlkem_decaps_hardgate() {
     // slow cluster lands at 0.77-0.79 (vs typical 0.46-0.47). Cap 0.85
     // gates real regressions (≥ 8% slower than competitor) while
     // absorbing the bimodal envelope.
-    let cap = if cfg!(target_arch = "aarch64") { 0.60 } else { 0.85 };
+    let cap = if cfg!(target_arch = "aarch64") {
+        0.60
+    } else {
+        0.85
+    };
     assert_ratio("ML-KEM decaps", gnet_ns, comp_ns, cap);
 }
 
@@ -398,7 +410,11 @@ fn noise_ik_classic_hardgate() {
     let resp_pk = gnet_crypto::x25519::x25519(&resp_sk, &basepoint);
 
     let gnet_ns = measure_best(ITERS_NOISE, || {
-        let mut ini = Initiator::new(black_box(ini_sk), black_box(resp_pk), gnet_rand::random_32());
+        let mut ini = Initiator::new(
+            black_box(ini_sk),
+            black_box(resp_pk),
+            gnet_rand::random_32(),
+        );
         let msg1 = ini.write_message_1(b"");
         let mut resp = Responder::new(black_box(resp_sk), gnet_rand::random_32());
         resp.read_message_1(&msg1).expect("read msg1");

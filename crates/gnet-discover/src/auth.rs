@@ -136,7 +136,10 @@ mod tests {
     fn mint_token_is_48_hex_chars() {
         let t = mint_token();
         assert_eq!(t.len(), 48);
-        assert!(t.chars().all(|c| c.is_ascii_hexdigit() && (c.is_ascii_digit() || c.is_lowercase())));
+        assert!(
+            t.chars()
+                .all(|c| c.is_ascii_hexdigit() && (c.is_ascii_digit() || c.is_lowercase()))
+        );
     }
 
     #[test]

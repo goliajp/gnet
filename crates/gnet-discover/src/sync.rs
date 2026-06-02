@@ -113,7 +113,10 @@ mod tests {
 
     #[test]
     fn parse_authority_ipv4_with_port() {
-        assert_eq!(parse_authority("http://10.0.0.1:65432").unwrap(), "10.0.0.1:65432");
+        assert_eq!(
+            parse_authority("http://10.0.0.1:65432").unwrap(),
+            "10.0.0.1:65432"
+        );
     }
 
     #[test]
@@ -126,7 +129,10 @@ mod tests {
 
     #[test]
     fn parse_authority_ipv6_literal() {
-        assert_eq!(parse_authority("http://[::1]:65432/x").unwrap(), "[::1]:65432");
+        assert_eq!(
+            parse_authority("http://[::1]:65432/x").unwrap(),
+            "[::1]:65432"
+        );
     }
 
     #[test]

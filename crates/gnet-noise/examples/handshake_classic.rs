@@ -33,8 +33,9 @@ fn main() {
         core::str::from_utf8(&payload1).unwrap()
     );
 
-    let (msg2, mut resp_transport) =
-        resp.write_message_2(b"hello from responder").expect("write msg2");
+    let (msg2, mut resp_transport) = resp
+        .write_message_2(b"hello from responder")
+        .expect("write msg2");
     println!("msg2: {} bytes on the wire", msg2.len());
     let (mut ini_transport, payload2) = ini.read_message_2(&msg2).expect("read msg2");
     println!(

@@ -8,8 +8,8 @@
 //! Run: `cargo bench -p gnet-bench-compare --bench mlkem`.
 
 use gnet_bench_compare::{bench, bench_vs, opaque, section};
-use ml_kem::{KemCore, MlKem768};
 use ml_kem::kem::{Decapsulate, Encapsulate};
+use ml_kem::{KemCore, MlKem768};
 
 fn main() {
     section("ML-KEM-768 keygen (one keypair)");
@@ -47,7 +47,9 @@ fn main() {
 
     let (comp_dk, comp_ek) = MlKem768::generate(&mut rng);
     bench_vs("ml-kem::encapsulate", gnet_encaps_ns, 200, || {
-        let (ct, ss) = opaque(&comp_ek).encapsulate(opaque(&mut rng)).expect("encaps");
+        let (ct, ss) = opaque(&comp_ek)
+            .encapsulate(opaque(&mut rng))
+            .expect("encaps");
         opaque((ct, ss));
     });
 
@@ -61,13 +63,18 @@ fn main() {
 
     let (comp_ct, _comp_ss_a) = comp_ek.encapsulate(&mut rng).expect("encaps");
     bench_vs("ml-kem::decapsulate", gnet_decaps_ns, 200, || {
-        let ss = opaque(&comp_dk).decapsulate(opaque(&comp_ct)).expect("decaps");
+        let ss = opaque(&comp_dk)
+            .decapsulate(opaque(&comp_ct))
+            .expect("decaps");
         opaque(ss);
     });
 
     // sanity: gnet's encaps/decaps round-trip matches.
     let (ss_b, _) = gnet_crypto::mlkem::encaps(&gnet_ek, &encaps_rand);
-    assert_eq!(ss_a, ss_b, "gnet mlkem must be deterministic for fixed randomness");
+    assert_eq!(
+        ss_a, ss_b,
+        "gnet mlkem must be deterministic for fixed randomness"
+    );
     println!("\n  (sanity ✓ — gnet-crypto::mlkem encaps is deterministic in its randomness input)");
 }
 

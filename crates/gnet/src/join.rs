@@ -39,11 +39,7 @@ pub fn run(args: &[String]) -> io::Result<()> {
     //    carries the device's public material + reflexive endpoint hint.
     let body = build_request_json(&pk_hex, &mlkem_ek_hex, opts.endpoint.as_deref());
     eprintln!("posting join to {}/join", opts.coordinator);
-    let resp = post_json(
-        &format!("{}/join", opts.coordinator),
-        &body,
-        &opts.token,
-    )?;
+    let resp = post_json(&format!("{}/join", opts.coordinator), &body, &opts.token)?;
 
     // 3. Parse response (hand-rolled subset of JSON).
     let alias = extract_string(&resp, "alias")
@@ -255,11 +251,7 @@ fn default_conf_path() -> PathBuf {
     PathBuf::from("./gnet.conf")
 }
 
-fn build_request_json(
-    x25519_pubkey: &str,
-    mlkem_ek: &str,
-    endpoint: Option<&str>,
-) -> String {
+fn build_request_json(x25519_pubkey: &str, mlkem_ek: &str, endpoint: Option<&str>) -> String {
     let mut s = String::with_capacity(512);
     s.push('{');
     s.push_str(&format!("\"x25519_pubkey\":\"{x25519_pubkey}\""));

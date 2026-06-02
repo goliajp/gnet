@@ -30,11 +30,16 @@ fn main() {
         let b = gnet_hex::decode_32(opaque(&hex32));
         opaque(b);
     });
-    bench_vs("hex::decode_to_slice (32 B target)", gnet_dec_ns, 1_000_000, || {
-        let mut out = [0u8; 32];
-        hex::decode_to_slice(opaque(&hex32), opaque(&mut out)).expect("decode");
-        opaque(out);
-    });
+    bench_vs(
+        "hex::decode_to_slice (32 B target)",
+        gnet_dec_ns,
+        1_000_000,
+        || {
+            let mut out = [0u8; 32];
+            hex::decode_to_slice(opaque(&hex32), opaque(&mut out)).expect("decode");
+            opaque(out);
+        },
+    );
 
     section("Hex encode 1184 B (ML-KEM-768 ek)");
 

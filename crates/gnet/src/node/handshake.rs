@@ -390,7 +390,10 @@ mod tests {
             "responder session established"
         );
         assert!(!g.peers[0].relay, "relay flag dropped");
-        assert!(g.peers[0].relay_endpoint.is_none(), "relay endpoint cleared");
+        assert!(
+            g.peers[0].relay_endpoint.is_none(),
+            "relay endpoint cleared"
+        );
         assert_eq!(
             g.peers[0].direct_upgrade_failures, 0,
             "upgrade failure counter reset"
@@ -439,7 +442,10 @@ mod tests {
 
         let g = node.lock().unwrap();
         assert!(matches!(g.peers[0].session, Session::Established(_)));
-        assert!(g.peers[0].relay, "relay flag preserved on relayed handshake");
+        assert!(
+            g.peers[0].relay,
+            "relay flag preserved on relayed handshake"
+        );
         assert_eq!(g.peers[0].relay_endpoint, Some(relay_ep));
         assert_eq!(
             g.peers[0].direct_upgrade_failures, 3,
@@ -465,8 +471,7 @@ mod tests {
         // we initiate; capture msg1 the way the pump would
         let msg1 = start_init(&node, my_priv, peer_pub, &peer_ek, 0xC0FF_EE00);
         // peer responds — build msg2 with their state machine
-        let mut resp =
-            HybridResponder::new(peer_priv, &peer_ek, &peer_dk, gnet_rand::random_32());
+        let mut resp = HybridResponder::new(peer_priv, &peer_ek, &peer_dk, gnet_rand::random_32());
         resp.read_message_1(&msg1).expect("peer reads msg1");
         let peer_rx = 0xDEAD_BEEF_u32;
         let (msg2, _resp_t) = resp
@@ -482,7 +487,10 @@ mod tests {
         let g = node.lock().unwrap();
         assert!(matches!(g.peers[0].session, Session::Established(_)));
         assert!(!g.peers[0].relay, "relay flag dropped");
-        assert!(g.peers[0].relay_endpoint.is_none(), "relay endpoint cleared");
+        assert!(
+            g.peers[0].relay_endpoint.is_none(),
+            "relay endpoint cleared"
+        );
         assert_eq!(
             g.peers[0].direct_upgrade_failures, 0,
             "upgrade failure counter reset"
@@ -505,8 +513,7 @@ mod tests {
         mark_peer_relayed(&node, relay_ep, 4);
 
         let msg1 = start_init(&node, my_priv, peer_pub, &peer_ek, 0xC0FF_EE00);
-        let mut resp =
-            HybridResponder::new(peer_priv, &peer_ek, &peer_dk, gnet_rand::random_32());
+        let mut resp = HybridResponder::new(peer_priv, &peer_ek, &peer_dk, gnet_rand::random_32());
         resp.read_message_1(&msg1).expect("peer reads msg1");
         let (msg2, _resp_t) = resp
             .write_message_2(&0u32.to_le_bytes())
@@ -559,8 +566,7 @@ mod tests {
         // peer's NAT actually allocated a *different* port — the candidate
         // that landed is `actual_hit`, not `observed`.
         let actual_hit: SocketAddr = "203.0.113.4:60017".parse().unwrap();
-        let mut resp =
-            HybridResponder::new(peer_priv, &peer_ek, &peer_dk, gnet_rand::random_32());
+        let mut resp = HybridResponder::new(peer_priv, &peer_ek, &peer_dk, gnet_rand::random_32());
         resp.read_message_1(&msg1).expect("peer reads msg1");
         let (msg2, _resp_t) = resp
             .write_message_2(&0u32.to_le_bytes())
@@ -601,8 +607,7 @@ mod tests {
             // punched stays false — this is a regular direct init.
         }
         let msg1 = start_init(&node, my_priv, peer_pub, &peer_ek, 0x1234_5678);
-        let mut resp =
-            HybridResponder::new(peer_priv, &peer_ek, &peer_dk, gnet_rand::random_32());
+        let mut resp = HybridResponder::new(peer_priv, &peer_ek, &peer_dk, gnet_rand::random_32());
         resp.read_message_1(&msg1).expect("peer reads msg1");
         let (msg2, _resp_t) = resp
             .write_message_2(&0u32.to_le_bytes())

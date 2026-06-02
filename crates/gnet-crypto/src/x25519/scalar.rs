@@ -7,7 +7,7 @@
 //! which uses an Edwards comb table and is ~4× faster.
 
 use super::field::{
-    Fe, FE_ONE, FE_ZERO, cswap, fadd, finvert, fmul, fmul121665, fsqr, fsub, pack, unpack,
+    FE_ONE, FE_ZERO, Fe, cswap, fadd, finvert, fmul, fmul121665, fsqr, fsub, pack, unpack,
 };
 
 /// Clamp the scalar per RFC 7748 §5 (decodeScalar25519).
