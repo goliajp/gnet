@@ -31,15 +31,19 @@
 
 ## What "gnet 1.0" means
 
-**gnet 1.0 is the milestone where the project goes public on GitHub** as a
-feature-complete, observable, well-documented system that holds up to
-outside scrutiny. It is a git tag `gnet-v1.0` on the existing daemon tag
-line — **not** a crates.io release.
+**gnet 1.0 is the milestone where the project is feature-complete,
+observable, and well-documented enough to hold up to outside scrutiny.**
+The repo at `goliajp/gnet` is **already public** (since the split on
+2026-05-28; earlier roadmap revisions wrongly described the v1.0 flip as
+a private→public visibility change — that flip happened at split time,
+not at the tag). v1.0 is therefore a git tag `gnet-v1.0` on the existing
+daemon tag line + a CHANGELOG / release notes commit, **not** a
+visibility flip and **not** a crates.io release.
 
 Publishing the stones to crates.io is **decoupled and deferred** (see
 *Out of scope* below). The daemon binaries (`gnet`, `gnet-discover`,
 `gnet-relay-server`, `gnet-bench-compare`) are never published to crates.io
-— they ship as a public GitHub repository.
+— they ship as the public GitHub repository they already are.
 
 ## Scope — the v1.0 boundary (fixed)
 
@@ -122,7 +126,7 @@ held.
 | **v0.22** | Track F polish — `gnet doctor` diagnostic subcommand + small fleet-surfaced bug-fixes | v0.21 deployed | ✓ shipped 2026-06-03 (doctor; further fleet-surfaced fixes folded as they appear) |
 | **v0.23** | Track B quality gate (KAT freeze, fuzzing, SECURITY.md, CT review) | v0.22 doctor lands; no wire changes planned for v1.0 | ✓ shipped 2026-06-03 |
 | **v0.24** | Track E presentation (CI enable, **always-latest toolchain policy**, CONTRIBUTING, deploy docs, README, codebase reflow against current rustfmt) | quality gate green | ✓ code shipped 2026-06-03 — toolchain policy locked in as "always latest stable" (rust-toolchain channel = "stable"; CI uses `dtolnay/rust-toolchain@stable`); no version-pinning. **One operator action left:** GitHub Actions is currently registered only for the dependabot "Dependency Graph" workflow; `ci.yml` is committed but not picked up. Likely a repo Settings → Actions → General toggle needs flipping (the API rejects automated enable from non-admin tokens). Once Actions is on, the existing `ci.yml` runs on every push without further change. |
-| **gnet-v1.0** | Flip the GitHub repo to public; tag the release | all four tracks green + CI running. **Major bump — earns an observation window before v1.1 control-plane work begins.** | |
+| **gnet-v1.0** | Tag the release + write CHANGELOG (repo is already public — see "What gnet 1.0 means") | all four tracks green + CI green on develop. **Major bump — earns an observation window before v1.1 control-plane work begins.** | |
 | **v1.1 (post-public)** | Control plane + console at gnet.golia.jp — account model, OAuth, Tailscale-style fleet UI. Separate project (Rust + axum + PG18 + Valkey9 + React 19). See "Post-1.0 plan" below. | v1.0 tagged + public; observation window passed | planned |
 
 ## Post-1.0 plan — v1.1 control plane + console (gnet.golia.jp)
