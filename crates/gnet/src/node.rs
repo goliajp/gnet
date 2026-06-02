@@ -215,6 +215,7 @@ pub fn run(config: Config) -> io::Result<()> {
         probe_txid: 0,
         self_is_nat,
         nat_override,
+        metrics: Default::default(),
     }));
 
     // condvar the punch-dial poller blocks on; downlink notifies it when a
@@ -272,7 +273,10 @@ pub fn run(config: Config) -> io::Result<()> {
                     // relay server to register with or we are confirmed public.
                     if last_relay_register.elapsed() >= RELAY_REGISTER_INTERVAL {
                         last_relay_register = Instant::now();
-                        sends.extend(g.relay_register_datagrams());
+                        let regs = g.relay_register_datagrams();
+                        g.metrics.relay_register_sent =
+                            g.metrics.relay_register_sent.saturating_add(regs.len() as u64);
+                        sends.extend(regs);
                     }
                     sends
                 };

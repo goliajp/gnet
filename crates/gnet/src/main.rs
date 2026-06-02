@@ -17,6 +17,7 @@ use gnet::{channel, hosts, keys};
 use gnet_hex as hex;
 
 mod join;
+mod metrics;
 mod rotate;
 mod status;
 
@@ -31,6 +32,7 @@ fn main() -> ExitCode {
         Some("up") => cmd_up(&args),
         Some("join") => join::run(&args),
         Some("status") => status::run(&args),
+        Some("metrics") => metrics::run(&args),
         Some("rotate-key") => rotate::run(&args),
         Some("purge-hosts") => cmd_purge_hosts(&args),
         _ => {
@@ -47,6 +49,7 @@ fn main() -> ExitCode {
                 "  gnet join --token <T> --coordinator <URL> [--endpoint EP] [--out PATH] [--no-hosts] [--hosts PATH]"
             );
             eprintln!("  gnet status [--conf PATH]        (self + coordinator-side peer view)");
+            eprintln!("  gnet metrics                     (Prometheus text from the daemon's admin socket)");
             eprintln!("  gnet rotate-key [--conf PATH]    (mint new identity, swap on coordinator + conf)");
             eprintln!("  gnet purge-hosts [--hosts PATH]  (remove the gnet block from /etc/hosts)");
             return ExitCode::FAILURE;

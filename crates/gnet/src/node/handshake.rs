@@ -71,6 +71,7 @@ pub(super) fn handle_init(
     g.peers[i].rx_index = my_rx;
     g.peers[i].session = Session::Established(transport);
     g.peers[i].last_established_at = Some(Instant::now());
+    g.metrics.handshake_success = g.metrics.handshake_success.saturating_add(1);
     if !via_relay {
         // direct: learn the peer's real source address. For a relayed init the
         // source is the relay, not the peer — leave the endpoint untouched and
@@ -110,10 +111,16 @@ pub(super) fn handle_init(
 /// observed-port guess and emitted msg1 to every candidate; the candidate
 /// the peer's NAT actually allocated for us is the one whose msg2 arrives,
 /// and its real source port is exactly `from`.
-pub(super) fn complete_initiation(peer: &mut Peer, body: &[u8], from: SocketAddr, via_relay: bool) {
+pub(super) fn complete_initiation(
+    peer: &mut Peer,
+    body: &[u8],
+    from: SocketAddr,
+    via_relay: bool,
+) -> bool {
     if !matches!(peer.session, Session::Initiating { .. }) {
-        return;
+        return false;
     }
+    let mut established = false;
     if let Session::Initiating { ini, .. } = std::mem::replace(&mut peer.session, Session::Idle)
         && let Some((transport, payload)) = ini.read_message_2(body)
         && let Some(peer_index) = index_from_payload(&payload)
@@ -148,7 +155,9 @@ pub(super) fn complete_initiation(peer: &mut Peer, body: &[u8], from: SocketAddr
                 );
             }
         }
+        established = true;
     }
+    established
 }
 
 #[cfg(test)]
@@ -223,6 +232,7 @@ mod tests {
             probe_txid: 0,
             self_is_nat: None,
             nat_override: false,
+            metrics: Default::default(),
         }))
     }
 

@@ -187,6 +187,33 @@ pub(super) struct Node {
     /// then leaves `self_is_nat` alone (do not let probe outputs override the
     /// operator-known truth, e.g. AWS 1:1 NAT where the heuristic would lie).
     pub(super) nat_override: bool,
+    /// Cumulative event counters since daemon start. Read-only from the wire
+    /// path; mutated by the call sites that *emit* the corresponding event
+    /// (handshake completions, relay-register sends, relay-fallback trips).
+    /// Surfaced by the admin IPC and the `gnet metrics` Prometheus exporter
+    /// — never consulted to decide behaviour.
+    pub(super) metrics: Counters,
+}
+
+/// Cumulative per-event counters surfaced to operators via the admin snapshot
+/// and `gnet metrics`. Counters are monotonic from daemon start (no reset on
+/// roster change); a daemon restart zeroes them — Prometheus handles that
+/// with `rate()` over restarts.
+#[derive(Default)]
+pub(super) struct Counters {
+    /// Noise_IK handshakes that reached `Session::Established` (either side).
+    pub(super) handshake_success: u64,
+    /// Handshakes torn down by `expire_handshakes` (msg1/msg2 lost, peer down,
+    /// NAT mapping closed mid-handshake). Counts each give-up; a peer that
+    /// retries 3× before establishing contributes 0 here and 1 to success.
+    pub(super) handshake_fail: u64,
+    /// Self-addressed RelayData envelopes sent to refresh our relay-server
+    /// registration. One increment per send (not per relay tick).
+    pub(super) relay_register_sent: u64,
+    /// Peers that tripped from direct/punch to relay-fallback after
+    /// `PUNCH_ATTEMPTS` consecutive handshake give-ups. A peer that flaps
+    /// direct↔relay multiple times contributes one per trip.
+    pub(super) peer_relay_fallback: u64,
 }
 
 impl Node {
@@ -270,6 +297,9 @@ impl Node {
                 PunchState::Connecting { sent_at } if sent_at.elapsed() > timeout
             );
             if timed_out_session || timed_out_punch {
+                if timed_out_session {
+                    self.metrics.handshake_fail = self.metrics.handshake_fail.saturating_add(1);
+                }
                 p.session = Session::Idle;
                 p.punch = PunchState::Idle;
                 if timed_out_punch && p.relay {
@@ -323,6 +353,8 @@ impl Node {
                 self.peers[i].alias,
                 self.peers[i].punch_failures
             );
+            self.metrics.peer_relay_fallback =
+                self.metrics.peer_relay_fallback.saturating_add(1);
         }
     }
 
@@ -552,6 +584,7 @@ mod tests {
             probe_txid: 0,
             self_is_nat: None,
             nat_override: false,
+            metrics: Default::default(),
         }
     }
 

@@ -221,8 +221,10 @@ fn handle_datagram(
                 Some(src) => g.by_pubkey(src),
                 None => g.by_endpoint(from),
             };
-            if let Some(i) = i {
-                complete_initiation(&mut g.peers[i], &buf[body_off..n], from, relay_src.is_some());
+            if let Some(i) = i
+                && complete_initiation(&mut g.peers[i], &buf[body_off..n], from, relay_src.is_some())
+            {
+                g.metrics.handshake_success = g.metrics.handshake_success.saturating_add(1);
             }
         }
         Kind::Transport => {
