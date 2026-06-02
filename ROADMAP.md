@@ -120,8 +120,8 @@ held.
 | **v0.20** | Track A remainder: discovery peer-leave/reconcile + relay health probing & failover (keepalive echo) | v0.18–v0.19 verified stable on the fleet | ✓ shipped |
 | **v0.21** | Track C observability: admin unix-socket IPC, `gnet status` live fusion (session/path/last-handshake per peer), `gnet metrics` Prometheus exporter, counters at handshake/relay-register/relay-fallback. Wire untouched. | v0.20 fleet-stable + relay echo validated | ✓ shipped 2026-06-02 |
 | **v0.22** | Track F polish — `gnet doctor` diagnostic subcommand + small fleet-surfaced bug-fixes | v0.21 deployed | ✓ shipped 2026-06-03 (doctor; further fleet-surfaced fixes folded as they appear) |
-| **v0.23** | Track B quality gate (KAT freeze, fuzzing, SECURITY.md, CT review) | v0.22 doctor lands; no wire changes planned for v1.0 | next |
-| **v0.24** | Track E presentation (CI enable, rustfmt pin, CONTRIBUTING, deploy docs, README) | quality gate green | |
+| **v0.23** | Track B quality gate (KAT freeze, fuzzing, SECURITY.md, CT review) | v0.22 doctor lands; no wire changes planned for v1.0 | ✓ shipped 2026-06-03 |
+| **v0.24** | Track E presentation (CI enable, rustfmt pin, CONTRIBUTING, deploy docs, README) | quality gate green | next |
 | **gnet-v1.0** | Flip the GitHub repo to public; tag the release | all four tracks green + CI running. **Major bump — earns an observation window before v1.1 control-plane work begins.** | |
 | **v1.1 (post-public)** | Control plane + console at gnet.golia.jp — account model, OAuth, Tailscale-style fleet UI. Separate project (Rust + axum + PG18 + Valkey9 + React 19). See "Post-1.0 plan" below. | v1.0 tagged + public; observation window passed | planned |
 
