@@ -102,8 +102,11 @@ open-source release.
 
 ## Sequencing & triggers
 
-Versions are indicative, not contractual; the *order* and the *trigger* are
-the commitment. A checkpoint goes hot only when its trigger is observed.
+Versions are indicative, not contractual; the *order* is the commitment.
+**Observation periods between minor versions (x.y.z, only y/z changing) are
+not part of the cadence** — checkpoints flow into each other directly. Only
+a **major bump** (x → x+1, e.g. v0.x → v1.0 or v1.x → v2.0) earns a
+deliberate observation window before the next major work starts.
 
 A6 split into two checkpoints (state sync/failover, then the read-only standby
 fence), which pushed the later checkpoints down one slot from the original
@@ -116,10 +119,10 @@ held.
 | **v0.19** | Track A: A6 warm-standby read-only fence (failover self-consistent, no silent data loss on primary recovery) | A6 core landed | ✓ shipped |
 | **v0.20** | Track A remainder: discovery peer-leave/reconcile + relay health probing & failover (keepalive echo) | v0.18–v0.19 verified stable on the fleet | ✓ shipped |
 | **v0.21** | Track C observability: admin unix-socket IPC, `gnet status` live fusion (session/path/last-handshake per peer), `gnet metrics` Prometheus exporter, counters at handshake/relay-register/relay-fallback. Wire untouched. | v0.20 fleet-stable + relay echo validated | ✓ shipped 2026-06-02 |
-| **v0.22** | Track F polish — `gnet doctor` diagnostic subcommand + small fleet-surfaced bug-fixes | v0.21 deploy stable + 1-2 weeks of fleet operation observed | next |
-| **v0.23** | Track B quality gate (KAT freeze, fuzzing, SECURITY.md, CT review) | daemon feature-frozen, no wire changes planned for v1.0 | |
+| **v0.22** | Track F polish — `gnet doctor` diagnostic subcommand + small fleet-surfaced bug-fixes | v0.21 deployed | ✓ shipped 2026-06-03 (doctor; further fleet-surfaced fixes folded as they appear) |
+| **v0.23** | Track B quality gate (KAT freeze, fuzzing, SECURITY.md, CT review) | v0.22 doctor lands; no wire changes planned for v1.0 | next |
 | **v0.24** | Track E presentation (CI enable, rustfmt pin, CONTRIBUTING, deploy docs, README) | quality gate green | |
-| **gnet-v1.0** | Flip the GitHub repo to public; tag the release | all four tracks green + CI running | |
+| **gnet-v1.0** | Flip the GitHub repo to public; tag the release | all four tracks green + CI running. **Major bump — earns an observation window before v1.1 control-plane work begins.** | |
 | **v1.1 (post-public)** | Control plane + console at gnet.golia.jp — account model, OAuth, Tailscale-style fleet UI. Separate project (Rust + axum + PG18 + Valkey9 + React 19). See "Post-1.0 plan" below. | v1.0 tagged + public; observation window passed | planned |
 
 ## Post-1.0 plan — v1.1 control plane + console (gnet.golia.jp)
