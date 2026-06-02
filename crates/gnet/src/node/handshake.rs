@@ -4,6 +4,7 @@
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use gnet_noise::hybrid::HybridResponder;
 
@@ -69,6 +70,7 @@ pub(super) fn handle_init(
     g.peers[i].tx_index = peer_index;
     g.peers[i].rx_index = my_rx;
     g.peers[i].session = Session::Established(transport);
+    g.peers[i].last_established_at = Some(Instant::now());
     if !via_relay {
         // direct: learn the peer's real source address. For a relayed init the
         // source is the relay, not the peer — leave the endpoint untouched and
@@ -119,6 +121,7 @@ pub(super) fn complete_initiation(peer: &mut Peer, body: &[u8], from: SocketAddr
         // our rx_index was set when we initiated; msg2 carries the peer's.
         peer.tx_index = peer_index;
         peer.session = Session::Established(transport);
+        peer.last_established_at = Some(Instant::now());
         peer.punch_failures = 0; // handshake succeeded — clear punch-failure count
         if !via_relay {
             // mirror handle_init: the direct path is now live, so the relay
@@ -212,6 +215,7 @@ mod tests {
                 relay_eligible: false,
                 direct_upgrade_at: Instant::now() + super::super::punch::DIRECT_UPGRADE_BASE,
                 direct_upgrade_failures: 0,
+                last_established_at: None,
             }],
             relay_servers: Vec::new(),
             relay_health: Default::default(),

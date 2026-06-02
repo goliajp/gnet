@@ -9,19 +9,21 @@
 //! the self conf and the coordinator-side rows side by side. Falls back
 //! gracefully when the coordinator is unreachable — local conf is still shown.
 //!
-//! Daemon liveness is reported from `pgrep`. Daemon-internal state (current
-//! reflexive endpoint, per-peer session phase, last handshake) is *not* yet
-//! exposed by the daemon over IPC, so the status output sticks to what the
-//! conf and coordinator already publish. A future addition (v0.4.x) would
-//! plumb a unix-socket query into the daemon so `gnet status` can show live
-//! `Session::Established`/`Initiating` plus RTT.
+//! Daemon liveness comes from `pgrep`; live daemon-internal state (current
+//! reflexive endpoint, per-peer session phase, last successful handshake)
+//! comes from the admin unix-socket exposed by `gnet up` since v0.21. When
+//! the admin socket is unreachable (daemon down, pre-v0.21, or permissions),
+//! status falls back to conf + coordinator output without the live block.
 
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use gnet::keys;
 use gnet_hex as hex;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::os::unix::net::UnixStream;
 
 /// Entry point for the `gnet status` subcommand.
 pub fn run(args: &[String]) -> io::Result<()> {
@@ -37,6 +39,7 @@ pub fn run(args: &[String]) -> io::Result<()> {
     print_blank();
     print_daemon();
     print_blank();
+    print_live();
     print_coordinator(&config, &pubkey_hex);
     Ok(())
 }
@@ -93,6 +96,130 @@ fn print_daemon() {
         Ok(_) => println!("  pid          (no `gnet up` process found)"),
         Err(e) => println!("  pid          (pgrep failed: {e})"),
     }
+}
+
+/// Pull a snapshot from the daemon's admin socket and render the live
+/// per-peer session view. Silent on the common failure (socket absent /
+/// connection refused) — that just means the daemon is down or pre-v0.21,
+/// and the conf + coordinator sections still carry useful info on their own.
+/// Non-empty surface only when the daemon actually answers.
+fn print_live() {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let snap = match fetch_admin_snapshot() {
+            Ok(s) => s,
+            Err(e) if e.kind() == io::ErrorKind::NotFound
+                || e.kind() == io::ErrorKind::ConnectionRefused =>
+            {
+                return;
+            }
+            Err(e) => {
+                println!("live (admin socket error: {e})");
+                print_blank();
+                return;
+            }
+        };
+        let lines: Vec<&str> = snap.lines().collect();
+        let node_line = lines.iter().find(|l| l.starts_with("node ")).copied();
+        let peer_lines: Vec<&str> = lines
+            .iter()
+            .copied()
+            .filter(|l| l.starts_with("peer "))
+            .collect();
+        let relay_lines: Vec<&str> = lines
+            .iter()
+            .copied()
+            .filter(|l| l.starts_with("relay "))
+            .collect();
+
+        println!("live");
+        if let Some(n) = node_line {
+            println!(
+                "  reflexive    {}",
+                kv(n, "reflexive").unwrap_or("(unknown)")
+            );
+            println!(
+                "  self_is_nat  {}",
+                kv(n, "self_is_nat").unwrap_or("(unknown)")
+            );
+        }
+        for r in &relay_lines {
+            let ep = kv(r, "endpoint").unwrap_or("?");
+            let age = kv(r, "health_age_ms").unwrap_or("?");
+            let display = if age == "never" {
+                "no pong yet".to_string()
+            } else {
+                format!("last pong {age}ms ago")
+            };
+            println!("  relay        {ep}  ({display})");
+        }
+        if peer_lines.is_empty() {
+            println!("  (no peers configured in the daemon)");
+        } else {
+            println!("  {} peer(s):", peer_lines.len());
+            for p in &peer_lines {
+                let alias = kv(p, "alias").unwrap_or("-");
+                let session = kv(p, "session").unwrap_or("?");
+                let endpoint = kv(p, "endpoint").unwrap_or("none");
+                let relay = kv(p, "relay").unwrap_or("false") == "true";
+                let punched = kv(p, "punched").unwrap_or("false") == "true";
+                let age = kv(p, "last_established_age_s").unwrap_or("?");
+                let path_tag = if relay {
+                    let rep = kv(p, "relay_endpoint").unwrap_or("?");
+                    format!("via relay {rep}")
+                } else if punched {
+                    "direct (punched)".to_string()
+                } else {
+                    "direct".to_string()
+                };
+                let last = if age == "never" {
+                    "never established".to_string()
+                } else {
+                    format!("up {age}s")
+                };
+                let display_alias = if alias == "-" {
+                    "(no alias)".to_string()
+                } else {
+                    format!("gnet-{alias}")
+                };
+                println!(
+                    "    {:8} session={:11} endpoint={:21} {path_tag}, {last}",
+                    display_alias, session, endpoint,
+                );
+            }
+        }
+        print_blank();
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = ();
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn fetch_admin_snapshot() -> io::Result<String> {
+    let path = gnet::node::admin_socket_path();
+    let mut sock = UnixStream::connect(&path)?;
+    // bound the read — a healthy daemon writes ~200B per peer, but a wedged
+    // one shouldn't make `gnet status` hang forever.
+    sock.set_read_timeout(Some(Duration::from_secs(2)))?;
+    let mut buf = String::new();
+    sock.read_to_string(&mut buf)?;
+    Ok(buf)
+}
+
+/// Extract `key=value` from an admin-snapshot line. Returns the value slice
+/// up to the next space, or `None` if the key is absent. The wire format
+/// guarantees values are space-free, so a plain split suffices.
+fn kv<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    for tok in line.split(' ') {
+        if let Some((k, v)) = tok.split_once('=')
+            && k == key
+        {
+            return Some(v);
+        }
+    }
+    None
 }
 
 fn print_coordinator(c: &gnet_config::Config, our_pubkey_hex: &str) {
