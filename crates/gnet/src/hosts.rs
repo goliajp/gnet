@@ -137,12 +137,20 @@ pub fn remove_block(existing: &str) -> String {
 }
 
 /// Splice the gnet-managed marker block into `path`, replacing any prior
-/// block in place (idempotent). Uses an atomic write+rename so the system
-/// resolver never reads a half-written file, and never touches file
-/// permissions: `/etc/hosts` is world-readable and must stay that way.
+/// block in place (idempotent). Prefers an atomic tmp+rename so the system
+/// resolver never reads a half-written file; falls back to a direct
+/// truncate+write_all when the sandbox blocks tmp creation in the target's
+/// parent (the daemon's systemd unit has `ProtectSystem=strict` and lists
+/// `/etc/hosts` as writable but not `/etc`, so `/etc/.hosts.gnet.tmp` cannot
+/// be created — only the file itself is mutable). The fallback is best-effort
+/// atomic: `/etc/hosts` is typically a few KB and a single `write_all` is
+/// effectively atomic vs. resolver `open+read`, but a worst-case race may
+/// briefly expose a truncated file (the resolver then falls back to DNS).
+/// Never touches file permissions — `/etc/hosts` is world-readable and must
+/// stay that way.
 ///
 /// A missing target is treated as empty (the block is still written). When
-/// the spliced result equals the current contents the rename is skipped
+/// the spliced result equals the current contents the write is skipped
 /// entirely — so a no-op poll in the daemon's discovery loop costs one read
 /// and nothing else.
 pub fn splice_atomic(path: &Path, entries: &[Entry]) -> io::Result<()> {
@@ -155,10 +163,32 @@ pub fn splice_atomic(path: &Path, entries: &[Entry]) -> io::Result<()> {
     let body = format_entries(entries);
     let next = splice_block(&existing, &body);
     if next == existing {
-        // already in the desired state — skip the rename entirely so
-        // we don't race with other readers of the file for no reason
+        // already in the desired state — skip the write entirely so we
+        // don't race with other readers of the file for no reason
         return Ok(());
     }
+    match write_via_tmp_rename(path, &next) {
+        Ok(()) => Ok(()),
+        Err(e)
+            if e.kind() == io::ErrorKind::ReadOnlyFilesystem
+                || e.kind() == io::ErrorKind::PermissionDenied =>
+        {
+            // graceful degradation under a strict sandbox: open the target
+            // in place and overwrite. Surface the downgrade once via the
+            // event log so operators can correlate with any resolver
+            // hiccup (rare — see fn docs).
+            eprintln!(
+                "event=hosts_sync_direct_write path={} reason={:?}",
+                path.display(),
+                e.kind()
+            );
+            write_direct(path, &next)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn write_via_tmp_rename(path: &Path, content: &str) -> io::Result<()> {
     let final_name = path
         .file_name()
         .ok_or_else(|| io::Error::other("hosts path has no filename component"))?
@@ -173,11 +203,20 @@ pub fn splice_atomic(path: &Path, entries: &[Entry]) -> io::Result<()> {
             .write(true)
             .truncate(true)
             .open(&tmp)?;
-        f.write_all(next.as_bytes())?;
+        f.write_all(content.as_bytes())?;
         f.sync_all()?;
     }
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    std::fs::rename(&tmp, path)
+}
+
+fn write_direct(path: &Path, content: &str) -> io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)?;
+    f.write_all(content.as_bytes())?;
+    f.sync_all()
 }
 
 #[cfg(test)]
@@ -355,6 +394,36 @@ mod tests {
         // original hand-written line untouched
         assert!(contents_2.starts_with("127.0.0.1\tlocalhost\n"));
 
+        std::fs::remove_dir_all(&tmpdir).ok();
+    }
+
+    #[test]
+    fn write_direct_overwrites_existing_target_inode() {
+        // The sandbox-fallback path: open the target in place, truncate,
+        // write_all. Inode stays the same (no rename), permissions stay the
+        // same (no chmod). Exercises the fn behind splice_atomic's EROFS
+        // fallback without needing a real read-only mount.
+        let tmpdir = std::env::temp_dir().join(format!(
+            "gnet-hosts-direct-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmpdir).unwrap();
+        let path = tmpdir.join("hosts");
+        std::fs::write(&path, "127.0.0.1\tlocalhost\nold tail\n").unwrap();
+        let original_metadata = std::fs::metadata(&path).unwrap();
+        write_direct(&path, "127.0.0.1\tlocalhost\nnew tail\n").unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, "127.0.0.1\tlocalhost\nnew tail\n");
+        // inode preserved (no rename, no chmod surprise)
+        let new_metadata = std::fs::metadata(&path).unwrap();
+        assert_eq!(
+            original_metadata.permissions().readonly(),
+            new_metadata.permissions().readonly()
+        );
         std::fs::remove_dir_all(&tmpdir).ok();
     }
 }

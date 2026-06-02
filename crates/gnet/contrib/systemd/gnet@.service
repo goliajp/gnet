@@ -44,7 +44,11 @@ TimeoutStopSec=10s
 # under these flags.
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/etc/gnet
+# /etc/gnet writable for conf rewrites by `gnet join` / `rotate-key`; /etc/hosts
+# writable so the discovery loop's hosts-block splice can land (the parent /etc
+# stays read-only, so tmp+rename inside /etc is impossible — hosts.rs detects
+# this and falls back to a direct truncate+write_all on the file inode).
+ReadWritePaths=/etc/gnet /etc/hosts
 # Admin IPC unix socket — systemd materialises /run/gnet/ (0755, root-owned)
 # on start and removes it on stop, so the daemon can bind admin.sock without
 # punching a hole in ProtectSystem=strict. /var/run -> /run symlink on Debian
