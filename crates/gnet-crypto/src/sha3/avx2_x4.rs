@@ -108,6 +108,11 @@ macro_rules! rho_pi {
 // The final rho_pi! invocation writes `t` that no later step reads;
 // that's correct (the walk schedule terminates), and harmless.
 #[allow(unused_assignments)]
+// index-driven inner loops are intentional — `i` indexes into both the
+// state lanes (with `+5`/`+10`/`+15`/`+20` offsets that have no iterator
+// equivalent) and the modular-rotation table; iterator chains would
+// obscure the round structure here.
+#[allow(clippy::needless_range_loop)]
 unsafe fn keccak_f_x4(s: &mut State4) {
     for &rc in &scalar::RC {
         // θ: bc[i] = XOR_{j=0..5} s[5j + i];
