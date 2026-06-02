@@ -16,12 +16,15 @@
 //!
 //! [`wire`]: gnet_wire
 
+mod admin;
 mod discovery;
 mod handshake;
 mod local_ips;
 mod pump;
 mod punch;
 mod types;
+
+pub use admin::default_socket_path as admin_socket_path;
 
 use std::io;
 use std::net::{IpAddr, UdpSocket};
@@ -190,6 +193,7 @@ pub fn run(config: Config) -> io::Result<()> {
             // sessions establish over relay before we try to upgrade them.
             direct_upgrade_at: Instant::now() + DIRECT_UPGRADE_BASE,
             direct_upgrade_failures: 0,
+            last_established_at: None,
         })
         .collect();
     // our own ML-KEM key pair is derived from our X25519 private key.
@@ -326,6 +330,12 @@ pub fn run(config: Config) -> io::Result<()> {
             },
         );
     }
+
+    // admin IPC: snapshot the live node state to a unix socket so `gnet
+    // status` can show actual session phases without scraping journalctl.
+    // Best-effort — a bind failure logs and the daemon proceeds without it
+    // (observability must not block the wire path).
+    admin::spawn(node.clone(), admin::default_socket_path());
 
     let up = pump::uplink(tun.clone(), socket.clone(), node.clone());
     let down = pump::downlink(tun, socket, node, dial_wake);

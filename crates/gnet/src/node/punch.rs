@@ -378,6 +378,7 @@ mod tests {
             relay_eligible: false,
             direct_upgrade_at: Instant::now() + DIRECT_UPGRADE_BASE,
             direct_upgrade_failures: 0,
+            last_established_at: None,
         }
     }
 

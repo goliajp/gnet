@@ -135,6 +135,12 @@ pub(super) struct Peer {
     /// `DIRECT_UPGRADE_MAX`. Reset to 0 when a punch dial completes (peer
     /// is back on the direct path).
     pub(super) direct_upgrade_failures: u32,
+    /// Instant at which the current `Session::Established` transport was
+    /// installed (i.e. the most recent successful handshake completion).
+    /// `None` for a peer that has never established a session this process
+    /// lifetime. Surfaced by the admin IPC for operator visibility; not
+    /// consulted by the wire path.
+    pub(super) last_established_at: Option<Instant>,
 }
 
 /// Shared node state (our keys + peers), guarded by one `Mutex`.
@@ -529,6 +535,7 @@ mod tests {
             relay_eligible: false,
             direct_upgrade_at: Instant::now() + super::super::punch::DIRECT_UPGRADE_BASE,
             direct_upgrade_failures: 0,
+            last_established_at: None,
         }
     }
 

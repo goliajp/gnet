@@ -433,6 +433,7 @@ pub(super) fn apply(node: &Mutex<Node>, views: &[PeerView]) -> (usize, usize, us
             relay_eligible: v.relay_eligible,
             direct_upgrade_at: Instant::now() + DIRECT_UPGRADE_BASE,
             direct_upgrade_failures: 0,
+            last_established_at: None,
         });
         added += 1;
     }
@@ -1018,6 +1019,7 @@ mod tests {
                 relay_eligible: false,
                 direct_upgrade_at: Instant::now() + DIRECT_UPGRADE_BASE,
                 direct_upgrade_failures: 0,
+                last_established_at: None,
             });
         }
         // a coordinator poll that lists a different peer entirely
@@ -1201,6 +1203,7 @@ mod tests {
                 relay_eligible: false,
                 direct_upgrade_at: Instant::now() + DIRECT_UPGRADE_BASE,
                 direct_upgrade_failures: 0,
+                last_established_at: None,
             });
         }
         // coord view: rotated pubkey + alias
