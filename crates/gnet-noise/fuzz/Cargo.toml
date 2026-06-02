@@ -1,0 +1,29 @@
+[package]
+name = "gnet-noise-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+# fuzz harnesses live outside the main workspace — they depend on a
+# nightly toolchain (libfuzzer-sys) and on dev-only crates.io packages,
+# both of which would break the zero-deps posture of the parent crate.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.gnet-noise]
+path = ".."
+
+[dependencies.gnet-crypto]
+path = "../../gnet-crypto"
+
+[[bin]]
+name = "noise_read_message_1"
+path = "fuzz_targets/noise_read_message_1.rs"
+test = false
+doc = false
+bench = false
