@@ -39,8 +39,11 @@ pub fn run(args: &[String]) -> io::Result<()> {
     print_blank();
     print_daemon();
     print_blank();
-    print_live();
-    print_coordinator(&config, &pubkey_hex);
+    // Fetched up-front so the coordinator block can fuse live session/path
+    // state per-row by alias. None when the daemon is down or pre-v0.21.
+    let admin_snap = fetch_admin_snapshot_quiet();
+    print_runtime(admin_snap.as_deref());
+    print_coordinator(&config, &pubkey_hex, admin_snap.as_deref());
     Ok(())
 }
 
@@ -98,51 +101,35 @@ fn print_daemon() {
     }
 }
 
-/// Pull a snapshot from the daemon's admin socket and render the live
-/// per-peer session view. Silent on the common failure (socket absent /
-/// connection refused) — that just means the daemon is down or pre-v0.21,
-/// and the conf + coordinator sections still carry useful info on their own.
-/// Non-empty surface only when the daemon actually answers.
-fn print_live() {
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    {
-        let snap = match fetch_admin_snapshot() {
-            Ok(s) => s,
-            Err(e) if e.kind() == io::ErrorKind::NotFound
-                || e.kind() == io::ErrorKind::ConnectionRefused =>
-            {
-                return;
-            }
-            Err(e) => {
-                println!("live (admin socket error: {e})");
-                print_blank();
-                return;
-            }
-        };
-        let lines: Vec<&str> = snap.lines().collect();
-        let node_line = lines.iter().find(|l| l.starts_with("node ")).copied();
-        let peer_lines: Vec<&str> = lines
-            .iter()
-            .copied()
-            .filter(|l| l.starts_with("peer "))
-            .collect();
-        let relay_lines: Vec<&str> = lines
-            .iter()
-            .copied()
-            .filter(|l| l.starts_with("relay "))
-            .collect();
+/// Render the daemon's runtime-only state: reflexive endpoint, NAT verdict,
+/// per-relay health age. The per-peer fusion happens in `print_coordinator`
+/// since the coordinator's authoritative roster + the live session phase /
+/// path tell one combined story per peer. Silent (and prints nothing) when
+/// the admin snapshot is absent.
+fn print_runtime(admin: Option<&str>) {
+    let Some(snap) = admin else { return };
+    let lines: Vec<&str> = snap.lines().collect();
+    let node_line = lines.iter().find(|l| l.starts_with("node ")).copied();
+    let relay_lines: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|l| l.starts_with("relay "))
+        .collect();
 
-        println!("live");
-        if let Some(n) = node_line {
-            println!(
-                "  reflexive    {}",
-                kv(n, "reflexive").unwrap_or("(unknown)")
-            );
-            println!(
-                "  self_is_nat  {}",
-                kv(n, "self_is_nat").unwrap_or("(unknown)")
-            );
-        }
+    println!("runtime");
+    if let Some(n) = node_line {
+        println!(
+            "  reflexive    {}",
+            kv(n, "reflexive").unwrap_or("(unknown)")
+        );
+        println!(
+            "  self_is_nat  {}",
+            kv(n, "self_is_nat").unwrap_or("(unknown)")
+        );
+    }
+    if relay_lines.is_empty() {
+        println!("  relays       (none advertised by coordinator)");
+    } else {
         for r in &relay_lines {
             let ep = kv(r, "endpoint").unwrap_or("?");
             let age = kv(r, "health_age_ms").unwrap_or("?");
@@ -153,59 +140,40 @@ fn print_live() {
             };
             println!("  relay        {ep}  ({display})");
         }
-        if peer_lines.is_empty() {
-            println!("  (no peers configured in the daemon)");
-        } else {
-            println!("  {} peer(s):", peer_lines.len());
-            for p in &peer_lines {
-                let alias = kv(p, "alias").unwrap_or("-");
-                let session = kv(p, "session").unwrap_or("?");
-                let endpoint = kv(p, "endpoint").unwrap_or("none");
-                let relay = kv(p, "relay").unwrap_or("false") == "true";
-                let punched = kv(p, "punched").unwrap_or("false") == "true";
-                let age = kv(p, "last_established_age_s").unwrap_or("?");
-                let path_tag = if relay {
-                    let rep = kv(p, "relay_endpoint").unwrap_or("?");
-                    format!("via relay {rep}")
-                } else if punched {
-                    "direct (punched)".to_string()
-                } else {
-                    "direct".to_string()
-                };
-                let last = if age == "never" {
-                    "never established".to_string()
-                } else {
-                    format!("up {age}s")
-                };
-                let display_alias = if alias == "-" {
-                    "(no alias)".to_string()
-                } else {
-                    format!("gnet-{alias}")
-                };
-                println!(
-                    "    {:8} session={:11} endpoint={:21} {path_tag}, {last}",
-                    display_alias, session, endpoint,
-                );
-            }
-        }
-        print_blank();
+    }
+    print_blank();
+}
+
+/// Try to read the admin snapshot. Returns `None` on the common failures
+/// (socket missing / connection refused / not unix) — `gnet status` is still
+/// useful with just conf + coordinator data when the daemon is down.
+fn fetch_admin_snapshot_quiet() -> Option<String> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let path = gnet::node::admin_socket_path();
+        let mut sock = UnixStream::connect(&path).ok()?;
+        sock.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+        let mut buf = String::new();
+        sock.read_to_string(&mut buf).ok()?;
+        Some(buf)
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        let _ = ();
+        None
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn fetch_admin_snapshot() -> io::Result<String> {
-    let path = gnet::node::admin_socket_path();
-    let mut sock = UnixStream::connect(&path)?;
-    // bound the read — a healthy daemon writes ~200B per peer, but a wedged
-    // one shouldn't make `gnet status` hang forever.
-    sock.set_read_timeout(Some(Duration::from_secs(2)))?;
-    let mut buf = String::new();
-    sock.read_to_string(&mut buf)?;
-    Ok(buf)
+/// Find the admin-snapshot `peer` line matching `alias`. Empty alias matches
+/// nothing — the daemon prints `alias=-` for static-conf peers without a
+/// coordinator alias, and the coordinator side never has those rows.
+fn find_live_peer<'a>(admin: Option<&'a str>, alias: &str) -> Option<&'a str> {
+    let snap = admin?;
+    if alias.is_empty() {
+        return None;
+    }
+    snap.lines()
+        .filter(|l| l.starts_with("peer "))
+        .find(|l| kv(l, "alias") == Some(alias))
 }
 
 /// Extract `key=value` from an admin-snapshot line. Returns the value slice
@@ -222,9 +190,10 @@ fn kv<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     None
 }
 
-fn print_coordinator(c: &gnet_config::Config, our_pubkey_hex: &str) {
+fn print_coordinator(c: &gnet_config::Config, our_pubkey_hex: &str, admin: Option<&str>) {
     if c.coordinators.is_empty() {
         println!("coordinator  (none configured — `gnet status` shows local conf only)");
+        print_local_only_peers(admin);
         return;
     }
     // Probe in preference order (primary first), showing which one answered —
@@ -250,33 +219,93 @@ fn print_coordinator(c: &gnet_config::Config, our_pubkey_hex: &str) {
                     .map(|e| e.to_string())
                     .unwrap_or_else(|| "no coordinators answered".into())
             );
+            print_local_only_peers(admin);
             return;
         }
     };
     println!("coordinator {coord}");
-    {
-        let relays = parse_relay_list(&body);
-        if relays.is_empty() {
-            println!("  relays       (none advertised)");
+    // Coordinator-advertised relay list — useful as a sanity check against
+    // the daemon's runtime view (the relay rows in `runtime`): a relay
+    // advertised here but missing in runtime means the daemon hasn't polled
+    // since the relay was added, or the poll dropped silently.
+    let relays = parse_relay_list(&body);
+    if !relays.is_empty() {
+        println!("  advertised   {}", relays.join(", "));
+    }
+    let peers = parse_peer_summaries(&body);
+    if peers.is_empty() {
+        println!("  (empty peer list)");
+        return;
+    }
+    println!("  {} peer(s):", peers.len());
+    for p in &peers {
+        let endpoint = p.endpoint.as_deref().unwrap_or("(unreported)");
+        let role = if p.relay_eligible { " [relay]" } else { "" };
+        let live_tag = format_live_tag(find_live_peer(admin, &p.alias));
+        println!(
+            "    {:8} {:14} endpoint={:21}{role}  {live_tag}",
+            format!("gnet-{}", p.alias),
+            p.overlay_v4,
+            endpoint,
+        );
+    }
+}
+
+/// Tail-of-row tag derived from the admin snapshot: session phase / path /
+/// time since last successful handshake. Returns `(no live data)` when the
+/// daemon does not know this peer (admin absent, peer not yet polled,
+/// or static-conf peer with no alias).
+fn format_live_tag(live: Option<&str>) -> String {
+    let Some(l) = live else {
+        return "(no live data)".to_string();
+    };
+    let session = kv(l, "session").unwrap_or("?");
+    let relay = kv(l, "relay").unwrap_or("false") == "true";
+    let punched = kv(l, "punched").unwrap_or("false") == "true";
+    let age = kv(l, "last_established_age_s").unwrap_or("?");
+    let path = if relay {
+        let rep = kv(l, "relay_endpoint").unwrap_or("?");
+        format!("via relay {rep}")
+    } else if punched {
+        "direct (punched)".to_string()
+    } else {
+        "direct".to_string()
+    };
+    let last = if age == "never" {
+        "never established".to_string()
+    } else {
+        format!("up {age}s")
+    };
+    format!("[{session}, {path}, {last}]")
+}
+
+/// Render peers from the admin snapshot when no coordinator is reachable
+/// (or none configured). Skipped silently when there is no admin snapshot
+/// either — there is nothing to say.
+fn print_local_only_peers(admin: Option<&str>) {
+    let Some(snap) = admin else { return };
+    let peer_lines: Vec<&str> = snap
+        .lines()
+        .filter(|l| l.starts_with("peer "))
+        .collect();
+    if peer_lines.is_empty() {
+        return;
+    }
+    println!("  daemon view (coordinator-side info unavailable):");
+    for p in &peer_lines {
+        let alias = kv(p, "alias").unwrap_or("-");
+        let vip = kv(p, "vip").unwrap_or("?");
+        let endpoint = kv(p, "endpoint").unwrap_or("none");
+        let display_alias = if alias == "-" {
+            "(static)".to_string()
         } else {
-            println!("  relays       {}", relays.join(", "));
-        }
-        let peers = parse_peer_summaries(&body);
-        if peers.is_empty() {
-            println!("  (empty peer list)");
-        } else {
-            println!("  {} peer(s):", peers.len());
-            for p in &peers {
-                let endpoint = p.endpoint.as_deref().unwrap_or("(unreported)");
-                let relay = if p.relay_eligible { " [relay]" } else { "" };
-                println!(
-                    "    {:6} {:14} endpoint={}{relay}",
-                    format!("gnet-{}", p.alias),
-                    p.overlay_v4,
-                    endpoint,
-                );
-            }
-        }
+            format!("gnet-{alias}")
+        };
+        let live_tag = format_live_tag(Some(p));
+        println!(
+            "    {:8} {:14} endpoint={:21}  {live_tag}",
+            display_alias, vip, endpoint,
+        );
     }
 }
 

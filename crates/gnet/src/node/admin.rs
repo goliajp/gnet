@@ -90,6 +90,29 @@ fn render_snapshot(node: &Arc<Mutex<Node>>) -> String {
     let g = node.lock().expect("node mutex");
     let mut out = String::with_capacity(256);
 
+    out.push_str("metrics");
+    push_kv(
+        &mut out,
+        "handshake_success",
+        &g.metrics.handshake_success.to_string(),
+    );
+    push_kv(
+        &mut out,
+        "handshake_fail",
+        &g.metrics.handshake_fail.to_string(),
+    );
+    push_kv(
+        &mut out,
+        "relay_register_sent",
+        &g.metrics.relay_register_sent.to_string(),
+    );
+    push_kv(
+        &mut out,
+        "peer_relay_fallback",
+        &g.metrics.peer_relay_fallback.to_string(),
+    );
+    out.push('\n');
+
     out.push_str("node");
     push_kv(&mut out, "public", &hex::encode(&g.public));
     push_kv(
@@ -203,6 +226,7 @@ mod tests {
             probe_txid: 0,
             self_is_nat: None,
             nat_override: false,
+            metrics: Default::default(),
         }
     }
 
@@ -234,13 +258,15 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_idle_node_has_self_line_only() {
+    fn snapshot_idle_node_has_metrics_and_node_lines_only() {
         let node = Arc::new(Mutex::new(node_with(vec![])));
         let snap = render_snapshot(&node);
         let lines: Vec<&str> = snap.lines().collect();
-        assert_eq!(lines.len(), 1);
-        assert!(lines[0].starts_with("node "));
-        assert!(lines[0].contains("reflexive=none"));
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("metrics "));
+        assert!(lines[0].contains("handshake_success=0"));
+        assert!(lines[1].starts_with("node "));
+        assert!(lines[1].contains("reflexive=none"));
     }
 
     #[test]
