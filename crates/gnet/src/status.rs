@@ -571,20 +571,22 @@ fn extract_bool(body: &str, key: &str) -> Option<bool> {
 // ── daemon discovery ─────────────────────────────────────────
 
 fn pgrep_gnet_up() -> io::Result<Vec<String>> {
-    // -f matches against full command line so we find `gnet up ...` not
-    // any incidental "gnet" in process names. We then filter for processes
-    // whose argv starts with our `gnet` binary path AND contains `up`.
+    // Match the daemon's cmdline (which starts with `… gnet up <conf>`) via
+    // `pgrep -af 'gnet up'` — `-f` matches against the full command line, so
+    // other `gnet` subcommands like `gnet status` (this very invocation) are
+    // excluded automatically since their cmdline carries "gnet status",
+    // not "gnet up". pgrep self-excludes its own pid.
     let out = Command::new("pgrep")
-        .arg("-x")
-        .arg("gnet")
+        .arg("-af")
+        .arg("gnet up")
         .output()?;
     if !out.status.success() && out.stdout.is_empty() {
         return Ok(Vec::new());
     }
+    // `-a` output format is "PID CMDLINE"; we only need the PID.
     Ok(String::from_utf8_lossy(&out.stdout)
         .lines()
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
+        .filter_map(|line| line.split_whitespace().next().map(str::to_string))
         .collect())
 }
 
