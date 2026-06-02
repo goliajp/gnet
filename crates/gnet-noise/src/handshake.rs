@@ -148,9 +148,10 @@ impl Initiator {
         // payload (encrypted)
         let p_off = s_off + 32 + TAG_LEN;
         msg[p_off..p_off + payload.len()].copy_from_slice(payload);
-        let n = self
-            .sym
-            .encrypt_and_hash_in_place(&mut msg[p_off..p_off + payload.len() + TAG_LEN], payload.len());
+        let n = self.sym.encrypt_and_hash_in_place(
+            &mut msg[p_off..p_off + payload.len() + TAG_LEN],
+            payload.len(),
+        );
         debug_assert_eq!(n, payload.len() + TAG_LEN);
 
         msg
@@ -237,7 +238,9 @@ impl Responder {
         // s (decrypt into a 48-byte stack buffer)
         let mut s_buf = [0u8; 32 + TAG_LEN];
         s_buf.copy_from_slice(&msg[32..32 + 32 + TAG_LEN]);
-        let s_len = self.sym.decrypt_and_hash_in_place(&mut s_buf, 32 + TAG_LEN)?;
+        let s_len = self
+            .sym
+            .decrypt_and_hash_in_place(&mut s_buf, 32 + TAG_LEN)?;
         if s_len != 32 {
             return None;
         }
@@ -362,7 +365,10 @@ mod tests {
         eprintln!("\nNoise_IK handshake breakdown ({iters} iters, ns/op):");
         eprintln!("  Initiator::new (2× x25519_base)  : {} ns", t_ini_new / n);
         eprintln!("  write_message_1 (1 DH + mix + AEAD): {} ns", t_w1 / n);
-        eprintln!("  Responder::new  (2× x25519_base)  : {} ns", t_resp_new / n);
+        eprintln!(
+            "  Responder::new  (2× x25519_base)  : {} ns",
+            t_resp_new / n
+        );
         eprintln!(
             "  read_message_1  (2 DH + AEAD decrypt + mix): {} ns",
             t_r1 / n
@@ -371,13 +377,14 @@ mod tests {
             "  write_message_2 (2 DH + AEAD encrypt + mix): {} ns",
             t_w2 / n
         );
-        eprintln!("  read_message_2  (2 DH + AEAD decrypt + mix): {} ns", t_r2 / n);
+        eprintln!(
+            "  read_message_2  (2 DH + AEAD decrypt + mix): {} ns",
+            t_r2 / n
+        );
         eprintln!("  TOTAL handshake                  : {} ns", t_total / n);
         eprintln!(
             "  (sum of phases / total)          : {:.1}% (rest = Instant + flow overhead)",
-            (t_ini_new + t_w1 + t_resp_new + t_r1 + t_w2 + t_r2) as f64
-                / (t_total as f64)
-                * 100.0
+            (t_ini_new + t_w1 + t_resp_new + t_r1 + t_w2 + t_r2) as f64 / (t_total as f64) * 100.0
         );
     }
 

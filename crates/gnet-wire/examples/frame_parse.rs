@@ -26,6 +26,10 @@ fn main() {
     tx[0] = Kind::Transport as u8;
     put_index(&mut tx, 0xDEAD_BEEF);
     put_counter(&mut tx, 0x0102_0304_0506_0708);
-    println!("transport tag={:#x} index={:#x} counter={:#x}",
-        tx[0], index(&tx).unwrap(), counter(&tx).unwrap());
+    println!(
+        "transport tag={:#x} index={:#x} counter={:#x}",
+        tx[0],
+        index(&tx).unwrap(),
+        counter(&tx).unwrap()
+    );
 }

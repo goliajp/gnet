@@ -23,13 +23,11 @@
 
 use super::{Q, QINV, ZETAS, barrett_reduce, fqmul};
 use core::arch::x86_64::{
-    __m256i, _mm256_add_epi16, _mm256_add_epi32, _mm256_castsi256_si128,
-    _mm256_cvtepi16_epi32, _mm256_extracti128_si256, _mm256_loadu_si256,
-    _mm256_mulhi_epi16, _mm256_mullo_epi16, _mm256_mullo_epi32,
-    _mm256_packs_epi32, _mm256_permute2x128_si256, _mm256_permute4x64_epi64,
+    __m256i, _mm256_add_epi16, _mm256_add_epi32, _mm256_castsi256_si128, _mm256_cvtepi16_epi32,
+    _mm256_extracti128_si256, _mm256_loadu_si256, _mm256_mulhi_epi16, _mm256_mullo_epi16,
+    _mm256_mullo_epi32, _mm256_packs_epi32, _mm256_permute2x128_si256, _mm256_permute4x64_epi64,
     _mm256_set1_epi16, _mm256_set1_epi32, _mm256_slli_epi32, _mm256_srai_epi32,
-    _mm256_storeu_si256, _mm256_sub_epi16, _mm256_unpackhi_epi16,
-    _mm256_unpacklo_epi16,
+    _mm256_storeu_si256, _mm256_sub_epi16, _mm256_unpackhi_epi16, _mm256_unpacklo_epi16,
 };
 
 /// `a · b · 2^-16 mod q` over 16 lanes. Matches [`super::fqmul`]
@@ -76,10 +74,10 @@ pub(super) unsafe fn barrett_reduce_x16(a: __m256i) -> __m256i {
 
     // Widen 16 i16 -> two halves of 8 i32 each. _mm256_cvtepi16_epi32
     // takes __m128i (8 × i16) and returns __m256i (8 × i32).
-    let a_lo128 = _mm256_castsi256_si128(a);              // i16 lanes 0..7
-    let a_hi128 = _mm256_extracti128_si256::<1>(a);       // i16 lanes 8..15
-    let a_lo32 = _mm256_cvtepi16_epi32(a_lo128);          // i32 lanes 0..7
-    let a_hi32 = _mm256_cvtepi16_epi32(a_hi128);          // i32 lanes 8..15
+    let a_lo128 = _mm256_castsi256_si128(a); // i16 lanes 0..7
+    let a_hi128 = _mm256_extracti128_si256::<1>(a); // i16 lanes 8..15
+    let a_lo32 = _mm256_cvtepi16_epi32(a_lo128); // i32 lanes 0..7
+    let a_hi32 = _mm256_cvtepi16_epi32(a_hi128); // i32 lanes 8..15
 
     // (V·a + round) >> 26 — arithmetic shift preserves sign.
     let prod_lo = _mm256_mullo_epi32(v_v, a_lo32);
@@ -106,12 +104,7 @@ pub(super) unsafe fn barrett_reduce_x16(a: __m256i) -> __m256i {
 /// # Safety
 /// Caller must ensure the CPU supports AVX2.
 #[target_feature(enable = "avx2")]
-unsafe fn ntt_layer_uniform(
-    r: &mut [i16; 256],
-    start: usize,
-    len: usize,
-    zeta: i16,
-) {
+unsafe fn ntt_layer_uniform(r: &mut [i16; 256], start: usize, len: usize, zeta: i16) {
     let z_v = _mm256_set1_epi16(zeta);
     let mut j = start;
     while j < start + len {
@@ -135,12 +128,7 @@ unsafe fn ntt_layer_uniform(
 /// # Safety
 /// Caller must ensure the CPU supports AVX2.
 #[target_feature(enable = "avx2")]
-unsafe fn invntt_layer_uniform(
-    r: &mut [i16; 256],
-    start: usize,
-    len: usize,
-    zeta: i16,
-) {
+unsafe fn invntt_layer_uniform(r: &mut [i16; 256], start: usize, len: usize, zeta: i16) {
     let z_v = _mm256_set1_epi16(zeta);
     let mut j = start;
     while j < start + len {
@@ -331,11 +319,7 @@ unsafe fn interleave_back_x16(c0: __m256i, c1: __m256i) -> (__m256i, __m256i) {
 /// # Safety
 /// Caller must ensure the CPU supports AVX2.
 #[target_feature(enable = "avx2")]
-pub(super) unsafe fn ntt_mul_into_avx2(
-    a: &[i16; 256],
-    b: &[i16; 256],
-    r: &mut [i16; 256],
-) {
+pub(super) unsafe fn ntt_mul_into_avx2(a: &[i16; 256], b: &[i16; 256], r: &mut [i16; 256]) {
     for chunk in 0..8 {
         let off = chunk * 32;
         let a_lo = _mm256_loadu_si256(a.as_ptr().add(off) as *const __m256i);
@@ -346,9 +330,7 @@ pub(super) unsafe fn ntt_mul_into_avx2(
         let (a_even, a_odd) = deinterleave_x16(a_lo, a_hi);
         let (b_even, b_odd) = deinterleave_x16(b_lo, b_hi);
 
-        let zeta_v = _mm256_loadu_si256(
-            ZETA_MUL_VECS_AVX2[chunk].as_ptr() as *const __m256i,
-        );
+        let zeta_v = _mm256_loadu_si256(ZETA_MUL_VECS_AVX2[chunk].as_ptr() as *const __m256i);
 
         // c0 = a_even·b_even + zeta·(a_odd·b_odd)
         let aobo = fqmul_x16(a_odd, b_odd);

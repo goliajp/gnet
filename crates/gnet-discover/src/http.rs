@@ -81,14 +81,15 @@ impl Response {
     }
 }
 
-pub type Handler<S> = Arc<
-    dyn Fn(Request, Arc<S>) -> Pin<Box<dyn Future<Output = Response> + Send>>
-        + Send
-        + Sync,
->;
+pub type Handler<S> =
+    Arc<dyn Fn(Request, Arc<S>) -> Pin<Box<dyn Future<Output = Response> + Send>> + Send + Sync>;
 
 /// Serve forever — accept connections, dispatch to `handler`.
-pub async fn serve<S>(listener: TcpListener, state: Arc<S>, handler: Handler<S>) -> std::io::Result<()>
+pub async fn serve<S>(
+    listener: TcpListener,
+    state: Arc<S>,
+    handler: Handler<S>,
+) -> std::io::Result<()>
 where
     S: Send + Sync + 'static,
 {

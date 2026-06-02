@@ -156,8 +156,7 @@ fn render_snapshot(node: &Arc<Mutex<Node>>) -> String {
         push_kv(
             &mut out,
             "vip6",
-            &p.vip6
-                .map_or_else(|| "none".to_string(), |v| v.to_string()),
+            &p.vip6.map_or_else(|| "none".to_string(), |v| v.to_string()),
         );
         push_kv(
             &mut out,
@@ -188,7 +187,11 @@ fn render_snapshot(node: &Arc<Mutex<Node>>) -> String {
             &p.relay_endpoint
                 .map_or_else(|| "none".to_string(), |e| e.to_string()),
         );
-        push_kv(&mut out, "punched", if p.punched { "true" } else { "false" });
+        push_kv(
+            &mut out,
+            "punched",
+            if p.punched { "true" } else { "false" },
+        );
         push_kv(&mut out, "punch_failures", &p.punch_failures.to_string());
         push_kv(&mut out, "pinned", if p.pinned { "true" } else { "false" });
         out.push('\n');

@@ -121,13 +121,7 @@ pub fn expand_into(prk: &[u8; HASH_LEN], info: &[u8], out: &mut [u8]) {
     while written < out.len() {
         assert!(counter <= 255, "HKDF counter exceeds 255");
         let counter_byte = [counter as u8];
-        t_prev = hmac_three_with_pads(
-            &ipad,
-            &opad,
-            &t_prev[..t_prev_len],
-            info,
-            &counter_byte,
-        );
+        t_prev = hmac_three_with_pads(&ipad, &opad, &t_prev[..t_prev_len], info, &counter_byte);
         t_prev_len = HASH_LEN;
         let chunk = (out.len() - written).min(HASH_LEN);
         out[written..written + chunk].copy_from_slice(&t_prev[..chunk]);

@@ -439,10 +439,18 @@ async fn rotate_self(state: Arc<AppState>, req: Request) -> Response {
         Err(_) => return Response::text(400, "Bad Request", "invalid json"),
     };
     if !is_hex_pubkey(&body.x25519_pubkey) {
-        return Response::text(400, "Bad Request", "x25519_pubkey must be 64 lowercase hex chars");
+        return Response::text(
+            400,
+            "Bad Request",
+            "x25519_pubkey must be 64 lowercase hex chars",
+        );
     }
     if !is_lower_hex(&body.mlkem_ek) || body.mlkem_ek.is_empty() {
-        return Response::text(400, "Bad Request", "mlkem_ek must be a non-empty lowercase hex string");
+        return Response::text(
+            400,
+            "Bad Request",
+            "mlkem_ek must be a non-empty lowercase hex string",
+        );
     }
 
     // identify the caller by device_token, same constant-time pattern as
@@ -465,7 +473,11 @@ async fn rotate_self(state: Arc<AppState>, req: Request) -> Response {
         .iter()
         .any(|d| d.alias != alias && d.x25519_pubkey == body.x25519_pubkey)
     {
-        return Response::text(409, "Conflict", "x25519_pubkey already used by another device");
+        return Response::text(
+            409,
+            "Conflict",
+            "x25519_pubkey already used by another device",
+        );
     }
 
     let new_pk = body.x25519_pubkey;
@@ -556,7 +568,10 @@ mod tests {
         let mut p = std::env::temp_dir();
         let mut r = [0u8; 8];
         gnet_rand::fill(&mut r);
-        p.push(format!("gnet-discover-apitest-{}.json", gnet_hex::encode(&r)));
+        p.push(format!(
+            "gnet-discover-apitest-{}.json",
+            gnet_hex::encode(&r)
+        ));
 
         let store = Store::load(&p).await.unwrap();
         let state = Arc::new(AppState {
@@ -587,7 +602,10 @@ mod tests {
         let mut p = std::env::temp_dir();
         let mut r = [0u8; 8];
         gnet_rand::fill(&mut r);
-        p.push(format!("gnet-discover-standbytest-{}.json", gnet_hex::encode(&r)));
+        p.push(format!(
+            "gnet-discover-standbytest-{}.json",
+            gnet_hex::encode(&r)
+        ));
 
         let store = Store::load(&p).await.unwrap();
         let state = Arc::new(AppState {
@@ -715,9 +733,8 @@ mod tests {
         assert_eq!(peers[0]["alias"], "alpha");
 
         // device 1 polls /peers → sees device 2
-        let req_str = format!(
-            "GET /peers HTTP/1.1\r\nhost: x\r\nx-device-pubkey: {pk_alpha}\r\n\r\n"
-        );
+        let req_str =
+            format!("GET /peers HTTP/1.1\r\nhost: x\r\nx-device-pubkey: {pk_alpha}\r\n\r\n");
         let (st, body) = raw(addr, req_str.as_bytes()).await;
         assert_eq!(st, 200);
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -837,9 +854,13 @@ mod tests {
         // alias is present in /peers (from a second device's perspective)
         let pk_other = "b".repeat(64);
         let _ = enrol_and_join(addr, "beta", &pk_other, &"bb".repeat(32)).await;
-        let probe = format!("GET /peers HTTP/1.1\r\nhost: x\r\nx-device-pubkey: {pk_other}\r\n\r\n");
+        let probe =
+            format!("GET /peers HTTP/1.1\r\nhost: x\r\nx-device-pubkey: {pk_other}\r\n\r\n");
         let (_, body) = raw(addr, probe.as_bytes()).await;
-        assert!(body.contains("alpha"), "alpha should be visible before delete");
+        assert!(
+            body.contains("alpha"),
+            "alpha should be visible before delete"
+        );
 
         // delete
         let (st, body) = raw(addr, &delete_device_req("alpha", "test-token-1234567890")).await;
@@ -902,16 +923,26 @@ mod tests {
         // initially relay_eligible is false in /peers (from a 2nd device's view)
         let pk_other = "b".repeat(64);
         let _ = enrol_and_join(addr, "beta", &pk_other, &"bb".repeat(32)).await;
-        let probe = format!("GET /peers HTTP/1.1\r\nhost: x\r\nx-device-pubkey: {pk_other}\r\n\r\n");
+        let probe =
+            format!("GET /peers HTTP/1.1\r\nhost: x\r\nx-device-pubkey: {pk_other}\r\n\r\n");
         let (_, body) = raw(addr, probe.as_bytes()).await;
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        let alpha = v["peers"].as_array().unwrap().iter().find(|p| p["alias"] == "alpha").unwrap();
+        let alpha = v["peers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["alias"] == "alpha")
+            .unwrap();
         assert_eq!(alpha["relay_eligible"], false);
 
         // PATCH alpha → relay_eligible: true
         let (st, _) = raw(
             addr,
-            &patch_device_req("alpha", "test-token-1234567890", r#"{"relay_eligible":true}"#),
+            &patch_device_req(
+                "alpha",
+                "test-token-1234567890",
+                r#"{"relay_eligible":true}"#,
+            ),
         )
         .await;
         assert_eq!(st, 200);
@@ -919,7 +950,12 @@ mod tests {
         // /peers now shows it true
         let (_, body) = raw(addr, probe.as_bytes()).await;
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        let alpha = v["peers"].as_array().unwrap().iter().find(|p| p["alias"] == "alpha").unwrap();
+        let alpha = v["peers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["alias"] == "alpha")
+            .unwrap();
         assert_eq!(alpha["relay_eligible"], true);
     }
 
@@ -945,7 +981,10 @@ mod tests {
             .iter()
             .map(|r| r.as_str().unwrap())
             .collect();
-        assert_eq!(advertised, vec!["198.51.100.9:65433", "[2001:db8::1]:65433"]);
+        assert_eq!(
+            advertised,
+            vec!["198.51.100.9:65433", "[2001:db8::1]:65433"]
+        );
     }
 
     #[tokio::test]
@@ -953,7 +992,11 @@ mod tests {
         let (addr, _t) = spawn_test_server().await;
         let (st, _) = raw(
             addr,
-            &patch_device_req("nobody", "test-token-1234567890", r#"{"relay_eligible":true}"#),
+            &patch_device_req(
+                "nobody",
+                "test-token-1234567890",
+                r#"{"relay_eligible":true}"#,
+            ),
         )
         .await;
         assert_eq!(st, 404);
@@ -962,8 +1005,11 @@ mod tests {
     #[tokio::test]
     async fn admin_patch_rejects_bad_token() {
         let (addr, _t) = spawn_test_server().await;
-        let (st, _) =
-            raw(addr, &patch_device_req("alpha", "wrong", r#"{"relay_eligible":true}"#)).await;
+        let (st, _) = raw(
+            addr,
+            &patch_device_req("alpha", "wrong", r#"{"relay_eligible":true}"#),
+        )
+        .await;
         assert_eq!(st, 401);
     }
 
@@ -973,7 +1019,11 @@ mod tests {
         let pk = "a".repeat(64);
         let _ = enrol_and_join(addr, "alpha", &pk, &"aa".repeat(32)).await;
         // empty body {} is valid (all fields optional); should not change state
-        let (st, _) = raw(addr, &patch_device_req("alpha", "test-token-1234567890", "{}")).await;
+        let (st, _) = raw(
+            addr,
+            &patch_device_req("alpha", "test-token-1234567890", "{}"),
+        )
+        .await;
         assert_eq!(st, 200);
     }
 
@@ -983,7 +1033,11 @@ mod tests {
         // Space cannot be used here — httparse rejects spaces in the request-uri
         // and the server drops the connection without a response.
         let (addr, _t) = spawn_test_server().await;
-        let (st, _) = raw(addr, &delete_device_req("bad!alias", "test-token-1234567890")).await;
+        let (st, _) = raw(
+            addr,
+            &delete_device_req("bad!alias", "test-token-1234567890"),
+        )
+        .await;
         assert_eq!(st, 400);
     }
 
@@ -1006,10 +1060,16 @@ mod tests {
         // observe old state from a sibling device's /peers
         let pk_other = "b".repeat(64);
         let _ = enrol_and_join(addr, "beta", &pk_other, &"bb".repeat(32)).await;
-        let probe = format!("GET /peers HTTP/1.1\r\nhost: x\r\nx-device-pubkey: {pk_other}\r\n\r\n");
+        let probe =
+            format!("GET /peers HTTP/1.1\r\nhost: x\r\nx-device-pubkey: {pk_other}\r\n\r\n");
         let (_, body) = raw(addr, probe.as_bytes()).await;
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        let alpha = v["peers"].as_array().unwrap().iter().find(|p| p["alias"] == "alpha").unwrap();
+        let alpha = v["peers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["alias"] == "alpha")
+            .unwrap();
         assert_eq!(alpha["x25519_pubkey"], old_pk);
 
         // rotate
@@ -1021,7 +1081,12 @@ mod tests {
         // /peers now shows the new keys, alias unchanged
         let (_, body) = raw(addr, probe.as_bytes()).await;
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        let alpha = v["peers"].as_array().unwrap().iter().find(|p| p["alias"] == "alpha").unwrap();
+        let alpha = v["peers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["alias"] == "alpha")
+            .unwrap();
         assert_eq!(alpha["x25519_pubkey"], new_pk);
         assert_eq!(alpha["mlkem_ek"], new_ek);
     }
@@ -1031,7 +1096,11 @@ mod tests {
         let (addr, _t) = spawn_test_server().await;
         let (st, _) = raw(
             addr,
-            &rotate_self_request("ffeeddccbbaa99887766554433221100ffeeddccbbaa9988", &"a".repeat(64), &"aa".repeat(32)),
+            &rotate_self_request(
+                "ffeeddccbbaa99887766554433221100ffeeddccbbaa9988",
+                &"a".repeat(64),
+                &"aa".repeat(32),
+            ),
         )
         .await;
         assert_eq!(st, 401);
@@ -1043,7 +1112,11 @@ mod tests {
         let pk = "a".repeat(64);
         let device_token = enrol_and_join(addr, "alpha", &pk, &"aa".repeat(32)).await;
         // uppercase rejected (matches /join policy)
-        let (st, _) = raw(addr, &rotate_self_request(&device_token, &"A".repeat(64), &"aa".repeat(32))).await;
+        let (st, _) = raw(
+            addr,
+            &rotate_self_request(&device_token, &"A".repeat(64), &"aa".repeat(32)),
+        )
+        .await;
         assert_eq!(st, 400);
     }
 
@@ -1055,7 +1128,11 @@ mod tests {
         let device_token = enrol_and_join(addr, "alpha", &pk_a, &"aa".repeat(32)).await;
         let _ = enrol_and_join(addr, "beta", &pk_b, &"bb".repeat(32)).await;
         // alpha tries to rotate INTO beta's pubkey → 409
-        let (st, _) = raw(addr, &rotate_self_request(&device_token, &pk_b, &"cc".repeat(32))).await;
+        let (st, _) = raw(
+            addr,
+            &rotate_self_request(&device_token, &pk_b, &"cc".repeat(32)),
+        )
+        .await;
         assert_eq!(st, 409);
     }
 
@@ -1065,8 +1142,11 @@ mod tests {
         let pk = "a".repeat(64);
         let device_token = enrol_and_join(addr, "alpha", &pk, &"aa".repeat(32)).await;
 
-        let (st, _) =
-            raw(addr, &endpoint_report_request(&device_token, "203.0.113.7:65432")).await;
+        let (st, _) = raw(
+            addr,
+            &endpoint_report_request(&device_token, "203.0.113.7:65432"),
+        )
+        .await;
         assert_eq!(st, 200);
 
         // peer list should now include the reported endpoint
@@ -1090,7 +1170,10 @@ mod tests {
         let (addr, _t) = spawn_test_server().await;
         let (st, _) = raw(
             addr,
-            &endpoint_report_request("ffeeddccbbaa99887766554433221100ffeeddccbbaa9988", "1.2.3.4:5000"),
+            &endpoint_report_request(
+                "ffeeddccbbaa99887766554433221100ffeeddccbbaa9988",
+                "1.2.3.4:5000",
+            ),
         )
         .await;
         assert_eq!(st, 401);
@@ -1101,7 +1184,11 @@ mod tests {
         let (addr, _t) = spawn_test_server().await;
         let pk = "a".repeat(64);
         let device_token = enrol_and_join(addr, "alpha", &pk, &"aa".repeat(32)).await;
-        let (st, _) = raw(addr, &endpoint_report_request(&device_token, "not-an-address")).await;
+        let (st, _) = raw(
+            addr,
+            &endpoint_report_request(&device_token, "not-an-address"),
+        )
+        .await;
         assert_eq!(st, 400);
     }
 
@@ -1202,6 +1289,9 @@ mod tests {
         // second attempt with a well-formed pubkey using the SAME token
         let good_pk = "a".repeat(64);
         let (st, _) = raw(addr, &join_request(&tok, &good_pk, "abcd")).await;
-        assert_eq!(st, 200, "join token should still be valid after validation rejection");
+        assert_eq!(
+            st, 200,
+            "join token should still be valid after validation rejection"
+        );
     }
 }

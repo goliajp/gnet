@@ -355,10 +355,7 @@ pub(super) fn apply(node: &Mutex<Node>, views: &[PeerView]) -> (usize, usize, us
             && let Some(idx) = g.peers.iter().position(|p| p.alias == v.alias)
         {
             let p = &mut g.peers[idx];
-            eprintln!(
-                "event=peer_keys_rotated alias={}",
-                v.alias
-            );
+            eprintln!("event=peer_keys_rotated alias={}", v.alias);
             p.public = v.x25519_pubkey;
             p.mlkem_ek = v.mlkem_ek.clone();
             p.vip = v.overlay_v4;
@@ -382,16 +379,16 @@ pub(super) fn apply(node: &Mutex<Node>, views: &[PeerView]) -> (usize, usize, us
         //    empty because conf `peer` lines carry no alias) by overlay IP,
         //    fills in the alias from the coord view, and swaps the pubkey
         //    if it has rotated since the conf was written.
-        if let Some(idx) = g.peers.iter().position(|p| {
-            p.alias.is_empty() && p.vip == v.overlay_v4
-        }) {
+        if let Some(idx) = g
+            .peers
+            .iter()
+            .position(|p| p.alias.is_empty() && p.vip == v.overlay_v4)
+        {
             let p = &mut g.peers[idx];
             let pubkey_changed = p.public != v.x25519_pubkey;
             eprintln!(
                 "event=peer_adopted vip={} alias={} pubkey_changed={}",
-                p.vip,
-                v.alias,
-                pubkey_changed
+                p.vip, v.alias, pubkey_changed
             );
             p.alias = v.alias.clone();
             p.public = v.x25519_pubkey;
@@ -503,8 +500,8 @@ fn parse_relays(arr: &str) -> io::Result<Vec<SocketAddr>> {
 }
 
 fn parse_peer_object(obj: &str) -> io::Result<PeerView> {
-    let alias = extract_string(obj, "alias")
-        .ok_or_else(|| io::Error::other("peer: missing alias"))?;
+    let alias =
+        extract_string(obj, "alias").ok_or_else(|| io::Error::other("peer: missing alias"))?;
     let pk_hex = extract_string(obj, "x25519_pubkey")
         .ok_or_else(|| io::Error::other("peer: missing x25519_pubkey"))?;
     let x25519_pubkey =
@@ -1038,7 +1035,11 @@ mod tests {
         assert_eq!(removed, 0, "pinned static peer is never reconciled out");
         let g = node.lock().unwrap();
         assert_eq!(g.peers.len(), 2, "static peer + the new coordinator peer");
-        assert!(g.peers.iter().any(|p| p.pinned && p.public == fake_pk(0x11)));
+        assert!(
+            g.peers
+                .iter()
+                .any(|p| p.pinned && p.public == fake_pk(0x11))
+        );
     }
 
     #[test]
@@ -1092,10 +1093,7 @@ mod tests {
         assert_eq!(updated, 1);
         let g = node.lock().unwrap();
         assert_eq!(g.peers.len(), 1);
-        assert_eq!(
-            g.peers[0].endpoint.unwrap().to_string(),
-            "2.2.2.2:51820"
-        );
+        assert_eq!(g.peers[0].endpoint.unwrap().to_string(), "2.2.2.2:51820");
     }
 
     #[test]
@@ -1187,7 +1185,7 @@ mod tests {
             let mut g = node.lock().unwrap();
             g.peers.push(Peer {
                 alias: String::new(),
-                pinned: true, // static-conf seed — must survive reconcile
+                pinned: true,          // static-conf seed — must survive reconcile
                 public: fake_pk(0xab), // ORIGINAL key
                 mlkem_ek: fake_ek(),
                 vip: "10.42.42.5".parse().unwrap(),

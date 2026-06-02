@@ -25,7 +25,9 @@ async fn main() -> ExitCode {
         Some("--help") | Some("-h") => {
             eprintln!("usage:");
             eprintln!("  gnet-discover                  serve the coordinator (config from env)");
-            eprintln!("  gnet-discover --validate-state load state.json + exit 0/1 (failover check)");
+            eprintln!(
+                "  gnet-discover --validate-state load state.json + exit 0/1 (failover check)"
+            );
             ExitCode::SUCCESS
         }
         _ => match run().await {
@@ -64,9 +66,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Warm-standby: if a primary is configured, mirror its state on an interval.
     // Pulled out before `config` moves into `AppState`.
-    let standby = config.primary.clone().map(|primary| {
-        (primary, config.sync_interval, config.admin_token.clone())
-    });
+    let standby = config
+        .primary
+        .clone()
+        .map(|primary| (primary, config.sync_interval, config.admin_token.clone()));
 
     let state = Arc::new(AppState {
         config,

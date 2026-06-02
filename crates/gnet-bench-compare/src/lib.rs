@@ -37,10 +37,12 @@ pub fn bench_vs(name: &str, baseline_ns_op: f64, iters: u32, mut f: impl FnMut()
     }
     let ns_op = start.elapsed().as_secs_f64() * 1e9 / f64::from(iters);
     let rel = ns_op / baseline_ns_op;
-    let arrow = if rel < 1.0 { "↑ faster" } else { "↓ slower" };
-    println!(
-        "  {name:<40} {ns_op:>12.2} ns/op   {rel:>5.2}× ({arrow})"
-    );
+    let arrow = if rel < 1.0 {
+        "↑ faster"
+    } else {
+        "↓ slower"
+    };
+    println!("  {name:<40} {ns_op:>12.2} ns/op   {rel:>5.2}× ({arrow})");
     ns_op
 }
 

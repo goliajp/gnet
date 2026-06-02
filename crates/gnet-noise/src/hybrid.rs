@@ -122,9 +122,10 @@ impl HybridInitiator {
         // payload (encrypted)
         let p_off = ct_off + mlkem::CT_LEN;
         msg[p_off..p_off + payload.len()].copy_from_slice(payload);
-        let n = self
-            .sym
-            .encrypt_and_hash_in_place(&mut msg[p_off..p_off + payload.len() + TAG_LEN], payload.len());
+        let n = self.sym.encrypt_and_hash_in_place(
+            &mut msg[p_off..p_off + payload.len() + TAG_LEN],
+            payload.len(),
+        );
         debug_assert_eq!(n, payload.len() + TAG_LEN);
 
         msg
@@ -213,7 +214,9 @@ impl HybridResponder {
         // s (decrypt into a 48-byte stack buffer)
         let mut s_buf = [0u8; 32 + TAG_LEN];
         s_buf.copy_from_slice(&msg[32..32 + 32 + TAG_LEN]);
-        let s_len = self.sym.decrypt_and_hash_in_place(&mut s_buf, 32 + TAG_LEN)?;
+        let s_len = self
+            .sym
+            .decrypt_and_hash_in_place(&mut s_buf, 32 + TAG_LEN)?;
         if s_len != 32 {
             return None;
         }
@@ -366,12 +369,7 @@ mod tests {
             init_ephemeral,
             init_encaps_m,
         );
-        let mut resp = HybridResponder::new(
-            resp_static_priv,
-            &resp_ek,
-            &resp_dk,
-            resp_ephemeral,
-        );
+        let mut resp = HybridResponder::new(resp_static_priv, &resp_ek, &resp_dk, resp_ephemeral);
 
         let m1 = ini.write_message_1(init_payload);
         assert_eq!(
@@ -383,9 +381,7 @@ mod tests {
         let (m2, mut resp_t) = resp
             .write_message_2(resp_payload)
             .expect("responder writes msg2");
-        let (mut ini_t, m2_payload) = ini
-            .read_message_2(&m2)
-            .expect("initiator reads msg2");
+        let (mut ini_t, m2_payload) = ini.read_message_2(&m2).expect("initiator reads msg2");
         assert_eq!(m2_payload, resp_payload);
 
         // Encrypt a fixed probe both directions. Equal ciphertext at counter

@@ -119,9 +119,10 @@ impl PunchState {
     /// fan-out dial.
     pub fn due_dial(&self, now: Instant) -> Option<&[SocketAddr]> {
         match self {
-            PunchState::Syncing { dial_at, candidates } if *dial_at <= now => {
-                Some(candidates.as_slice())
-            }
+            PunchState::Syncing {
+                dial_at,
+                candidates,
+            } if *dial_at <= now => Some(candidates.as_slice()),
             _ => None,
         }
     }
@@ -132,12 +133,7 @@ impl PunchState {
     /// `sequential_radius` symmetric `±1..=±R` ports — see [`predict`]).
     /// Returns `false` (a no-op) unless we were `Connecting`, so a stray or
     /// duplicate reply is ignored.
-    pub fn on_reply(
-        &mut self,
-        endpoint: SocketAddr,
-        now: Instant,
-        sequential_radius: u16,
-    ) -> bool {
+    pub fn on_reply(&mut self, endpoint: SocketAddr, now: Instant, sequential_radius: u16) -> bool {
         let PunchState::Connecting { sent_at } = self else {
             return false;
         };
@@ -239,13 +235,13 @@ mod tests {
         let mut st = PunchState::Connecting {
             sent_at: now - Duration::from_millis(40),
         };
-        assert!(
-            st.on_reply(ep, now, 0),
-            "connecting accepts the reply"
-        );
+        assert!(st.on_reply(ep, now, 0), "connecting accepts the reply");
         assert_eq!(st.due_dial(now), None);
         match &st {
-            PunchState::Syncing { dial_at, candidates } => {
+            PunchState::Syncing {
+                dial_at,
+                candidates,
+            } => {
                 assert_eq!(candidates.as_slice(), &[ep][..]);
                 let delay = dial_at.duration_since(now);
                 assert!(delay >= Duration::from_millis(18) && delay <= Duration::from_millis(40));

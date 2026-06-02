@@ -130,8 +130,8 @@ fn recode_signed_5bit(s: &[u8; 32]) -> [i8; 52] {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::scalar::x25519;
+    use super::*;
 
     fn base_point() -> [u8; 32] {
         let mut u = [0u8; 32];

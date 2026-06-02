@@ -74,7 +74,10 @@ fn parse_ip_output(text: &str) -> Vec<IpAddr> {
         while let Some(tok) = tokens.next() {
             if tok == "inet" || tok == "inet6" {
                 if let Some(addr_with_prefix) = tokens.next() {
-                    let addr = addr_with_prefix.split('/').next().unwrap_or(addr_with_prefix);
+                    let addr = addr_with_prefix
+                        .split('/')
+                        .next()
+                        .unwrap_or(addr_with_prefix);
                     if let Ok(ip) = addr.parse::<IpAddr>() {
                         out.push(ip);
                     }
@@ -150,7 +153,10 @@ mod tests {
         let ips = parse_ifconfig_output(sample);
         assert!(ips.contains(&"127.0.0.1".parse().unwrap()));
         assert!(ips.contains(&"::1".parse().unwrap()));
-        assert!(ips.contains(&"fe80::1".parse().unwrap()), "zone id stripped");
+        assert!(
+            ips.contains(&"fe80::1".parse().unwrap()),
+            "zone id stripped"
+        );
         assert!(ips.contains(&"192.168.1.42".parse().unwrap()));
         assert!(ips.contains(&"10.42.42.4".parse().unwrap()));
         assert!(ips.contains(&"fd8d:f090:2ebb::4".parse().unwrap()));

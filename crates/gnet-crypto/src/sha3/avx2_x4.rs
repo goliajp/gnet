@@ -26,9 +26,9 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 
 use core::arch::x86_64::{
-    __m256i, _mm256_andnot_si256, _mm256_or_si256, _mm256_set1_epi64x,
-    _mm256_set_epi64x, _mm256_setzero_si256, _mm256_slli_epi64,
-    _mm256_srli_epi64, _mm256_storeu_si256, _mm256_xor_si256,
+    __m256i, _mm256_andnot_si256, _mm256_or_si256, _mm256_set_epi64x, _mm256_set1_epi64x,
+    _mm256_setzero_si256, _mm256_slli_epi64, _mm256_srli_epi64, _mm256_storeu_si256,
+    _mm256_xor_si256,
 };
 
 use super::scalar;
@@ -126,10 +126,7 @@ unsafe fn keccak_f_x4(s: &mut State4) {
             let prev = bc[(i + 4) % 5];
             let nxt = bc[(i + 1) % 5];
             // rotl(nxt, 1) inlined: (nxt << 1) | (nxt >> 63)
-            let rot = _mm256_or_si256(
-                _mm256_slli_epi64::<1>(nxt),
-                _mm256_srli_epi64::<63>(nxt),
-            );
+            let rot = _mm256_or_si256(_mm256_slli_epi64::<1>(nxt), _mm256_srli_epi64::<63>(nxt));
             let t = _mm256_xor_si256(prev, rot);
             let mut j = 0;
             while j < 25 {

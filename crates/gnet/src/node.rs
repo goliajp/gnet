@@ -274,8 +274,10 @@ pub fn run(config: Config) -> io::Result<()> {
                     if last_relay_register.elapsed() >= RELAY_REGISTER_INTERVAL {
                         last_relay_register = Instant::now();
                         let regs = g.relay_register_datagrams();
-                        g.metrics.relay_register_sent =
-                            g.metrics.relay_register_sent.saturating_add(regs.len() as u64);
+                        g.metrics.relay_register_sent = g
+                            .metrics
+                            .relay_register_sent
+                            .saturating_add(regs.len() as u64);
                         sends.extend(regs);
                     }
                     sends

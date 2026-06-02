@@ -89,9 +89,7 @@ struct Config {
 
 impl Config {
     fn from_argv(args: Vec<String>) -> Result<Self, String> {
-        let mut listen: SocketAddr = "0.0.0.0:65433"
-            .parse()
-            .expect("hardcoded default is valid");
+        let mut listen: SocketAddr = "0.0.0.0:65433".parse().expect("hardcoded default is valid");
         let mut stale_after = STALE_AFTER_DEFAULT;
 
         let mut it = args.into_iter();
@@ -99,9 +97,7 @@ impl Config {
             match a.as_str() {
                 "--listen" => {
                     let v = it.next().ok_or("--listen needs an ADDR")?;
-                    listen = v
-                        .parse()
-                        .map_err(|e| format!("--listen {v:?}: {e}"))?;
+                    listen = v.parse().map_err(|e| format!("--listen {v:?}: {e}"))?;
                 }
                 "--idle-secs" => {
                     let v = it.next().ok_or("--idle-secs needs N")?;
@@ -295,7 +291,11 @@ mod tests {
         let from: SocketAddr = "203.0.113.5:40000".parse().unwrap();
 
         let route = register_and_route(&mut peers, &a, &a, from, Instant::now());
-        assert_eq!(route, Route::Echo(from), "src==dst echoes back to the sender");
+        assert_eq!(
+            route,
+            Route::Echo(from),
+            "src==dst echoes back to the sender"
+        );
         assert_eq!(
             peers.get(&a).map(|e| e.endpoint),
             Some(from),

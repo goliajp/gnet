@@ -61,9 +61,13 @@ pub(crate) fn render(snap: &str) -> String {
     let counter = |k: &str| -> &'static str {
         match k {
             "handshake_success" => "Noise_IK handshakes that reached Established (either side)",
-            "handshake_fail" => "Handshakes torn down by the expire path (msg1/msg2 lost, peer down)",
+            "handshake_fail" => {
+                "Handshakes torn down by the expire path (msg1/msg2 lost, peer down)"
+            }
             "relay_register_sent" => "Self-addressed RelayData registration datagrams sent",
-            "peer_relay_fallback" => "Peers tripped from direct/punch to relay after PUNCH_ATTEMPTS failures",
+            "peer_relay_fallback" => {
+                "Peers tripped from direct/punch to relay after PUNCH_ATTEMPTS failures"
+            }
             _ => "",
         }
     };

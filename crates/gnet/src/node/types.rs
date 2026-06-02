@@ -257,7 +257,11 @@ impl Node {
                 "event=self_nat_detected is_nat={} reflexive={} reason={}",
                 !public,
                 observed.ip(),
-                if public { "matches_local_if" } else { "no_local_match" }
+                if public {
+                    "matches_local_if"
+                } else {
+                    "no_local_match"
+                }
             );
         }
         changed
@@ -350,11 +354,9 @@ impl Node {
                 super::punch::next_direct_upgrade_at(self.peers[i].direct_upgrade_failures);
             eprintln!(
                 "event=peer_relay_fallback peer={i} alias={} punch_failures={}",
-                self.peers[i].alias,
-                self.peers[i].punch_failures
+                self.peers[i].alias, self.peers[i].punch_failures
             );
-            self.metrics.peer_relay_fallback =
-                self.metrics.peer_relay_fallback.saturating_add(1);
+            self.metrics.peer_relay_fallback = self.metrics.peer_relay_fallback.saturating_add(1);
         }
     }
 
@@ -818,7 +820,10 @@ mod tests {
         for expected in 1..PUNCH_ATTEMPTS {
             node.expire_handshakes(Duration::from_secs(3));
             assert_eq!(node.peers[0].punch_failures, expected);
-            assert_eq!(node.peers[1].punch_failures, expected, "direct-init paths now count too");
+            assert_eq!(
+                node.peers[1].punch_failures, expected,
+                "direct-init paths now count too"
+            );
             assert!(!node.peers[0].relay, "not yet at threshold");
             assert!(!node.peers[1].relay);
             node.peers[0].session = stale();
@@ -827,7 +832,10 @@ mod tests {
         // PUNCH_ATTEMPTS-th give-up trips relay on BOTH peers
         node.expire_handshakes(Duration::from_secs(3));
         assert!(node.peers[0].relay, "punched peer tripped at threshold");
-        assert!(node.peers[1].relay, "direct peer also tripped (cold-start NAT-NAT recovery)");
+        assert!(
+            node.peers[1].relay,
+            "direct peer also tripped (cold-start NAT-NAT recovery)"
+        );
     }
 
     #[test]

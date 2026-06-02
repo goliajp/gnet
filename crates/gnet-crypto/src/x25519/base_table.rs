@@ -90,9 +90,9 @@ mod tests {
     fn table_window_advances_by_32x() {
         // TABLE[1][0] = 1 · 32^1 · B = 32·B. Compute reference via five
         // doublings of the basepoint.
-        let thirty_two_b = normalize(&ed_double(&ed_double(&ed_double(&ed_double(
-            &ed_double(&BASEPOINT),
-        )))));
+        let thirty_two_b = normalize(&ed_double(&ed_double(&ed_double(&ed_double(&ed_double(
+            &BASEPOINT,
+        ))))));
         let expected = to_cached_affine(&thirty_two_b);
         assert_eq!(TABLE[1][0].y_minus_x, expected.y_minus_x);
         assert_eq!(TABLE[1][0].y_plus_x, expected.y_plus_x);

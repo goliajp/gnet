@@ -64,9 +64,7 @@ pub(super) const fn fmul(a: &Fe, b: &Fe) -> Fe {
         + (e1 as u128) * (s4 as u128)
         + (e2 as u128) * (s3 as u128)
         + (e3 as u128) * (s2 as u128);
-    t1 += (e4 as u128) * (s2 as u128)
-        + (e2 as u128) * (s4 as u128)
-        + (e3 as u128) * (s3 as u128);
+    t1 += (e4 as u128) * (s2 as u128) + (e2 as u128) * (s4 as u128) + (e3 as u128) * (s3 as u128);
     t2 += (e4 as u128) * (s3 as u128) + (e3 as u128) * (s4 as u128);
     t3 += (e4 as u128) * (s4 as u128);
 
@@ -104,21 +102,17 @@ pub(super) const fn fsqr(a: &Fe) -> Fe {
     let d419 = r4 * 19;
     let d4 = d419 * 2;
 
-    let t0 = (r0 as u128) * (r0 as u128)
-        + (d4 as u128) * (r1 as u128)
-        + (d2 as u128) * (r3 as u128);
+    let t0 =
+        (r0 as u128) * (r0 as u128) + (d4 as u128) * (r1 as u128) + (d2 as u128) * (r3 as u128);
     let mut t1 = (d0 as u128) * (r1 as u128)
         + (d4 as u128) * (r2 as u128)
         + (r3 as u128) * ((r3 * 19) as u128);
-    let mut t2 = (d0 as u128) * (r2 as u128)
-        + (r1 as u128) * (r1 as u128)
-        + (d4 as u128) * (r3 as u128);
-    let mut t3 = (d0 as u128) * (r3 as u128)
-        + (d1 as u128) * (r2 as u128)
-        + (r4 as u128) * (d419 as u128);
-    let mut t4 = (d0 as u128) * (r4 as u128)
-        + (d1 as u128) * (r3 as u128)
-        + (r2 as u128) * (r2 as u128);
+    let mut t2 =
+        (d0 as u128) * (r2 as u128) + (r1 as u128) * (r1 as u128) + (d4 as u128) * (r3 as u128);
+    let mut t3 =
+        (d0 as u128) * (r3 as u128) + (d1 as u128) * (r2 as u128) + (r4 as u128) * (d419 as u128);
+    let mut t4 =
+        (d0 as u128) * (r4 as u128) + (d1 as u128) * (r3 as u128) + (r2 as u128) * (r2 as u128);
 
     let mut o0 = (t0 as u64) & MASK51;
     let mut c = (t0 >> 51) as u64;
