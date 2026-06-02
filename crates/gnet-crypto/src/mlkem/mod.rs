@@ -91,10 +91,14 @@ pub fn decaps(dk: &[u8], ct: &[u8]) -> [u8; SS_LEN] {
     let mut k_bar = [0u8; 32];
     shake256(&j_in, &mut k_bar);
 
-    // re-encrypt and select in constant time
+    // re-encrypt and select in constant time. Convert the equality bool to
+    // a byte mask via `wrapping_sub` rather than an `if`-expression — the
+    // optimiser is free to lower `if ok { 0 } else { 0xff }` to a branch on
+    // some targets, which would leak the FO check outcome via timing. The
+    // wrap-arithmetic form compiles to an unconditional cmp+sete+sub on
+    // every backend we target.
     let ct2 = kpke::encrypt(ek, &m, &coins);
-    let ok = ct_eq(ct, &ct2);
-    let mask = if ok { 0u8 } else { 0xff };
+    let mask = (ct_eq(ct, &ct2) as u8).wrapping_sub(1); // ok → 0; not-ok → 0xff
     for i in 0..32 {
         key[i] = (key[i] & !mask) | (k_bar[i] & mask);
     }
