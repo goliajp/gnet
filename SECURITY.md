@@ -34,8 +34,7 @@ Email **security@golia.jp** with:
 - whether you want public credit when the fix lands.
 
 **Please do not file public GitHub issues for unpatched security
-findings.** The repository is currently private; once it goes public at
-`gnet-v1.0`, this clause still applies.
+findings.** Email the address above instead.
 
 You will get an acknowledgement within **3 business days**. We will
 follow up with a triage verdict (accepted / not-a-bug / duplicate)

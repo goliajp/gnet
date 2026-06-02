@@ -319,6 +319,10 @@ unsafe fn interleave_back_x16(c0: __m256i, c1: __m256i) -> (__m256i, __m256i) {
 /// # Safety
 /// Caller must ensure the CPU supports AVX2.
 #[target_feature(enable = "avx2")]
+// index-driven loop is intentional — `chunk` indexes both the pointer
+// offset (`chunk * 32`) and the zeta-vector table; iterator chains over
+// raw SIMD pointers would be strictly less readable here.
+#[allow(clippy::needless_range_loop)]
 pub(super) unsafe fn ntt_mul_into_avx2(a: &[i16; 256], b: &[i16; 256], r: &mut [i16; 256]) {
     for chunk in 0..8 {
         let off = chunk * 32;
