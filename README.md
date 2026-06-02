@@ -10,12 +10,30 @@ validated against its published RFC / NIST known-answer vectors.
 
 ## Status
 
-Pre-1.0. Tagged `gnet-v0.17` (May 2026). The `gnet` daemon runs internally on
-a small fleet (macOS arm64 + Linux x86_64 + AWS Graviton aarch64). The path to
-**gnet 1.0 — going public on GitHub** is tracked in [ROADMAP.md](ROADMAP.md).
-Publishing the zero-dependency library crates ("stones") to crates.io is a
-separate, post-1.0 effort; see [crates/PUBLISH.md](crates/PUBLISH.md) for the
-publish topology when that lands.
+Pre-1.0. Tagged `gnet-v0.23` (June 2026). The `gnet` daemon runs internally
+on a small fleet (macOS arm64 + Linux x86_64 + AWS Graviton aarch64). The
+path to **gnet 1.0 — going public on GitHub** is tracked in
+[ROADMAP.md](ROADMAP.md). Publishing the zero-dependency library crates
+("stones") to crates.io is a separate, post-1.0 effort; see
+[crates/PUBLISH.md](crates/PUBLISH.md) for the publish topology when that
+lands.
+
+Recent landings:
+
+- **v0.18–v0.20** — coordinator state sync + warm-standby read-only
+  fence, discovery peer-leave / reconcile, relay health probing &
+  failover. Track A (fleet reliability) is feature-complete.
+- **v0.21** — admin unix-socket IPC on the daemon, fused live state in
+  `gnet status` (per-peer session phase, path, last successful
+  handshake), Prometheus exporter `gnet metrics`. The daemon stays
+  zero-deps; admin / metrics are CLI sidecars.
+- **v0.22** — `gnet doctor` diagnostic subcommand (green/red verdict
+  with reasons; non-zero exit on FAIL).
+- **v0.23** — Track B quality gate: [SECURITY.md](SECURITY.md) disclosure
+  policy, [KAT.md](crates/gnet-crypto/KAT.md) frozen RFC/NIST vector
+  inventory, [CT-REVIEW.md](crates/gnet-crypto/CT-REVIEW.md)
+  constant-time audit of the crypto hot paths, and
+  [fuzz harnesses](docs/fuzzing.md) for the four untrusted-input parsers.
 
 ## What's in the box
 
@@ -47,6 +65,26 @@ publish topology when that lands.
   Apple Silicon and x86_64 AVX2 (ML-KEM decaps holds the largest margin).
 * Post-quantum hybrid is part of the data-plane handshake, not a bolt-on:
   ML-KEM-768 keys ride alongside X25519 in the Noise IK pattern.
+
+## Operating
+
+Day-to-day CLI on a daemon-running host:
+
+| command | when |
+|---|---|
+| `gnet status [--conf PATH]` | full picture — local conf, daemon liveness, runtime (reflexive endpoint, NAT verdict, relay health), and the coordinator roster with live session/path/last-handshake fused per peer |
+| `gnet doctor [--conf PATH]` | green/red pre-flight: conf parse, key derive, coordinator reachability + pubkey recognition, admin socket, /etc/hosts splice, service unit. Exits non-zero on FAIL. |
+| `gnet metrics` | Prometheus text from the daemon's admin socket; pipe to `/var/lib/node_exporter/textfile_collector/gnet.prom` for scraping |
+| `gnet rotate-key [--conf PATH]` | mint a new identity, swap on coordinator + conf, atomic file replace |
+| `gnet purge-hosts [--hosts PATH]` | remove the gnet-managed `/etc/hosts` block |
+
+Deploy:
+
+- **Linux + systemd:** [docs/deploy/linux-systemd.md](docs/deploy/linux-systemd.md)
+- **Quality gate docs:** [SECURITY.md](SECURITY.md),
+  [KAT.md](crates/gnet-crypto/KAT.md),
+  [CT-REVIEW.md](crates/gnet-crypto/CT-REVIEW.md),
+  [fuzzing.md](docs/fuzzing.md)
 
 ## License
 
