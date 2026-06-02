@@ -1,0 +1,79 @@
+# gnet-discover — coordinator daemon (Linux, systemd).
+#
+# Install:
+#   sudo install -d -m 0700 /etc/gnet-discover /var/lib/gnet-discover
+#   sudo install -m 0600 gnet-discover.env       /etc/gnet-discover/env
+#   sudo install -m 0755 target/release/gnet-discover  /usr/local/bin/gnet-discover
+#   sudo install -m 0644 gnet-discover.service   /etc/systemd/system/gnet-discover.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now gnet-discover
+#
+# Validate a state.json backup (warm-standby readiness check):
+#   sudo -u gnet-discover gnet-discover --validate-state
+#
+# Tail logs:    journalctl -u gnet-discover -f
+# Status:       systemctl status gnet-discover
+#
+# Conf is environment-variable driven (see /etc/gnet-discover/env):
+#   GNET_DISCOVER_BIND               (default 0.0.0.0:65432)
+#   GNET_DISCOVER_STATE_PATH         (default /var/lib/gnet-discover/state.json)
+#   GNET_DISCOVER_ADMIN_TOKEN        (required, ≥16 chars — used for mint,
+#                                     warm-standby pull-sync, and the v0.21+
+#                                     admin endpoints)
+#   GNET_DISCOVER_RELAYS             (comma-separated <ip:port> list; optional)
+#   GNET_DISCOVER_PRIMARY            (unset → primary; URL → warm-standby)
+#   GNET_DISCOVER_SYNC_INTERVAL_SECS (default 10, only used in standby mode)
+
+[Unit]
+Description=gnet overlay coordinator (control plane)
+Documentation=https://github.com/goliajp/gnet/tree/develop/crates/gnet-discover
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/gnet-discover/env
+ExecStart=/usr/local/bin/gnet-discover
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+KillMode=control-group
+TimeoutStopSec=10s
+
+# Dedicated dynamic user — coord owns nothing besides /var/lib/gnet-discover.
+# State.json is persisted there via atomic tmp+rename so a kill-9 leaves a
+# valid restore point.
+DynamicUser=yes
+StateDirectory=gnet-discover
+StateDirectoryMode=0700
+
+# Hardening — coord only needs network sockets + state.json read/write.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/gnet-discover
+ProtectHome=yes
+PrivateTmp=yes
+LockPersonality=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+
+# Process limits.
+LimitNOFILE=4096
+MemoryMax=128M
+
+# Bandwidth accounting — useful when fronted by a cloud LB.
+IPAccounting=yes
+
+# Stdout/stderr go to journal; coord emits structured `event=*` lines.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
