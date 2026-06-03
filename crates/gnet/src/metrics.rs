@@ -46,17 +46,25 @@ fn fetch_admin_snapshot() -> io::Result<String> {
 pub(crate) fn render(snap: &str) -> String {
     let mut out = String::with_capacity(512);
     let mut metrics_line = None;
+    let mut node_line = None;
     let mut peer_lines = Vec::new();
     let mut relay_lines = Vec::new();
     for line in snap.lines() {
         if let Some(rest) = line.strip_prefix("metrics ") {
             metrics_line = Some(rest);
+        } else if let Some(rest) = line.strip_prefix("node ") {
+            node_line = Some(rest);
         } else if let Some(rest) = line.strip_prefix("peer ") {
             peer_lines.push(rest);
         } else if let Some(rest) = line.strip_prefix("relay ") {
             relay_lines.push(rest);
         }
     }
+    // A public daemon doesn't send relay register packets — so its relay
+    // health gauges would always read 0 and false-alarm any
+    // staleness alert. Annotate the gauge with `registered="true|false"`
+    // so consumers can filter (`{registered="true"} > N`).
+    let registered = node_line.and_then(|n| kv(n, "self_is_nat")) != Some("false");
 
     let counter = |k: &str| -> &'static str {
         match k {
@@ -140,16 +148,24 @@ pub(crate) fn render(snap: &str) -> String {
 
     // relay health: a gauge per relay, value = ms since last pong (or 0 when
     // we have never seen one yet; absence of a relay row means it is not
-    // advertised). Operators alert on stale relay health from this.
+    // advertised). Each gauge carries `registered="true|false"` so alerts can
+    // filter out public daemons (which never register, so health age is
+    // structurally meaningless for them). Operators typically write:
+    //   gnet_relay_health_age_ms{registered="true"} > 60000
     if !relay_lines.is_empty() {
-        out.push_str("# HELP gnet_relay_health_age_ms Milliseconds since the last self-addressed keepalive echo from each relay (0 = no pong yet)\n");
+        out.push_str(
+            "# HELP gnet_relay_health_age_ms Milliseconds since the last self-addressed \
+             keepalive echo from each relay (0 = no pong yet; registered=\"false\" means \
+             this daemon is public and never sends register packets)\n",
+        );
         out.push_str("# TYPE gnet_relay_health_age_ms gauge\n");
+        let reg_label = if registered { "true" } else { "false" };
         for r in &relay_lines {
             let ep = kv(r, "endpoint").unwrap_or("?");
             let age = kv(r, "health_age_ms").unwrap_or("0");
             let age_num = if age == "never" { "0" } else { age };
             out.push_str(&format!(
-                "gnet_relay_health_age_ms{{endpoint=\"{ep}\"}} {age_num}\n"
+                "gnet_relay_health_age_ms{{endpoint=\"{ep}\",registered=\"{reg_label}\"}} {age_num}\n"
             ));
         }
     }
@@ -205,9 +221,26 @@ peer alias=beta public=22 vip=10.88.0.8 vip6=none endpoint=none session=idle las
     }
 
     #[test]
-    fn renders_relay_health_with_endpoint_label() {
+    fn renders_relay_health_with_endpoint_and_registered_labels() {
+        // SAMPLE has self_is_nat=true → registered="true"
         let out = render(SAMPLE);
-        assert!(out.contains("gnet_relay_health_age_ms{endpoint=\"10.0.0.1:7\"} 42\n"));
+        assert!(out.contains(
+            "gnet_relay_health_age_ms{endpoint=\"10.0.0.1:7\",registered=\"true\"} 42\n"
+        ));
+    }
+
+    #[test]
+    fn relay_health_registered_false_for_public_daemon() {
+        // self_is_nat=false → we never register; gauge still emits but
+        // registered="false" tells alerts to filter it out.
+        let snap = "\
+node public=abcd reflexive=1.2.3.4:5 self_is_nat=false
+relay endpoint=10.0.0.1:7 health_age_ms=never
+";
+        let out = render(snap);
+        assert!(out.contains(
+            "gnet_relay_health_age_ms{endpoint=\"10.0.0.1:7\",registered=\"false\"} 0\n"
+        ));
     }
 
     #[test]
