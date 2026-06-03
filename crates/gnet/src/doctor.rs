@@ -302,7 +302,27 @@ fn check_hosts_block(config: &gnet_config::Config, _pubkey_hex: &str) -> Check {
     )
 }
 
+/// True if the doctor is running inside a Docker / OCI container.
+/// `/.dockerenv` is the canonical Docker marker; `/run/.containerenv` is
+/// the Podman / CRI-O / generic-OCI equivalent. Either present → we are
+/// in a container and the host's systemd / launchd surface isn't ours
+/// to probe.
+fn running_in_container() -> bool {
+    std::path::Path::new("/.dockerenv").exists()
+        || std::path::Path::new("/run/.containerenv").exists()
+}
+
 fn check_service_unit() -> Check {
+    if running_in_container() {
+        // PASS, not WARN: the daemon doesn't run under systemd in a
+        // container — it IS the container's PID 1. Its liveness is the
+        // container's liveness, which is the operator's `docker ps` /
+        // `compose ps` concern, not ours. Skipping is correct, not a gap.
+        return Check::pass(
+            "service unit",
+            "running inside a container (host service-unit check skipped)",
+        );
+    }
     #[cfg(target_os = "linux")]
     {
         let out = Command::new("systemctl")
