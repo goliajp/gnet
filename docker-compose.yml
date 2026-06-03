@@ -101,8 +101,13 @@ services:
       APPLE_OAUTH_PRIVATE_KEY_PATH: ${APPLE_OAUTH_PRIVATE_KEY_PATH:-}
       # Email transport — unset = auto-verify mode (warn-logged at
       # boot). Production should configure mailrs.
-      MAILRS_SMTP_HOST: ${MAILRS_SMTP_HOST:-}
-      MAILRS_SMTP_PORT: ${MAILRS_SMTP_PORT:-}
+      # mailrs HTTP transport (plan §6.6). All four required for the
+      # mail loop to switch on; absence of any one keeps the console
+      # in auto-verify mode (warn-logged at boot).
+      MAILRS_API_BASE: ${MAILRS_API_BASE:-}
+      MAILRS_LOGIN_ADDRESS: ${MAILRS_LOGIN_ADDRESS:-}
+      MAILRS_LOGIN_PASSWORD: ${MAILRS_LOGIN_PASSWORD:-}
+      MAILRS_FROM_ADDRESS: ${MAILRS_FROM_ADDRESS:-}
       RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
     ports:
       # Loopback-only on the host — Caddy is the public entry point.
