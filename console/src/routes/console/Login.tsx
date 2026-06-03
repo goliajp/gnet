@@ -61,12 +61,23 @@ export default function ConsoleLogin() {
           {submit.isPending ? "…" : "sign in"}
         </button>
 
-        <p className="text-center font-mono text-xs text-zinc-500">
-          no account?{" "}
-          <Link to="/signup" className="text-zinc-300 hover:text-zinc-100">
-            create one
-          </Link>
-        </p>
+        <div className="space-y-2 text-center font-mono text-xs text-zinc-500">
+          <p>
+            no account?{" "}
+            <Link to="/signup" className="text-zinc-300 hover:text-zinc-100">
+              create one
+            </Link>
+          </p>
+          <p>
+            forgot your password?{" "}
+            <Link
+              to="/forgot-password"
+              className="text-zinc-300 hover:text-zinc-100"
+            >
+              reset it
+            </Link>
+          </p>
+        </div>
       </form>
     </AuthShell>
   );

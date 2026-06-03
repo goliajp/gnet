@@ -5,6 +5,7 @@ import { api } from "../../api/client";
 import type {
   ConsoleMeResponse,
   EmailRegisterRequest,
+  ResendVerificationRequest,
 } from "../../api/types";
 import { AuthShell, ErrorLine, Field } from "./Login";
 
@@ -37,25 +38,7 @@ export default function ConsoleSignup() {
   });
 
   if (pendingMailFor) {
-    return (
-      <AuthShell title="Check your inbox" subtitle="verification mail sent">
-        <p className="text-zinc-300">
-          We sent a sign-in link to{" "}
-          <span className="font-mono text-zinc-100">{pendingMailFor}</span>.
-          Open it to finish creating your account.
-        </p>
-        <p className="mt-4 text-xs text-zinc-500">
-          Didn't see it? Check spam, or{" "}
-          <Link
-            to="/login"
-            className="text-zinc-300 hover:text-zinc-100"
-          >
-            sign in
-          </Link>{" "}
-          if you already have one.
-        </p>
-      </AuthShell>
-    );
+    return <PendingMail email={pendingMailFor} />;
   }
 
   return (
@@ -110,6 +93,56 @@ export default function ConsoleSignup() {
           </Link>
         </p>
       </form>
+    </AuthShell>
+  );
+}
+
+function PendingMail({ email }: { email: string }) {
+  const [resentAt, setResentAt] = useState<number | null>(null);
+  const resend = useMutation({
+    mutationFn: (body: ResendVerificationRequest) =>
+      api<void>("/api/auth/email/resend-verification", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => setResentAt(Date.now()),
+  });
+
+  return (
+    <AuthShell title="Check your inbox" subtitle="verification mail sent">
+      <p className="text-zinc-300">
+        We sent a sign-in link to{" "}
+        <span className="font-mono text-zinc-100">{email}</span>. Open it to
+        finish creating your account.
+      </p>
+      <div className="mt-4 space-y-2 text-xs text-zinc-500">
+        <p>
+          Didn't see it? Check spam, or{" "}
+          <button
+            type="button"
+            onClick={() => resend.mutate({ email })}
+            disabled={
+              resend.isPending ||
+              (resentAt != null && Date.now() - resentAt < 30_000)
+            }
+            className="text-zinc-300 hover:text-zinc-100 disabled:opacity-50"
+          >
+            {resend.isPending
+              ? "resending…"
+              : resentAt != null
+                ? "resent ✓"
+                : "send another"}
+          </button>
+          .
+        </p>
+        <p>
+          Already have an account?{" "}
+          <Link to="/login" className="text-zinc-300 hover:text-zinc-100">
+            sign in
+          </Link>
+          .
+        </p>
+      </div>
     </AuthShell>
   );
 }
