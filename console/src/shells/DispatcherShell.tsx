@@ -4,6 +4,11 @@ import type { HostRoleResponse, MeResponse } from "../api/types";
 import Login from "../routes/Login";
 import Dashboard from "../routes/dispatcher/Dashboard";
 
+// Narrow the host-role union to the dispatcher variant — the
+// dispatcher binary's response is the only one that carries
+// `network_name` / `network_id`.
+export type DispatcherHost = Extract<HostRoleResponse, { role: "dispatcher" }>;
+
 /**
  * Dispatcher SPA shell.
  *
@@ -14,7 +19,7 @@ import Dashboard from "../routes/dispatcher/Dashboard";
 export default function DispatcherShell({
   host,
 }: {
-  host: HostRoleResponse;
+  host: DispatcherHost;
 }) {
   const me = useQuery({
     queryKey: ["auth", "me"],

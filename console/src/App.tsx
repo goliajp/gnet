@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api/client";
 import type { HostRoleResponse } from "./api/types";
+import ConsoleShell from "./shells/ConsoleShell";
 import DispatcherShell from "./shells/DispatcherShell";
 
 /**
@@ -36,11 +37,12 @@ export default function App() {
         <CenterStatus text="Relay shell — implementation lands later in v1.1." />
       );
     case "console":
-      return (
-        <CenterStatus text="SaaS console shell — implementation lands later in v1.1." />
-      );
-    default:
-      return <CenterStatus text={`Unknown host role: ${host.role}`} tone="error" />;
+      return <ConsoleShell host={host} />;
+    default: {
+      const _exhaustive: never = host;
+      void _exhaustive;
+      return <CenterStatus text="Unknown host role" tone="error" />;
+    }
   }
 }
 

@@ -4,7 +4,6 @@ use axum::middleware;
 use crate::state::AppState;
 
 pub mod auth;
-pub mod banner;
 pub mod csrf;
 pub mod headers;
 pub mod health;
@@ -16,7 +15,8 @@ pub mod spa;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .merge(banner::routes())
+        // health probes go to /health and /ready (no /api/ prefix);
+        // the SPA fallback would otherwise eat them.
         .merge(health::routes())
         .merge(host_role::routes())
         .merge(auth::routes())
@@ -24,9 +24,11 @@ pub fn router(state: AppState) -> Router {
         .merge(networks::routes())
         .merge(proxy::routes())
         // SPA fallback must merge last so the API routes above win
-        // their exact-match paths first. Any path not matched falls
-        // through to spa::serve which returns a real asset or the
-        // SPA shell (plan §3.4).
+        // their exact-match paths first. Any path not matched —
+        // INCLUDING `/` — falls through to spa::serve which returns
+        // a real asset or the SPA shell (plan §3.4). The SPA's
+        // react-router then renders the Landing / Login / Signup /
+        // Dashboard pages client-side.
         .merge(spa::routes())
         .with_state(state)
         .layer(middleware::from_fn(csrf::guard))
