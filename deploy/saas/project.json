@@ -1,0 +1,6 @@
+{
+  "name": "gnet",
+  "repo": "https://github.com/goliajp/gnet",
+  "target_devices": ["t01"],
+  "status": "developing"
+}
