@@ -7,6 +7,7 @@ pub mod auth;
 pub mod csrf;
 pub mod device_writes;
 pub mod devices;
+pub mod federation;
 pub mod host_role;
 pub mod internal;
 pub mod network;
@@ -21,6 +22,7 @@ pub fn router(state: AdminState) -> Router {
         .merge(devices::routes())
         .merge(device_writes::routes())
         .merge(internal::routes())
+        .merge(federation::routes())
         .with_state(state)
         // CSRF guard wraps the whole router. The guard itself filters by
         // method + path, so safe methods and pre-auth endpoints sail
