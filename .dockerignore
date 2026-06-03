@@ -1,0 +1,43 @@
+# Build context filter for `docker compose build` (and any direct
+# `docker build` from the repo root). Anything not needed by the
+# multi-stage Dockerfile under self-host/ is stripped here so the
+# build context send is small and reproducible.
+
+# Rust build output is huge and meaningless inside the container —
+# the rust-builder stage rebuilds with its own cache mount.
+target
+
+# SPA build output is regenerated in the spa-builder stage. Leave
+# the stub HTML at console/dist-stub.html in (the workspace
+# build.rs falls back to it when dist is missing on the *host* — the
+# Dockerfile pre-populates dist before cargo runs, so this stub is
+# unused inside the container, just kept for completeness).
+console/dist
+console/node_modules
+console/.vite
+console/*.tsbuildinfo
+console/dist-ssr
+
+# Git metadata is not needed at build time.
+.git
+
+# IDE / editor noise.
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS junk.
+.DS_Store
+Thumbs.db
+
+# Test scratch / personal dotfiles never need to enter the image.
+.env
+.env.local
+self-host/.env
+
+# Existing toplevel daemon-only Dockerfile + its example compose
+# (these belong to the data-plane gnet binary, not the self-host
+# bundle).
+Dockerfile
+examples

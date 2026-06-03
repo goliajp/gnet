@@ -1,0 +1,142 @@
+# gnet v1.1 self-host (Mode B: no SaaS dependency) — plan §1, §10.1.
+#
+# Brings up the four services needed to run a fully local gnet
+# control-plane: PostgreSQL 18 for state, Valkey 9 for session/cache,
+# the dispatcher binary (admin API + v1.0-compatible coord listener),
+# and the relay binary (UDP RelayData forwarder + lite admin HTTP).
+#
+# The console binary is NOT part of this bundle. Mode B operators
+# point their browser at the dispatcher's admin UI directly. Mode A
+# (SaaS) and Mode C (hybrid) sign in via gnet.golia.jp instead and
+# don't run a console of their own.
+#
+# Quick start (see README.md for full walkthrough):
+#   1. cp .env.example .env  &&  $EDITOR .env
+#   2. docker compose up -d
+#   3. docker compose logs -f dispatcher
+#   4. open http://localhost:8765/  (use the initial setup token)
+#
+# Ports exposed on the host (override via .env):
+#   - 8765/tcp  dispatcher admin UI + JSON API
+#   - 65432/udp v1.0-compatible coord listener (daemons join here)
+#   - 8766/tcp  relay admin (lite read-only surface)
+#   - 65433/udp relay RelayData forwarder
+#
+# This file is operator-facing — edits to it are explicit. The .env
+# template ships next to it so secrets stay out of the YAML.
+
+services:
+
+  # ── PostgreSQL 18 — dispatcher state ─────────────────────────────
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gnet
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: gnet_dispatcher
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gnet -d gnet_dispatcher"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  # ── Valkey 9 — session + federation token cache ─────────────────
+  kv:
+    image: valkey/valkey:9-alpine
+    restart: unless-stopped
+    volumes:
+      - kvdata:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "PING"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 2s
+
+  # ── dispatcher: admin API + v1.0 coord listener ─────────────────
+  dispatcher:
+    build:
+      context: ..
+      dockerfile: self-host/Dockerfile
+      target: dispatcher
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      kv:
+        condition: service_healthy
+    environment:
+      # v1.0-compatible coord listener — daemons hit this on /join,
+      # /peers, /endpoint-report. Bound to all interfaces because
+      # daemons join from outside the container.
+      GNET_DISCOVER_BIND: 0.0.0.0:65432
+      # v1.1 admin API + SPA. 0.0.0.0 by design (plan §16.1) — the
+      # operator firewalls if they don't want LAN access.
+      GNET_DISCOVER_ADMIN_BIND: 0.0.0.0:8765
+      GNET_DISCOVER_ADMIN_TOKEN: ${DISPATCHER_ADMIN_TOKEN:?DISPATCHER_ADMIN_TOKEN must be set (≥16 chars)}
+      # v1.1 PG-backed state. Setting this is what turns the v1.1
+      # admin server on; unset would keep this binary as a v1.0
+      # coord only.
+      GNET_DISCOVER_DATABASE_URL: postgres://gnet:${POSTGRES_PASSWORD}@db:5432/gnet_dispatcher
+      GNET_DISCOVER_VALKEY_URL: redis://kv:6379
+      # The relay we just brought up. The dispatcher advertises this
+      # to its devices via /peers so they can fall back to it when
+      # direct paths fail.
+      GNET_DISCOVER_RELAYS: ${RELAY_ADVERTISED_ENDPOINT:?RELAY_ADVERTISED_ENDPOINT must be set in .env}
+      # Where the v1.0 state.json lives for the importer + warm-
+      # standby fallback path. The volume below persists it across
+      # container restarts.
+      GNET_DISCOVER_STATE_PATH: /var/lib/gnet-discover/state.json
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - dispatcher-state:/var/lib/gnet-discover
+    ports:
+      - "${DISPATCHER_ADMIN_PORT:-8765}:8765/tcp"
+      - "${DISPATCHER_COORD_PORT:-65432}:65432/udp"
+    healthcheck:
+      test:
+        - "CMD"
+        - "/bin/sh"
+        - "-c"
+        - "exec 3<>/dev/tcp/127.0.0.1/8765 && printf 'GET /api/host-role HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q '200'"
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+
+  # ── relay: UDP forwarder + lite admin (plan §17.8) ──────────────
+  relay:
+    build:
+      context: ..
+      dockerfile: self-host/Dockerfile
+      target: relay
+    restart: unless-stopped
+    environment:
+      GNET_RELAY_ADMIN_BIND: 0.0.0.0:8766
+      GNET_RELAY_ADMIN_TOKEN: ${RELAY_ADMIN_TOKEN:?RELAY_ADMIN_TOKEN must be set (≥16 chars)}
+    # The image's CMD already passes --listen 0.0.0.0:65433; the
+    # explicit form here makes the bind visible in `docker compose
+    # config` for ops inspection.
+    command: ["--listen", "0.0.0.0:65433"]
+    ports:
+      - "${RELAY_PORT:-65433}:65433/udp"
+      - "${RELAY_ADMIN_PORT:-8766}:8766/tcp"
+    healthcheck:
+      test:
+        - "CMD"
+        - "/bin/sh"
+        - "-c"
+        - "exec 3<>/dev/tcp/127.0.0.1/8766 && printf 'GET /api/host-role HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q '200'"
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+
+volumes:
+  pgdata:
+  kvdata:
+  dispatcher-state:
