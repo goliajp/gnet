@@ -52,13 +52,18 @@ impl Config {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "redis://127.0.0.1:6379".to_string());
 
-        // Auto-verify ON when no mailrs SMTP host is configured. The
-        // binary still boots either way; this flag just decides whether
-        // a fresh signup can sign in immediately or has to clear a
-        // verification step the operator hasn't wired yet.
-        let auto_verify_email = std::env::var("MAILRS_SMTP_HOST")
-            .map(|s| s.trim().is_empty())
-            .unwrap_or(true);
+        // Auto-verify ON when no mailrs HTTP transport is configured.
+        // The transport is wired in lib.rs (`MailClient::from_env`)
+        // and requires `MAILRS_API_BASE` + `_LOGIN_ADDRESS` +
+        // `_LOGIN_PASSWORD` + `_FROM_ADDRESS`. Whether the client
+        // ends up `Some` is the source of truth for the flag — but
+        // re-deriving the same conditional here keeps the config
+        // decision out of lib.rs's boot path.
+        let mail_configured = ["MAILRS_API_BASE", "MAILRS_LOGIN_ADDRESS",
+            "MAILRS_LOGIN_PASSWORD", "MAILRS_FROM_ADDRESS"]
+            .iter()
+            .all(|v| std::env::var(v).map(|s| !s.trim().is_empty()).unwrap_or(false));
+        let auto_verify_email = !mail_configured;
 
         let public_url = std::env::var("GNET_CONSOLE_PUBLIC_URL")
             .ok()

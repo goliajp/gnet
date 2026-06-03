@@ -9,6 +9,7 @@ pub mod auth;
 pub mod config;
 pub mod error;
 pub mod federation;
+pub mod mail;
 pub mod oauth;
 pub mod ratelimit;
 pub mod routes;
@@ -37,15 +38,19 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let kv = redis::aio::ConnectionManager::new(redis_client).await?;
     tracing::info!(valkey = %config.valkey_url, "valkey connected");
 
-    if config.auto_verify_email {
-        tracing::warn!(
-            "auto_verify_email=true (no MAILRS_SMTP_HOST configured) — signups go live without email verification"
-        );
-    }
-
     let http = reqwest::Client::builder()
         .user_agent("gnet-console")
         .build()?;
+
+    let mail = mail::MailClient::from_env(http.clone());
+    if mail.is_some() {
+        tracing::info!("mailrs transport configured — verification mail loop on");
+    }
+    if config.auto_verify_email {
+        tracing::warn!(
+            "auto_verify_email=true (no MAILRS_* env configured) — signups go live without email verification"
+        );
+    }
 
     let mut oauth: HashMap<&'static str, oauth::Provider> = HashMap::new();
     if let Some(g) = oauth::google::Google::from_env() {
@@ -74,6 +79,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         oauth: Arc::new(oauth),
         auto_verify_email: config.auto_verify_email,
         federation_secret: config.federation_secret,
+        mail,
     };
     let app = routes::router(state);
 
