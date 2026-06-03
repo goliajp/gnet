@@ -26,6 +26,14 @@ const EXEMPT_PATHS: &[&str] = &[
     // body IS the auth factor (single-use, one-hour TTL — see
     // routes/auth.rs::verify_email).
     "/api/auth/email/verify",
+    // Same reasoning as verify: forgot-password / reset-password /
+    // resend-verification all come in BEFORE a session exists — the
+    // user is signed out by definition. The auth factor is either
+    // the URL token (reset) or the rate-limit/enumeration-flat 200
+    // (forgot, resend).
+    "/api/auth/email/forgot-password",
+    "/api/auth/email/reset-password",
+    "/api/auth/email/resend-verification",
     "/api/auth/logout",
 ];
 

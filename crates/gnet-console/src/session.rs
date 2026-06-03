@@ -52,8 +52,13 @@ pub fn key_from_cookie(cookie: &str) -> Option<String> {
     Some(format_key(&gnet_crypto::sha3::sha3_256(&raw)))
 }
 
+/// Valkey key prefix shared by every console session row. Used both
+/// here (to format individual keys) and by `routes/auth.rs` to walk
+/// the prefix on password reset (every session for the user dies).
+pub const KEY_PREFIX: &str = "gnet:console:sess:";
+
 fn format_key(hash: &[u8; 32]) -> String {
-    format!("gnet:console:sess:{}", gnet_hex::encode(hash))
+    format!("{}{}", KEY_PREFIX, gnet_hex::encode(hash))
 }
 
 pub async fn store(

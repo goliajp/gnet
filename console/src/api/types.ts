@@ -64,6 +64,19 @@ export type VerifyEmailResponse = {
   verified: boolean;
 };
 
+export type ResendVerificationRequest = {
+  email: string;
+};
+
+export type ForgotPasswordRequest = {
+  email: string;
+};
+
+export type ResetPasswordRequest = {
+  token: string;
+  password: string;
+};
+
 // User's federated networks (Mode A SaaS + Mode C federated self-host).
 export type UserNetworkRow = {
   id: string;

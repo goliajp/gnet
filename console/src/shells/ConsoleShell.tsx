@@ -6,6 +6,8 @@ import Landing from "../routes/console/Landing";
 import ConsoleLogin from "../routes/console/Login";
 import ConsoleSignup from "../routes/console/Signup";
 import ConsoleVerify from "../routes/console/Verify";
+import ConsoleForgotPassword from "../routes/console/ForgotPassword";
+import ConsoleResetPassword from "../routes/console/ResetPassword";
 import ConsoleDashboard from "../routes/console/Dashboard";
 
 export type ConsoleHost = Extract<HostRoleResponse, { role: "console" }>;
@@ -79,8 +81,11 @@ export default function ConsoleShell({ host }: { host: ConsoleHost }) {
       {/* Verify is always public — the token in the URL is the auth
           factor, the user may not even be signed in yet (the link
           came from email and a fresh browser tab might not carry the
-          signup-time session cookie). */}
+          signup-time session cookie). Same reasoning for the
+          forgot/reset pair. */}
       <Route path="/verify" element={<ConsoleVerify />} />
+      <Route path="/forgot-password" element={<ConsoleForgotPassword />} />
+      <Route path="/reset-password" element={<ConsoleResetPassword />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
