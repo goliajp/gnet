@@ -16,6 +16,13 @@ pub enum ConfigError {
 pub struct Config {
     pub bind: SocketAddr,
     pub database_url: String,
+    pub valkey_url: String,
+    /// When true, the console treats newly registered email accounts as
+    /// verified immediately. Set automatically when no SMTP transport is
+    /// configured (per plan §6.6 — self-host without mailrs is a
+    /// supported mode). When mailrs is configured the binary flips this
+    /// off so the verification link gates first sign-in.
+    pub auto_verify_email: bool,
 }
 
 impl Config {
@@ -31,6 +38,25 @@ impl Config {
         let database_url = std::env::var("GNET_CONSOLE_DATABASE_URL")
             .map_err(|_| ConfigError::Missing("GNET_CONSOLE_DATABASE_URL"))?;
 
-        Ok(Self { bind, database_url })
+        let valkey_url = std::env::var("GNET_CONSOLE_VALKEY_URL")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "redis://127.0.0.1:6379".to_string());
+
+        // Auto-verify ON when no mailrs SMTP host is configured. The
+        // binary still boots either way; this flag just decides whether
+        // a fresh signup can sign in immediately or has to clear a
+        // verification step the operator hasn't wired yet.
+        let auto_verify_email = std::env::var("MAILRS_SMTP_HOST")
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true);
+
+        Ok(Self {
+            bind,
+            database_url,
+            valkey_url,
+            auto_verify_email,
+        })
     }
 }
