@@ -61,15 +61,23 @@ Bug-fixes, doc, CI hardening. Specifically expected to land here:
 
 ### 1.1.0 — SaaS control plane + console at gnet.golia.jp
 
-The Tailscale-style account-and-network surface for `gnet`. **A
-separate project** (probably its own repo: web codebase, schema
-migrations, OAuth secrets, hosted infra) — not the embedded mini-admin
-sketched in earlier roadmap revisions.
+The Tailscale-style account-and-network surface for `gnet`. Built **in
+this repo, not a separate one** (the original roadmap revision called
+for a split — reverted because keeping the control plane next to the
+daemon makes versioning, fleet rollouts, and the push-channel wire
+contract easier to keep aligned).
+
+Layout: new workspace members under `crates/` for the backend
+(probably `gnet-console` for the axum app + `gnet-console-schema` for
+PG migrations + types) and a sibling `console/` tree at the repo root
+for the React SPA (Vite build output bundled into the backend binary
+via `include_dir!` at compile time, single-binary deploy in the same
+shape as `gnet-discover`).
 
 **Architectural ground rules (non-negotiable):**
 
-- **Separate project, separate process, separate deploy.** The
-  control plane lives apart from `gnet` and `gnet-discover` — a
+- **Separate process, separate deploy.** Even though it lives in this
+  repo, the control plane is its own binary on its own host — a
   control-plane outage must not stop existing devices from talking.
   Once a device is registered, day-to-day overlay traffic uses only
   the cached coord roster and direct/relay paths.
@@ -81,7 +89,10 @@ sketched in earlier roadmap revisions.
   (v1.1-A) writes node snapshots through the coord into PG; the
   console reads from PG.
 - **Zero-deps daemon stays zero-deps.** The push channel is one new
-  POST in the daemon; no SDK, no proto compiler.
+  POST in the daemon; no SDK, no proto compiler. The console's heavy
+  deps (axum, sqlx, valkey-client, etc.) live behind the new console
+  crates and never enter the daemon's dep tree — the CI
+  `cargo publish --dry-run` check on the leaf crates guards this.
 - **Self-host supported via Docker Compose** (axum + PG + Valkey).
   Hosted at `gnet.golia.jp` is the SaaS default.
 
@@ -101,8 +112,9 @@ sketched in earlier roadmap revisions.
 
 **Tech stack:**
 
-- **Backend:** Rust + axum, Postgres 18, Valkey 9. New repo, not in
-  this workspace.
+- **Backend:** Rust + axum, Postgres 18, Valkey 9 — in this workspace
+  under new `crates/gnet-console*` members (kept out of the daemon's
+  dep tree so the zero-deps stones stay zero-deps).
 - **Frontend:** React 19 + Vite 7 + Tailwind CSS 4 + react-router +
   `@tanstack/react-query` + Jotai (atoms). SPA, CSR.
 - **Auth:** OAuth (Google / GitHub / Apple) + email/password.
