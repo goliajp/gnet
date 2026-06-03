@@ -98,11 +98,7 @@ services:
       - "${DISPATCHER_ADMIN_PORT:-8765}:8765/tcp"
       - "${DISPATCHER_COORD_PORT:-65432}:65432/udp"
     healthcheck:
-      test:
-        - "CMD"
-        - "/bin/sh"
-        - "-c"
-        - "exec 3<>/dev/tcp/127.0.0.1/8765 && printf 'GET /api/host-role HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q '200'"
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8765/api/host-role"]
       interval: 10s
       timeout: 3s
       retries: 6
@@ -126,11 +122,7 @@ services:
       - "${RELAY_PORT:-65433}:65433/udp"
       - "${RELAY_ADMIN_PORT:-8766}:8766/tcp"
     healthcheck:
-      test:
-        - "CMD"
-        - "/bin/sh"
-        - "-c"
-        - "exec 3<>/dev/tcp/127.0.0.1/8766 && printf 'GET /api/host-role HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q '200'"
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8766/api/host-role"]
       interval: 10s
       timeout: 3s
       retries: 6

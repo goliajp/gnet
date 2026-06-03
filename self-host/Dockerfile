@@ -87,8 +87,11 @@ FROM debian:bookworm-slim AS dispatcher
 # forwarding so SIGTERM from `docker stop` reaches the binary and a
 # clean shutdown happens within the compose grace period.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates tini \
+ && apt-get install -y --no-install-recommends ca-certificates tini curl \
  && rm -rf /var/lib/apt/lists/*
+# `curl` is needed for compose-level healthchecks: the runtime
+# image's `/bin/sh` is dash, which doesn't grok bash's `/dev/tcp`
+# fd shorthand, so the more portable in-container probe is curl.
 
 COPY --from=rust-builder /artefacts/dispatcher /usr/local/bin/gnet-discover
 
@@ -104,8 +107,11 @@ ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/gnet-discover"]
 FROM debian:bookworm-slim AS relay
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates tini \
+ && apt-get install -y --no-install-recommends ca-certificates tini curl \
  && rm -rf /var/lib/apt/lists/*
+# `curl` is needed for compose-level healthchecks: the runtime
+# image's `/bin/sh` is dash, which doesn't grok bash's `/dev/tcp`
+# fd shorthand, so the more portable in-container probe is curl.
 
 COPY --from=rust-builder /artefacts/relay /usr/local/bin/gnet-relay-server
 
@@ -117,8 +123,11 @@ CMD ["--listen", "0.0.0.0:65433"]
 FROM debian:bookworm-slim AS console
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates tini \
+ && apt-get install -y --no-install-recommends ca-certificates tini curl \
  && rm -rf /var/lib/apt/lists/*
+# `curl` is needed for compose-level healthchecks: the runtime
+# image's `/bin/sh` is dash, which doesn't grok bash's `/dev/tcp`
+# fd shorthand, so the more portable in-container probe is curl.
 
 COPY --from=rust-builder /artefacts/console /usr/local/bin/gnet-console
 
