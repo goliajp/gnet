@@ -29,5 +29,14 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 axum.workspace = true
-sqlx = { workspace = true, features = ["runtime-tokio", "tls-rustls", "postgres"] }
+axum-extra.workspace = true
+sqlx = { workspace = true, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "macros"] }
 gnet-console-schema.workspace = true
+gnet-rand.workspace = true
+gnet-hex.workspace = true
+gnet-crypto.workspace = true
+argon2.workspace = true
+chrono.workspace = true
+redis.workspace = true
+time.workspace = true
+uuid.workspace = true
