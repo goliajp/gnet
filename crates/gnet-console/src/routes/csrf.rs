@@ -23,12 +23,21 @@ const EXEMPT_PATHS: &[&str] = &[
     "/api/auth/logout",
 ];
 
+/// Path prefixes exempt from CSRF: the OAuth callback flow is a
+/// browser-initiated GET (callback is GET, no CSRF surface); start is
+/// also GET. They live under /api/auth/oauth/ so we whitelist the
+/// prefix to cover every provider without enumerating each.
+const EXEMPT_PREFIXES: &[&str] = &["/api/auth/oauth/"];
+
 pub async fn guard(req: Request, next: Next) -> Result<Response, Response> {
     if matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS) {
         return Ok(next.run(req).await);
     }
     let path = req.uri().path();
     if EXEMPT_PATHS.contains(&path) {
+        return Ok(next.run(req).await);
+    }
+    if EXEMPT_PREFIXES.iter().any(|p| path.starts_with(p)) {
         return Ok(next.run(req).await);
     }
     let headers = req.headers().clone();

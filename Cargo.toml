@@ -62,7 +62,7 @@ snow = "0.10"
 # the data-plane crates: nothing here may appear in `crates/gnet/Cargo.toml`
 # or its transitive deps. The cargo publish --dry-run check on the leaf
 # stones guards this (see crates/PUBLISH.md).
-axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
 sqlx = { version = "0.8", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
@@ -83,6 +83,9 @@ axum-extra = { version = "0.10", default-features = false, features = ["cookie"]
 # `time::Duration` for cookie max-age. cookie 0.18 uses time 0.3 internally;
 # pinning the version here keeps the dep tree consistent.
 time = { version = "0.3", default-features = false }
+# OAuth provider HTTP calls (Google / GitHub / Apple). rustls-tls so we
+# don't pull OpenSSL; json so the body decoders are right there.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 [workspace.lints.rust]
 warnings = "deny"
