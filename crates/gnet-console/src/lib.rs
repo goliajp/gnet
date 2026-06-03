@@ -8,6 +8,7 @@
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod federation;
 pub mod oauth;
 pub mod routes;
 pub mod session;
@@ -71,6 +72,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         public_url: config.public_url.clone(),
         oauth: Arc::new(oauth),
         auto_verify_email: config.auto_verify_email,
+        federation_secret: config.federation_secret,
     };
     let app = routes::router(state);
 

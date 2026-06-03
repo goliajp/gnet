@@ -27,6 +27,10 @@ pub struct Config {
     /// constructed against this — e.g. `<public_url>/api/auth/oauth/google/callback`.
     /// Defaults to the `bind` address in dev (`http://127.0.0.1:6015`).
     pub public_url: String,
+    /// 32-byte master from which per-network federation tokens are
+    /// derived (§17.6). Required in production; falls back to all
+    /// zeros in dev with a loud warning so a fresh checkout boots.
+    pub federation_secret: [u8; 32],
 }
 
 impl Config {
@@ -62,12 +66,30 @@ impl Config {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| format!("http://{bind}"));
 
+        let federation_secret = match std::env::var("GNET_CONSOLE_FEDERATION_SECRET") {
+            Ok(raw) => {
+                let trimmed = raw.trim();
+                gnet_hex::decode_32(trimmed).ok_or(ConfigError::Missing(
+                    "GNET_CONSOLE_FEDERATION_SECRET (must be 64-char hex)",
+                ))?
+            }
+            Err(_) => {
+                // Dev fallback. Production should never see this branch —
+                // the warning shows up on every boot until set.
+                eprintln!(
+                    "WARNING: GNET_CONSOLE_FEDERATION_SECRET unset — using zero secret (dev only)"
+                );
+                [0u8; 32]
+            }
+        };
+
         Ok(Self {
             bind,
             database_url,
             valkey_url,
             auto_verify_email,
             public_url,
+            federation_secret,
         })
     }
 }
