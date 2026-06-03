@@ -56,6 +56,12 @@ COPY crates ./crates
 # include_dir!() macros use ($CARGO_MANIFEST_DIR/../../console/dist).
 COPY --from=spa-builder /spa/dist ./console/dist
 
+# The crate `build.rs` files `include_str!` this stub HTML and
+# write it into console/dist if the real SPA bundle is missing.
+# In this image dist IS populated by stage 1, but cargo still needs
+# the stub to compile the build scripts.
+COPY console/dist-stub.html ./console/dist-stub.html
+
 # Single cargo invocation builds all three control-plane binaries
 # in one workspace pass — the dep graph + crate compilations are
 # shared, so this is roughly the cost of one full build, not three.
