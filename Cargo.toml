@@ -88,6 +88,14 @@ time = { version = "0.3", default-features = false }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 # Apple Sign-In ID-token verify (ES256) + client_secret JWT signing.
 jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"] }
+# SPA static-asset embed for the three control-plane binaries
+# (dispatcher / relay / console). Plan §3.4: the SPA is built once
+# under console/dist/ and copied into each binary at compile time;
+# each binary serves it via a catch-all fallback after /api/* routes.
+# Daemon (`gnet` crate) does not get this — its admin surface is JSON-
+# only and the daemon zero-deps invariant rules out any compile-time
+# directory ingest.
+include_dir = "0.7"
 
 [workspace.lints.rust]
 warnings = "deny"

@@ -50,6 +50,7 @@
 
 mod admin;
 mod shared;
+mod spa;
 
 use std::env;
 use std::io;

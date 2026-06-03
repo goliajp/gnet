@@ -11,6 +11,7 @@ pub mod host_role;
 pub mod networks;
 pub mod oauth;
 pub mod proxy;
+pub mod spa;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -21,6 +22,11 @@ pub fn router(state: AppState) -> Router {
         .merge(oauth::routes())
         .merge(networks::routes())
         .merge(proxy::routes())
+        // SPA fallback must merge last so the API routes above win
+        // their exact-match paths first. Any path not matched falls
+        // through to spa::serve which returns a real asset or the
+        // SPA shell (plan §3.4).
+        .merge(spa::routes())
         .with_state(state)
         .layer(middleware::from_fn(csrf::guard))
 }
