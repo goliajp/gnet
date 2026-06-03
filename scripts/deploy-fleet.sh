@@ -29,8 +29,19 @@
 
 set -euo pipefail
 
-ALL_HOSTS=${ALL_HOSTS:-"t01 t02 lx64"}
+ALL_HOSTS=${ALL_HOSTS:-"t01 t02 lx64 mini"}
+# Hosts handled locally (cargo build on this Mac + launchctl), not via ssh.
+# The single-Mac fleet member "mini" is this workstation itself.
+LOCAL_HOSTS=${LOCAL_HOSTS:-"mini"}
 REMOTE_BUILD_DIR=/tmp/gnet-build
+
+is_local_host() {
+    local h=$1
+    for l in $LOCAL_HOSTS; do
+        [ "$h" = "$l" ] && return 0
+    done
+    return 1
+}
 
 usage() {
     cat <<EOF >&2
@@ -66,14 +77,64 @@ remote_sudo() {
 
 rollback_host() {
     local host=$1
+    if is_local_host "$host"; then
+        rollback_local "$host"
+        return
+    fi
     echo "==> [rollback] $host"
     remote_sudo "$host" "test -f /usr/local/bin/gnet.bak || { echo 'no .bak on '$host' — aborting'; exit 1; }"
     remote_sudo "$host" "cp /usr/local/bin/gnet.bak /usr/local/bin/gnet && systemctl restart gnet@main && systemctl is-active gnet@main"
     echo "==> [rollback] $host done"
 }
 
+rollback_local() {
+    local host=$1
+    echo "==> [rollback] $host (local macOS)"
+    [ -f /usr/local/bin/gnet.bak ] || { echo "no /usr/local/bin/gnet.bak — aborting"; return 1; }
+    sudo cp /usr/local/bin/gnet.bak /usr/local/bin/gnet
+    sudo launchctl kickstart -k system/com.gnet.gnet
+    echo "==> [rollback] $host done"
+}
+
+deploy_local() {
+    local host=$1
+    echo "==> [deploy] $host (local macOS — cargo build + launchctl)"
+
+    # build host-arch release
+    cargo build --release -p gnet 2>&1 | tail -3
+
+    # backup unconditionally + atomic install
+    sudo cp /usr/local/bin/gnet /usr/local/bin/gnet.bak 2>/dev/null || true
+    sudo install -m 0755 target/release/gnet /usr/local/bin/gnet
+    sudo install -m 0644 -o root -g wheel crates/gnet/contrib/launchd/com.gnet.gnet.plist \
+        /Library/LaunchDaemons/com.gnet.gnet.plist
+
+    # bootout is non-idempotent: returns non-zero if already booted-out.
+    # Swallow the failure and bootstrap fresh so a daemon that was already
+    # stopped doesn't trip the script.
+    sudo launchctl bootout system/com.gnet.gnet 2>/dev/null || true
+    sudo launchctl bootstrap system /Library/LaunchDaemons/com.gnet.gnet.plist
+    sleep 2
+
+    local state
+    state=$(sudo launchctl print system/com.gnet.gnet 2>/dev/null | awk -F'= ' '/state =/ {print $2; exit}')
+    echo "--- [verify] launchd state: ${state:-unknown} ---"
+    echo "--- [verify] gnet doctor on $host ---"
+    if sudo gnet doctor; then
+        echo "==> [deploy] $host green"
+    else
+        echo "!! [deploy] $host doctor RED — investigate; rollback with:"
+        echo "   sudo $0 --rollback $host"
+        return 1
+    fi
+}
+
 deploy_host() {
     local host=$1
+    if is_local_host "$host"; then
+        deploy_local "$host"
+        return
+    fi
     echo "==> [deploy] $host"
 
     # 1. sync source (excluding heavy/ephemeral dirs)
