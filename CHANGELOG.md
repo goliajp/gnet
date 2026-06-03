@@ -34,6 +34,40 @@ public releases, have been removed — their content is rolled into the
 
 ---
 
+## [1.0.1] — 2026-06-03
+
+Patch release. No wire change. Picked up two fleet-operational
+findings from the v1.0.0 Tier-4 Docker-onboarding test.
+
+### Fixed
+
+- **`gnet doctor` recognises container env.** `/.dockerenv` or
+  `/run/.containerenv` present → service-unit check is a PASS with
+  "running inside a container (host service-unit check skipped)",
+  not a misleading WARN. A healthy `goliakk/gnet:*` container now
+  shows GREEN instead of AMBER.
+
+### Operational (out-of-tree)
+
+- Fleet `gnet-relay-server` processes deployed on `t01` (public) and
+  `t02` (public), both bound `:65433`. Coordinator env extended:
+  `GNET_DISCOVER_RELAYS=18.179.107.143:65433,52.195.89.111:65433`.
+  Coordinator's `gnet-discover` binaries on t01 + t02 rebuilt to a
+  version that actually serves the `{peers, relays}` wrapped response
+  shape (the pre-v0.17 binaries on disk had been silently returning
+  a bare peer array, suppressing the relay advertisement). Fleet
+  daemons learn the relays on next `/peers` poll.
+- **Operator-side gap surfaced:** AWS Security Groups on the
+  coordinator EC2 instances do not currently allow inbound UDP 65433,
+  so relay-register packets reach the public IP but get dropped at
+  the SG; daemons emit register packets fine
+  (`gnet_relay_register_sent_total` ticks) but no echo pong arrives
+  (`gnet_relay_health_age_ms{endpoint=…} 0`, "no pong yet").
+  Direct/punch paths within the existing fleet are unaffected.
+  Fix: open UDP 65433 in the two SGs.
+
+---
+
 ## [1.0.0] — 2026-06-03
 
 The first public release. The repo has been on GitHub since
@@ -257,6 +291,7 @@ Sufficient to run an internal fleet from.
 
 ---
 
+[1.0.1]: https://github.com/goliajp/gnet/releases/tag/v1.0.1
 [1.0.0]: https://github.com/goliajp/gnet/releases/tag/v1.0.0
 [gnet-v0.20]: https://github.com/goliajp/gnet/releases/tag/gnet-v0.20
 [gnet-v0.19]: https://github.com/goliajp/gnet/releases/tag/gnet-v0.19
