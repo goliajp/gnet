@@ -7,6 +7,7 @@ pub mod auth;
 pub mod csrf;
 pub mod devices;
 pub mod host_role;
+pub mod internal;
 pub mod network;
 pub mod setup;
 
@@ -17,10 +18,11 @@ pub fn router(state: AdminState) -> Router {
         .merge(auth::routes())
         .merge(network::routes())
         .merge(devices::routes())
+        .merge(internal::routes())
         .with_state(state)
         // CSRF guard wraps the whole router. The guard itself filters by
         // method + path, so safe methods and pre-auth endpoints sail
         // through; write endpoints (when they land) get protection for
-        // free.
+        // free. `/api/internal/*` is also exempt (bearer-auth path).
         .layer(middleware::from_fn(csrf::guard))
 }
