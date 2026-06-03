@@ -41,3 +41,4 @@ redis.workspace = true
 time.workspace = true
 uuid.workspace = true
 reqwest.workspace = true
+jsonwebtoken.workspace = true

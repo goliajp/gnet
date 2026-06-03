@@ -86,6 +86,8 @@ time = { version = "0.3", default-features = false }
 # OAuth provider HTTP calls (Google / GitHub / Apple). rustls-tls so we
 # don't pull OpenSSL; json so the body decoders are right there.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# Apple Sign-In ID-token verify (ES256) + client_secret JWT signing.
+jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"] }
 
 [workspace.lints.rust]
 warnings = "deny"

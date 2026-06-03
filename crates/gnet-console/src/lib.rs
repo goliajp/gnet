@@ -54,6 +54,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         oauth.insert("github", oauth::Provider::GitHub(g));
         tracing::info!("oauth provider configured: github");
     }
+    if let Some(a) = oauth::apple::Apple::from_env() {
+        oauth.insert("apple", oauth::Provider::Apple(a));
+        tracing::info!("oauth provider configured: apple");
+    }
     if oauth.is_empty() {
         tracing::warn!(
             "no OAuth providers configured (set GOOGLE_OAUTH_CLIENT_ID/SECRET, GITHUB_OAUTH_CLIENT_ID/SECRET in .env.local)"
