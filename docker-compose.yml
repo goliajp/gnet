@@ -37,7 +37,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.local}
       POSTGRES_DB: gnet_console
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # postgres:18 image's new layout: data lives under
+      # `/var/lib/postgresql/<pgver>/...` so the mount has to be at
+      # `/var/lib/postgresql`, not the old `/data` subdir. Mounting
+      # `pgdata:/var/lib/postgresql/data` would trip the image's
+      # "unused mount" guard and refuse to start. See
+      # https://github.com/docker-library/postgres/pull/1259.
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U gnet_console -d gnet_console"]
       interval: 10s
