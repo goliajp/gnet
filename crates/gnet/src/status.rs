@@ -116,6 +116,14 @@ fn print_runtime(admin: Option<&str>) {
         .filter(|l| l.starts_with("relay "))
         .collect();
 
+    // The daemon only sends self-addressed RelayData registrations when it's
+    // behind NAT (the relay-register path no-ops on public nodes — they're
+    // directly reachable, so a relay entry for *them* serves no purpose).
+    // That means "no pong yet" on a public node is structurally misleading:
+    // the daemon never registered, so there can't be a pong. Detect the
+    // public case here and label accordingly.
+    let public = node_line.and_then(|n| kv(n, "self_is_nat")) == Some("false");
+
     println!("runtime");
     if let Some(n) = node_line {
         println!(
@@ -133,7 +141,9 @@ fn print_runtime(admin: Option<&str>) {
         for r in &relay_lines {
             let ep = kv(r, "endpoint").unwrap_or("?");
             let age = kv(r, "health_age_ms").unwrap_or("?");
-            let display = if age == "never" {
+            let display = if public {
+                "advertised; we're public — no register sent".to_string()
+            } else if age == "never" {
                 "no pong yet".to_string()
             } else {
                 format!("last pong {age}ms ago")

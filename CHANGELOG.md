@@ -34,6 +34,31 @@ public releases, have been removed — their content is rolled into the
 
 ---
 
+## [1.0.2] — 2026-06-03
+
+Patch release. No wire change. Cosmetic + Prometheus label addition.
+
+### Fixed
+
+- **`gnet status` runtime block** no longer says "no pong yet" on a
+  public daemon's relay rows. Public daemons don't send relay-register
+  packets at all (`self.self_is_nat == Some(false)` → register
+  no-ops), so "no pong yet" was structurally misleading — there's no
+  pong because there was never a register. Now displays
+  "advertised; we're public — no register sent" in that case.
+
+### Changed
+
+- **`gnet metrics` `gnet_relay_health_age_ms` gauge gains a
+  `registered="true|false"` label.** Public daemons emit the gauge with
+  `registered="false"` so staleness alerts can filter
+  (`gnet_relay_health_age_ms{registered="true"} > 60000`) and not
+  false-fire on public nodes whose 0-valued health age is by design.
+  Existing endpoint-only queries continue to work (Prometheus label
+  selectors are subset-match).
+
+---
+
 ## [1.0.1] — 2026-06-03
 
 Patch release. No wire change. Picked up two fleet-operational
@@ -291,6 +316,7 @@ Sufficient to run an internal fleet from.
 
 ---
 
+[1.0.2]: https://github.com/goliajp/gnet/releases/tag/v1.0.2
 [1.0.1]: https://github.com/goliajp/gnet/releases/tag/v1.0.1
 [1.0.0]: https://github.com/goliajp/gnet/releases/tag/v1.0.0
 [gnet-v0.20]: https://github.com/goliajp/gnet/releases/tag/gnet-v0.20
