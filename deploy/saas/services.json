@@ -3,8 +3,8 @@
     {
       "name": "gnet-console",
       "device": "t01",
-      "deploy_type": "binary",
-      "artifact_path": "/apps/gnet-console",
+      "deploy_type": "docker",
+      "artifact_path": "/apps/gnet",
       "source_path": "./",
       "health_endpoint": "6015/health",
       "domains": ["gnet.golia.jp"],

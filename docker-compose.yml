@@ -1,0 +1,113 @@
+# gnet v1.1 SaaS — gnet.golia.jp on t01.
+#
+# This is the **SaaS-deployment compose** the devops binary-deploy
+# pipeline picks up at the repo root after rsyncing to
+# `/apps/gnet/` on t01. It is NOT the file for running gnet locally:
+#
+#   - `self-host/docker-compose.yml`  → Mode B (self-host, no SaaS dep)
+#   - `examples/docker-compose.yml`   → daemon (`gnet`) container demo
+#   - `docker-compose.yml` (this file) → SaaS console on gnet.golia.jp
+#
+# t01 runs every project as a docker-compose bundle under
+# `/apps/<project>/` (postgres + valkey + app), per the convention
+# documented in devops/wiki/deploy/docker.md. This file ships the
+# three pieces gnet's SaaS console needs: PG18, Valkey 9, and the
+# gnet-console binary itself.
+#
+# The console publishes its HTTP listener on the host's loopback
+# (`127.0.0.1:6015`), and Caddy on t01 reverse-proxies
+# `gnet.golia.jp` + `*.gnet.golia.jp` to it. PostgreSQL and Valkey
+# are container-private — only the app talks to them, over the
+# default compose network.
+#
+# Secrets are pulled from `.env.local` next to this file on t01;
+# the deploy pipeline materialises that file from the devops secret
+# store at deploy time. .env.local is gitignored and never enters
+# the repo.
+
+services:
+
+  # ── PostgreSQL 18 — console state ─────────────────────────────
+  postgres:
+    image: postgres:18
+    container_name: gnet-saas-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gnet_console
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.local}
+      POSTGRES_DB: gnet_console
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gnet_console -d gnet_console"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # ── Valkey 9 — session + federation cache ─────────────────────
+  valkey:
+    image: valkey/valkey:9
+    container_name: gnet-saas-valkey
+    restart: unless-stopped
+    volumes:
+      - kvdata:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "PING"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # ── console binary ────────────────────────────────────────────
+  console:
+    build:
+      # Context is the repo root (where this compose lives), so the
+      # Dockerfile's COPY paths resolve relative to the rsynced repo.
+      context: .
+      dockerfile: self-host/Dockerfile
+      target: console
+    container_name: gnet-saas-console
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    environment:
+      # Bind 0.0.0.0 inside the container; the host publishes the
+      # port loopback-only so Caddy can reverse-proxy and the public
+      # internet can't see the binary directly.
+      GNET_CONSOLE_BIND: 0.0.0.0:6015
+      GNET_CONSOLE_DATABASE_URL: postgres://gnet_console:${POSTGRES_PASSWORD}@postgres:5432/gnet_console
+      GNET_CONSOLE_VALKEY_URL: redis://valkey:6379
+      GNET_CONSOLE_PUBLIC_URL: ${GNET_CONSOLE_PUBLIC_URL:-https://gnet.golia.jp}
+      GNET_CONSOLE_FEDERATION_SECRET: ${GNET_CONSOLE_FEDERATION_SECRET:?GNET_CONSOLE_FEDERATION_SECRET must be set (64-char hex)}
+      GNET_CONSOLE_SECURE_COOKIES: "1"
+      # OAuth providers — leave blank to disable a provider. The
+      # binary logs a warning on startup naming the providers that
+      # are off (search journalctl for `oauth provider configured`).
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+      APPLE_OAUTH_CLIENT_ID: ${APPLE_OAUTH_CLIENT_ID:-}
+      APPLE_OAUTH_KEY_ID: ${APPLE_OAUTH_KEY_ID:-}
+      APPLE_OAUTH_TEAM_ID: ${APPLE_OAUTH_TEAM_ID:-}
+      APPLE_OAUTH_PRIVATE_KEY_PATH: ${APPLE_OAUTH_PRIVATE_KEY_PATH:-}
+      # Email transport — unset = auto-verify mode (warn-logged at
+      # boot). Production should configure mailrs.
+      MAILRS_SMTP_HOST: ${MAILRS_SMTP_HOST:-}
+      MAILRS_SMTP_PORT: ${MAILRS_SMTP_PORT:-}
+      RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
+    ports:
+      # Loopback-only on the host — Caddy is the public entry point.
+      - "127.0.0.1:6015:6015"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/6015 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q '200'"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+volumes:
+  pgdata:
+  kvdata:
