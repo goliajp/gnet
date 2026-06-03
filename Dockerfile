@@ -7,10 +7,10 @@
 #   --cap-add NET_ADMIN --device /dev/net/tun:/dev/net/tun
 # (or `--privileged`, but the cap-add form is tighter).
 #
-# Build context = repo root. Build with:
-#   docker build -t goliakk/gnet:<version> .
-# Publish via scripts/docker-publish.sh (which assumes you've already
-# run `docker login -u goliakk` locally with a Hub PAT).
+# Build context = repo root. Built + pushed to both Docker Hub
+# (goliakk/gnet) and ghcr (ghcr.io/goliajp/gnet) by the release pipeline
+# (.github/workflows/release.yml), multi-arch (linux/amd64 +
+# linux/arm64), on every `gnet-v*` tag push.
 
 # ── builder ──────────────────────────────────────────────────────
 FROM rust:1.96-slim AS builder

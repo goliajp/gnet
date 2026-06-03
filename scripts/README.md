@@ -1,19 +1,16 @@
 # scripts/
 
-Operator-side automation. All three concerns are **strictly isolated**
-— they don't share state, don't depend on each other, and live in
-different files so a regression in one never affects the others:
+Operator-side automation. **Strictly two concerns**, fully isolated:
 
-| Concern | What | When | Where |
-|---|---|---|---|
-| **Product CI** | fmt + clippy + cargo test | PR + manual | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) — runs on GitHub Actions |
-| **Fleet deploy** | Build + install + restart `gnet` daemon on internal SSH hosts | After a tag, by hand | [`scripts/deploy-fleet.sh`](deploy-fleet.sh) — local shell, ssh out |
-| **Docker publish** | Build + push `goliakk/gnet` to Docker Hub | After a tag, by hand | [`scripts/docker-publish.sh`](docker-publish.sh) — local shell + `docker login` |
+| Concern | What | Where |
+|---|---|---|
+| **GitHub Actions (public-facing)** | quality gate on PR + multi-arch release pipeline on tag | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), [`.github/workflows/release.yml`](../.github/workflows/release.yml) |
+| **Internal fleet capability** | rsync + build + restart `gnet` daemon on our own SSH hosts | [`scripts/deploy-fleet.sh`](deploy-fleet.sh) — local shell |
 
-The CI never deploys; the deploy never touches Docker; the Docker
-publish never touches the fleet.
+The CI never deploys; the release pipeline never touches the fleet;
+the fleet script never touches anything public.
 
-## Fleet deploy
+## Fleet deploy (internal capability — never published, never automated)
 
 ```bash
 # all hosts in the default set (t01 t02 lx64)
@@ -28,36 +25,35 @@ publish never touches the fleet.
 
 Override the default set with `ALL_HOSTS="t01 t02"` env var.
 
-Each deploy is atomic per host: rsync source → cargo build --release
-→ `cp gnet → gnet.bak` → install new → `systemctl restart gnet@main`
-→ `gnet doctor` verify. A red doctor flips the script's exit code but
-doesn't auto-rollback — operator decides.
+Each deploy is atomic per host: rsync source → cargo build --release →
+`cp gnet → gnet.bak` → install new binary + new systemd unit →
+`systemctl restart gnet@main` → `gnet doctor` verifies. A red doctor
+flips the script's exit code but doesn't auto-rollback — operator
+decides.
 
-## Docker publish
+## Release pipeline (public-facing — GitHub Actions, tag-triggered)
 
-```bash
-# one-time
-docker login -u goliakk
-# (paste Hub PAT when prompted)
+Live at [`.github/workflows/release.yml`](../.github/workflows/release.yml).
+Triggered by `git push origin gnet-vX.Y.Z`, or manually via
+`gh workflow run release.yml -f tag=gnet-vX.Y.Z` against an existing
+tag.
 
-# every release
-./scripts/docker-publish.sh 1.0.0
-./scripts/docker-publish.sh 1.0.0 --also-latest   # also push :latest
+Produces, per release:
 
-# image lands at https://hub.docker.com/r/goliakk/gnet
-```
+- **Binary tarballs** uploaded to the GitHub Release:
+  - `gnet-vX.Y.Z-aarch64-apple-darwin.tar.gz`
+  - `gnet-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`
+  - `gnet-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz`
+- **Multi-arch Docker images** pushed to two registries:
+  - `goliakk/gnet:X.Y.Z` + `goliakk/gnet:latest` (Docker Hub)
+  - `ghcr.io/goliajp/gnet:X.Y.Z` + `ghcr.io/goliajp/gnet:latest` (ghcr)
+  - Each image is `linux/amd64 + linux/arm64`.
 
-The script warns (doesn't block) if HEAD has no tag or the working
-tree is dirty — sometimes you do want to publish a snapshot
-deliberately. The PAT never enters this repo — it lives in
-`~/.docker/config.json` after `docker login`.
+Required GitHub Actions secrets (set once via `gh secret set`):
 
-Multi-arch (linux/amd64 + linux/arm64) is a `docker buildx` extension
-left as a follow-up; the v1.0.0 audience is x86_64.
+- `DOCKERHUB_USERNAME` — `goliakk`
+- `DOCKERHUB_TOKEN` — a Docker Hub PAT with write access to
+  `goliakk/gnet`
 
-## When to add a new concern
-
-If a fourth concern shows up (e.g. coordinator deploy,
-relay-server deploy, marketing-site deploy), it gets its own
-script + its own one-liner in this README. **Don't fold it into one
-of the existing three** — the isolation property is the point.
+ghcr.io uses the built-in `GITHUB_TOKEN` automatically (the workflow's
+`permissions: packages: write` clause).
