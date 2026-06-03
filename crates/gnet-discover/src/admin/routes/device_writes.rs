@@ -51,6 +51,8 @@ pub enum DeviceWriteError {
     Session(#[from] crate::admin::session::SessionError),
     #[error("database: {0}")]
     Db(#[from] sqlx::Error),
+    #[error("cache: {0}")]
+    Cache(#[from] redis::RedisError),
 }
 
 impl From<AuthRouteError> for DeviceWriteError {
@@ -58,8 +60,14 @@ impl From<AuthRouteError> for DeviceWriteError {
         match e {
             AuthRouteError::NotLoggedIn => DeviceWriteError::NotLoggedIn,
             AuthRouteError::BadCreds => DeviceWriteError::NotLoggedIn,
+            // Device-write callers come in already authenticated;
+            // a Throttle here would mean a downstream re-auth path
+            // hit the bucket. Surface as 401 — the SPA falls back
+            // to the login flow which then emits the proper 429.
+            AuthRouteError::Throttled { .. } => DeviceWriteError::NotLoggedIn,
             AuthRouteError::Session(s) => DeviceWriteError::Session(s),
             AuthRouteError::Db(d) => DeviceWriteError::Db(d),
+            AuthRouteError::Cache(c) => DeviceWriteError::Cache(c),
         }
     }
 }
@@ -71,9 +79,9 @@ impl IntoResponse for DeviceWriteError {
             DeviceWriteError::NotFound => StatusCode::NOT_FOUND,
             DeviceWriteError::BadAlias => StatusCode::BAD_REQUEST,
             DeviceWriteError::AliasConflict => StatusCode::CONFLICT,
-            DeviceWriteError::Session(_) | DeviceWriteError::Db(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            DeviceWriteError::Session(_)
+            | DeviceWriteError::Db(_)
+            | DeviceWriteError::Cache(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (code, self.to_string()).into_response()
     }

@@ -58,6 +58,8 @@ pub enum FederationError {
     Session(#[from] crate::admin::session::SessionError),
     #[error("database: {0}")]
     Db(#[from] sqlx::Error),
+    #[error("cache: {0}")]
+    Cache(#[from] redis::RedisError),
 }
 
 impl From<AuthRouteError> for FederationError {
@@ -65,8 +67,14 @@ impl From<AuthRouteError> for FederationError {
         match e {
             AuthRouteError::NotLoggedIn => FederationError::NotLoggedIn,
             AuthRouteError::BadCreds => FederationError::NotLoggedIn,
+            // Throttle in this path means the caller hit the
+            // bearer-auth route (federation) past the per-token
+            // bucket — surface as 401, the federation client's
+            // generic "auth failed" handler will retry with backoff.
+            AuthRouteError::Throttled { .. } => FederationError::NotLoggedIn,
             AuthRouteError::Session(s) => FederationError::Session(s),
             AuthRouteError::Db(d) => FederationError::Db(d),
+            AuthRouteError::Cache(c) => FederationError::Cache(c),
         }
     }
 }
@@ -77,9 +85,9 @@ impl IntoResponse for FederationError {
             FederationError::NotLoggedIn => StatusCode::UNAUTHORIZED,
             FederationError::BadToken | FederationError::BadOrigin => StatusCode::BAD_REQUEST,
             FederationError::Duplicate => StatusCode::CONFLICT,
-            FederationError::Session(_) | FederationError::Db(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            FederationError::Session(_)
+            | FederationError::Db(_)
+            | FederationError::Cache(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (code, self.to_string()).into_response()
     }

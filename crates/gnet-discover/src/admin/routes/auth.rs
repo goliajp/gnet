@@ -22,6 +22,18 @@ use crate::admin::session::{self, SESSION_TTL_SECS, Session};
 /// to `__Host-gnet_sess` + Secure.
 const COOKIE_NAME: &str = "gnet_sess";
 
+/// Whether the operator is fronting this dispatcher with HTTPS —
+/// controls the `Secure` attribute on session + CSRF cookies and
+/// the HSTS header in `routes::headers`. Default `false` because
+/// the self-host bundle (plan §11) defaults to plain HTTP. Operators
+/// who put a TLS reverse proxy in front set
+/// `GNET_DISCOVER_SECURE_COOKIES=1`.
+pub(super) fn secure_cookies() -> bool {
+    std::env::var("GNET_DISCOVER_SECURE_COOKIES")
+        .map(|v| v != "0" && !v.is_empty())
+        .unwrap_or(false)
+}
+
 #[derive(Deserialize)]
 pub struct LoginRequest {
     pub username: String,
@@ -48,19 +60,35 @@ pub enum AuthRouteError {
     BadCreds,
     #[error("not logged in")]
     NotLoggedIn,
+    /// Brute-force throttle tripped. Surfaces as 429 + Retry-After
+    /// (plan §17.12).
+    #[error("too many login attempts; retry in {retry_after_secs}s")]
+    Throttled { retry_after_secs: u64 },
     #[error("session store: {0}")]
     Session(#[from] crate::admin::session::SessionError),
     #[error("database: {0}")]
     Db(#[from] sqlx::Error),
+    #[error("cache: {0}")]
+    Cache(#[from] redis::RedisError),
 }
 
 impl IntoResponse for AuthRouteError {
     fn into_response(self) -> Response {
+        if let AuthRouteError::Throttled { retry_after_secs } = &self {
+            let secs = *retry_after_secs;
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(axum::http::header::RETRY_AFTER, secs.to_string())],
+                self.to_string(),
+            )
+                .into_response();
+        }
         let code = match self {
             AuthRouteError::BadCreds | AuthRouteError::NotLoggedIn => StatusCode::UNAUTHORIZED,
-            AuthRouteError::Session(_) | AuthRouteError::Db(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            AuthRouteError::Throttled { .. } => StatusCode::TOO_MANY_REQUESTS,
+            AuthRouteError::Session(_)
+            | AuthRouteError::Db(_)
+            | AuthRouteError::Cache(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (code, self.to_string()).into_response()
     }
@@ -78,6 +106,21 @@ async fn login(
     jar: CookieJar,
     Json(req): Json<LoginRequest>,
 ) -> Result<(CookieJar, Json<LoginResponse>), AuthRouteError> {
+    // Brute-force throttle BEFORE the expensive password verify +
+    // DB round-trip. Bucket keyed on `network_id:username` so a
+    // multi-tenant dispatcher doesn't let traffic against one
+    // tenant burn another tenant's bucket (plan §17.12).
+    let throttle_key = format!("{}:{}", state.network_id, req.username);
+    {
+        let mut kv = state.kv.clone();
+        match crate::admin::ratelimit::account_attempt(&mut kv, &throttle_key).await? {
+            crate::admin::ratelimit::Decision::Allow => {}
+            crate::admin::ratelimit::Decision::Throttle { retry_after_secs } => {
+                return Err(AuthRouteError::Throttled { retry_after_secs });
+            }
+        }
+    }
+
     let row: Option<(Uuid, String, String)> = sqlx::query_as(
         "SELECT id, password_hash, role FROM admin_users \
          WHERE network_id = $1 AND username = $2",
@@ -93,6 +136,13 @@ async fn login(
         return Err(AuthRouteError::BadCreds);
     }
 
+    // Successful login — clear the bucket so a typo-then-correct
+    // session doesn't trap the user behind cooldown. Best-effort.
+    {
+        let mut kv = state.kv.clone();
+        let _ = crate::admin::ratelimit::account_clear(&mut kv, &throttle_key).await;
+    }
+
     let sid = session::new(state.network_id);
     let key = sid.key();
     let session = Session {
@@ -105,9 +155,11 @@ async fn login(
     let mut kv = state.kv.clone();
     session::store(&mut kv, &key, &session).await?;
 
+    let secure = secure_cookies();
     let session_cookie = Cookie::build((COOKIE_NAME, sid.cookie_value()))
         .http_only(true)
         .same_site(SameSite::Lax)
+        .secure(secure)
         .path("/")
         .max_age(Duration::seconds(SESSION_TTL_SECS as i64))
         .build();
@@ -121,6 +173,7 @@ async fn login(
     let csrf_cookie = Cookie::build((CSRF_COOKIE_NAME, csrf_token))
         .http_only(false)
         .same_site(SameSite::Lax)
+        .secure(secure)
         .path("/")
         .max_age(Duration::seconds(SESSION_TTL_SECS as i64))
         .build();

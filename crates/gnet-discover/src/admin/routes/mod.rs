@@ -8,6 +8,7 @@ pub mod csrf;
 pub mod device_writes;
 pub mod devices;
 pub mod federation;
+pub mod headers;
 pub mod host_role;
 pub mod internal;
 pub mod network;
@@ -35,4 +36,7 @@ pub fn router(state: AdminState) -> Router {
         // through; write endpoints (when they land) get protection for
         // free. `/api/internal/*` is also exempt (bearer-auth path).
         .layer(middleware::from_fn(csrf::guard))
+        // Defensive HTTP headers — outermost so they ride on top of
+        // CSRF rejections too (plan §17.12 hardening).
+        .layer(middleware::from_fn(headers::add_headers))
 }
