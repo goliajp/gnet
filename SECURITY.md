@@ -30,7 +30,7 @@ Email **security@golia.jp** with:
 - a short description of the issue and the threat model it breaks,
 - a minimal reproduction (test program, packet capture, or step list),
 - the affected version (`gnet --help` reports the workspace version, or
-  the `gnet-v*` git tag on the deploy),
+  the `v*` git tag on the deploy),
 - whether you want public credit when the fix lands.
 
 **Please do not file public GitHub issues for unpatched security
@@ -99,7 +99,7 @@ audit; see [KAT.md](crates/gnet-crypto/KAT.md)). The crypto stack:
 
 ## Versions
 
-The latest **`gnet-v1.x.y` release on the `develop` branch** is the
+The latest **`v1.x.y` release on the `develop` branch** is the
 supported line. Within a 1.x minor, the most recent patch is what
 backports land on. Older 1.x minors get critical security fixes for
 the duration documented in the release notes; pre-1.0 tags

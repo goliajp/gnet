@@ -147,9 +147,12 @@ and documented well enough to hold up to outside scrutiny.
   monorepo).
 - The five intermediate administrative tags created during the v1.0
   release-cut (`gnet-v0.21`, `gnet-v0.22`, `gnet-v0.23`, `gnet-v0.24`,
-  `gnet-v1.0`) have been removed in favour of the single semver tag
-  `gnet-v1.0.0`. Pre-existing tags `gnet-v0.5` through `gnet-v0.20`
-  stay as historical artifacts.
+  `gnet-v1.0`) have been removed in favour of the single semver tag.
+- **Tag naming dropped the `gnet-` prefix** at the same time. The
+  daemon tag line is now bare semver (`v1.0.0`, `v1.0.1`, `v1.1.0`,
+  `v2.0.0`, …), matching the kevy-style release URL shape. Pre-existing
+  tags `gnet-v0.5` through `gnet-v0.20` stay as historical artifacts
+  (they predate the unification).
 
 ### Out-of-scope deferrals (called out so they don't surprise readers)
 
@@ -254,7 +257,7 @@ Sufficient to run an internal fleet from.
 
 ---
 
-[1.0.0]: https://github.com/goliajp/gnet/releases/tag/gnet-v1.0.0
+[1.0.0]: https://github.com/goliajp/gnet/releases/tag/v1.0.0
 [gnet-v0.20]: https://github.com/goliajp/gnet/releases/tag/gnet-v0.20
 [gnet-v0.19]: https://github.com/goliajp/gnet/releases/tag/gnet-v0.19
 [gnet-v0.18]: https://github.com/goliajp/gnet/releases/tag/gnet-v0.18

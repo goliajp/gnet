@@ -10,7 +10,7 @@ validated against its published RFC / NIST known-answer vectors.
 
 ## Status
 
-Tagged `gnet-v1.0.0` (June 2026). The `gnet` daemon runs internally on a
+Tagged `v1.0.0` (June 2026). The `gnet` daemon runs internally on a
 small fleet (macOS arm64 + Linux x86_64 + AWS Graviton aarch64). The
 post-1.0 roadmap (notably v1.1 — the SaaS control plane + console at
 `gnet.golia.jp`) is in [ROADMAP.md](ROADMAP.md); shipping history is

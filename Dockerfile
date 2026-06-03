@@ -10,7 +10,7 @@
 # Build context = repo root. Built + pushed to both Docker Hub
 # (goliakk/gnet) and ghcr (ghcr.io/goliajp/gnet) by the release pipeline
 # (.github/workflows/release.yml), multi-arch (linux/amd64 +
-# linux/arm64), on every `gnet-v*` tag push.
+# linux/arm64), on every `v*` tag push.
 
 # ── builder ──────────────────────────────────────────────────────
 FROM rust:1.96-slim AS builder
