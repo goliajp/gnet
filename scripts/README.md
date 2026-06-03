@@ -34,9 +34,8 @@ decides.
 ## Release pipeline (public-facing — GitHub Actions, tag-triggered)
 
 Live at [`.github/workflows/release.yml`](../.github/workflows/release.yml).
-Triggered by `git push origin gnet-vX.Y.Z`, or manually via
-`gh workflow run release.yml -f tag=gnet-vX.Y.Z` against an existing
-tag.
+Triggered by `git push origin vX.Y.Z` (bare semver), or manually via
+`gh workflow run release.yml -f tag=vX.Y.Z` against an existing tag.
 
 Produces, per release:
 

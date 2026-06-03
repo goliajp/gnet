@@ -7,7 +7,7 @@
 
 ## Where we are
 
-- **Tag line:** `gnet-v1.0.0`, released 2026-06-03. Workspace version
+- **Tag line:** `v1.0.0`, released 2026-06-03. Workspace version
   unified at `1.0.0` (semver from here; see CHANGELOG.md "Versioning"
   for the carryover history).
 - Internal fleet (macOS arm64 + Linux x86_64 + AWS Graviton aarch64)
@@ -28,7 +28,8 @@
 ## Versioning
 
 `gnet` follows **semantic versioning starting at 1.0.0**. The workspace
-version, the git tag line (`gnet-vX.Y.Z`), and the wire-compat contract
+version, the git tag line (`vX.Y.Z` — bare semver, kevy-style; the
+historical `gnet-v0.x` prefix is dropped), and the wire-compat contract
 are unified. Concretely:
 
 - **patch (1.0.x):** bug-fixes, doc, CI; no wire change, no surface

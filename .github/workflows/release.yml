@@ -11,7 +11,7 @@
 # (scripts/deploy-fleet.sh — manual, local-only, never publishes).
 #
 # Triggers:
-#   - Push of any tag matching `gnet-v*` (the production path).
+#   - Push of any tag matching `v*` (the production path; bare semver).
 #   - Manual dispatch with an explicit tag input (re-run / fix-up).
 
 name: release
@@ -19,11 +19,11 @@ name: release
 on:
   push:
     tags:
-      - 'gnet-v*'
+      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (e.g. gnet-v1.0.0). Must already exist."
+        description: "Tag to release (e.g. v1.0.0). Must already exist."
         required: true
 
 env:
@@ -76,7 +76,7 @@ jobs:
 
       - name: package
         run: |
-          version="${TAG#gnet-v}"
+          version="${TAG#v}"
           name="gnet-v${version}-${{ matrix.target }}"
           mkdir -p "dist/${name}"
           cp "target/${{ matrix.target }}/release/gnet" "dist/${name}/"
@@ -107,7 +107,7 @@ jobs:
 
       - name: derive version
         id: ver
-        run: echo "version=${TAG#gnet-v}" >> "$GITHUB_OUTPUT"
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: login to docker hub
         uses: docker/login-action@v3
