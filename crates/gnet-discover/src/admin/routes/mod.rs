@@ -5,6 +5,7 @@ use crate::admin::AdminState;
 
 pub mod auth;
 pub mod csrf;
+pub mod device_writes;
 pub mod devices;
 pub mod host_role;
 pub mod internal;
@@ -18,6 +19,7 @@ pub fn router(state: AdminState) -> Router {
         .merge(auth::routes())
         .merge(network::routes())
         .merge(devices::routes())
+        .merge(device_writes::routes())
         .merge(internal::routes())
         .with_state(state)
         // CSRF guard wraps the whole router. The guard itself filters by
