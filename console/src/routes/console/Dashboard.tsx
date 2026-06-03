@@ -153,7 +153,14 @@ function NetworksList({
         <tbody className="divide-y divide-zinc-800">
           {rows.map((r) => (
             <tr key={r.id} className="text-zinc-200">
-              <td className="px-4 py-3">{r.network_label}</td>
+              <td className="px-4 py-3">
+                <Link
+                  to={`/networks/${r.id}`}
+                  className="text-zinc-100 underline-offset-4 hover:text-white hover:underline"
+                >
+                  {r.network_label}
+                </Link>
+              </td>
               <td className="px-4 py-3 text-zinc-400">
                 {r.dispatcher_endpoint}
               </td>

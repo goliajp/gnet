@@ -9,6 +9,7 @@ import ConsoleVerify from "../routes/console/Verify";
 import ConsoleForgotPassword from "../routes/console/ForgotPassword";
 import ConsoleResetPassword from "../routes/console/ResetPassword";
 import ConsoleDashboard from "../routes/console/Dashboard";
+import NetworkProxyShell from "./NetworkProxyShell";
 
 export type ConsoleHost = Extract<HostRoleResponse, { role: "console" }>;
 
@@ -24,11 +25,15 @@ export type ConsoleHost = Extract<HostRoleResponse, { role: "console" }>;
  *   /          Landing  (public marketing + sign-in CTA)
  *   /login     Login    (email + password; OAuth links inline)
  *   /signup    Signup   (email + password registration)
- *   /dashboard Dashboard (logged-in: networks list, federation ops)
+ *   /dashboard       Dashboard (logged-in: networks list, federation ops)
+ *   /networks/:id    NetworkProxyShell — mounts DispatcherShell over the
+ *                    `/api/networks/:id/proxy/*` reverse-proxy so the
+ *                    user gets the dispatcher UI for a federated network
+ *                    without leaving the console origin.
  *
  * Anything else falls through to a redirect home; the dispatcher
- * SPA's deep-link routes (Devices / Network / Relays / etc) are NOT
- * served by the console shell.
+ * SPA's other deep-link routes inherit from DispatcherShell once it
+ * grows them.
  */
 export default function ConsoleShell({ host }: { host: ConsoleHost }) {
   const me = useQuery({
@@ -83,6 +88,12 @@ export default function ConsoleShell({ host }: { host: ConsoleHost }) {
           came from email and a fresh browser tab might not carry the
           signup-time session cookie). Same reasoning for the
           forgot/reset pair. */}
+      <Route
+        path="/networks/:id/*"
+        element={
+          authed ? <NetworkProxyShell /> : <Navigate to="/login" replace />
+        }
+      />
       <Route path="/verify" element={<ConsoleVerify />} />
       <Route path="/forgot-password" element={<ConsoleForgotPassword />} />
       <Route path="/reset-password" element={<ConsoleResetPassword />} />
