@@ -40,11 +40,20 @@ const EXEMPT_PATHS: &[&str] = &[
     "/api/auth/logout",
 ];
 
+/// Path prefixes exempt from CSRF: the daemon-facing push channel under
+/// `/api/internal/*` authenticates with `Authorization: Bearer
+/// <device_token>`, not a cookie — there's no CSRF surface to protect.
+const EXEMPT_PREFIXES: &[&str] = &["/api/internal/"];
+
 pub async fn guard(req: Request, next: Next) -> Result<Response, Response> {
     if matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS) {
         return Ok(next.run(req).await);
     }
-    if EXEMPT_PATHS.contains(&req.uri().path()) {
+    let path = req.uri().path();
+    if EXEMPT_PATHS.contains(&path) {
+        return Ok(next.run(req).await);
+    }
+    if EXEMPT_PREFIXES.iter().any(|p| path.starts_with(p)) {
         return Ok(next.run(req).await);
     }
 
