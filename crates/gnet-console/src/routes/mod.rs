@@ -10,6 +10,7 @@ pub mod health;
 pub mod host_role;
 pub mod networks;
 pub mod oauth;
+pub mod proxy;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -19,6 +20,7 @@ pub fn router(state: AppState) -> Router {
         .merge(auth::routes())
         .merge(oauth::routes())
         .merge(networks::routes())
+        .merge(proxy::routes())
         .with_state(state)
         .layer(middleware::from_fn(csrf::guard))
 }
