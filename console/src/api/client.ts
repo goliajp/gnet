@@ -8,6 +8,12 @@
 //   `admin/routes/csrf.rs`).
 // - 204 No Content returns undefined; everything else .json()s.
 // - Non-2xx throws `ApiError` carrying the status + body.
+//
+// `createApi(basePath)` returns a client that prefixes every request
+// path with `basePath`. Used for federation proxy: SPA mounted under
+// `/networks/:id` calls `api("/api/auth/me")` and the prefixed client
+// turns it into `/api/networks/:id/proxy/api/auth/me`, which the
+// console backend reverse-proxies to the federated dispatcher.
 
 export class ApiError extends Error {
   status: number;
@@ -23,34 +29,43 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const CSRF_COOKIE = "gnet_csrf";
 const CSRF_HEADER = "X-Csrf-Token";
 
-export async function api<T = unknown>(
+export type ApiClient = <T = unknown>(
   path: string,
   init?: RequestInit,
-): Promise<T> {
-  const headers = new Headers(init?.headers);
-  const method = (init?.method ?? "GET").toUpperCase();
+) => Promise<T>;
 
-  if (!SAFE_METHODS.has(method)) {
-    const csrf = readCookie(CSRF_COOKIE);
-    if (csrf) headers.set(CSRF_HEADER, csrf);
-  }
-  if (init?.body && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
+export function createApi(basePath: string = ""): ApiClient {
+  return async function call<T = unknown>(
+    path: string,
+    init?: RequestInit,
+  ): Promise<T> {
+    const headers = new Headers(init?.headers);
+    const method = (init?.method ?? "GET").toUpperCase();
 
-  const res = await fetch(path, {
-    credentials: "same-origin",
-    ...init,
-    method,
-    headers,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new ApiError(res.status, text);
-  }
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+    if (!SAFE_METHODS.has(method)) {
+      const csrf = readCookie(CSRF_COOKIE);
+      if (csrf) headers.set(CSRF_HEADER, csrf);
+    }
+    if (init?.body && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
+
+    const res = await fetch(basePath + path, {
+      credentials: "same-origin",
+      ...init,
+      method,
+      headers,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new ApiError(res.status, text);
+    }
+    if (res.status === 204) return undefined as T;
+    return (await res.json()) as T;
+  };
 }
+
+export const api: ApiClient = createApi("");
 
 function readCookie(name: string): string | null {
   const pieces = document.cookie.split(";");

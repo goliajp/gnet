@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, api } from "../../api/client";
+import { useApi } from "../../api/ApiContext";
+import { ApiError } from "../../api/client";
 import type {
   DeviceResponse,
   MeResponse,
@@ -14,6 +15,7 @@ export default function Dashboard({
   host: DispatcherHost;
   me: MeResponse;
 }) {
+  const api = useApi();
   const qc = useQueryClient();
   const network = useQuery({
     queryKey: ["network"],
@@ -120,6 +122,7 @@ function Row({
 }
 
 function DeviceRow({ device }: { device: DeviceResponse }) {
+  const api = useApi();
   const qc = useQueryClient();
   const rename = useMutation({
     mutationFn: (alias: string) =>

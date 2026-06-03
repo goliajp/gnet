@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ApiError, api } from "../api/client";
+import { useApi } from "../api/ApiContext";
+import { ApiError } from "../api/client";
 import type { LoginRequest, LoginResponse } from "../api/types";
 import type { DispatcherHost } from "../shells/DispatcherShell";
 
 export default function Login({ host }: { host: DispatcherHost }) {
+  const api = useApi();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const qc = useQueryClient();
