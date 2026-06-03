@@ -5,10 +5,10 @@
 
 use axum::Json;
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{delete, get};
 use axum_extra::extract::cookie::CookieJar;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -58,6 +58,12 @@ pub enum NetworkError {
     BadEndpoint,
     #[error("network_label already in use")]
     LabelConflict,
+    /// DELETE asked for a network that either doesn't belong to this
+    /// user or is already soft-deleted (`removed_at IS NOT NULL`).
+    /// Both collapse into a single 404 so a user can't probe for
+    /// other users' network ids.
+    #[error("network not found")]
+    NotFound,
     #[error("session: {0}")]
     Session(#[from] crate::session::SessionError),
     #[error("database: {0}")]
@@ -84,6 +90,7 @@ impl IntoResponse for NetworkError {
             NetworkError::NotLoggedIn => StatusCode::UNAUTHORIZED,
             NetworkError::BadLabel | NetworkError::BadEndpoint => StatusCode::BAD_REQUEST,
             NetworkError::LabelConflict => StatusCode::CONFLICT,
+            NetworkError::NotFound => StatusCode::NOT_FOUND,
             NetworkError::Session(_) | NetworkError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (code, self.to_string()).into_response()
@@ -93,6 +100,7 @@ impl IntoResponse for NetworkError {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/networks", get(list).post(register))
+        .route("/api/networks/{id}", delete(remove))
 }
 
 fn valid_label(s: &str) -> bool {
@@ -115,7 +123,9 @@ async fn list(
     let session = require_login(&state, &jar).await?;
     let rows: Vec<NetworkRow> = sqlx::query_as(
         "SELECT id, network_label, dispatcher_endpoint, mode, role, created_at \
-         FROM user_networks WHERE user_id = $1 ORDER BY created_at DESC",
+         FROM user_networks \
+         WHERE user_id = $1 AND removed_at IS NULL \
+         ORDER BY created_at DESC",
     )
     .bind(session.user_id)
     .fetch_all(&state.pool)
@@ -175,4 +185,43 @@ async fn register(
             federation_token: token,
         }),
     ))
+}
+
+/// User-side soft-delete (plan §6.3, §15 — federation revocation
+/// from the console direction). Sets `removed_at = now()` for one
+/// `user_networks` row owned by the caller; subsequent proxy
+/// requests against that row return 404 from `routes/proxy.rs`,
+/// and the deterministic token derivation is no longer reachable
+/// without re-registering.
+///
+/// The dispatcher's trust row is NOT touched by this — the
+/// operator on that dispatcher revokes server-side via
+/// `DELETE /api/federation/{id}` independently. Either side alone
+/// is sufficient (plan §15 explicitly requires both directions).
+///
+/// Idempotency: a second DELETE on the same id returns 404; the
+/// audit row in user-facing event logging is the source of truth
+/// for "when did this go away."
+async fn remove(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(network_id): Path<Uuid>,
+) -> Result<StatusCode, NetworkError> {
+    let session = require_login(&state, &jar).await?;
+
+    let res = sqlx::query(
+        "UPDATE user_networks \
+         SET removed_at = now() \
+         WHERE id = $1 AND user_id = $2 AND removed_at IS NULL",
+    )
+    .bind(network_id)
+    .bind(session.user_id)
+    .execute(&state.pool)
+    .await?;
+
+    if res.rows_affected() == 0 {
+        return Err(NetworkError::NotFound);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
