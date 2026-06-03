@@ -12,6 +12,8 @@ members = [
     "crates/gnet",
     "crates/gnet-bench-compare",
     "crates/gnet-config",
+    "crates/gnet-console",
+    "crates/gnet-console-schema",
     "crates/gnet-crypto",
     "crates/gnet-discover",
     "crates/gnet-hex",
@@ -30,6 +32,7 @@ members = [
 # in the uploaded manifest). One workspace.version bump cascades to every
 # internal dep edge through these declarations.
 gnet-config = { path = "crates/gnet-config", version = "1.0.0" }
+gnet-console-schema = { path = "crates/gnet-console-schema", version = "1.0.0" }
 gnet-crypto = { path = "crates/gnet-crypto", version = "1.0.0" }
 gnet-hex = { path = "crates/gnet-hex", version = "1.0.0" }
 gnet-noise = { path = "crates/gnet-noise", version = "1.0.0" }
@@ -52,6 +55,14 @@ tracing = "0.1"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 chacha20poly1305 = "0.10"
 snow = "0.10"
+
+# gnet-console only — v1.1 control-plane backend. Strictly walled off from
+# the data-plane crates: nothing here may appear in `crates/gnet/Cargo.toml`
+# or its transitive deps. The cargo publish --dry-run check on the leaf
+# stones guards this (see crates/PUBLISH.md).
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
+sqlx = { version = "0.8", default-features = false }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [workspace.lints.rust]
 warnings = "deny"

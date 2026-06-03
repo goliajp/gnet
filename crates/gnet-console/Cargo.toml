@@ -1,0 +1,33 @@
+[package]
+name = "gnet-console"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "gnet-console"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+# Console-only deps — never enter the daemon's dep tree (data-plane crates
+# stay zero-deps by policy). The console is its own binary on its own host
+# (see ROADMAP "Separate process, separate deploy"): a control-plane outage
+# must not stop existing devices from talking on the overlay.
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+axum.workspace = true
+sqlx = { workspace = true, features = ["runtime-tokio", "tls-rustls", "postgres"] }
+gnet-console-schema.workspace = true

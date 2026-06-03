@@ -1,0 +1,20 @@
+[package]
+name = "gnet-console-schema"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+# Console-only deps — never enter the daemon's dep tree.
+# `migrate` enables sqlx::migrate::Migrator + the embedding macro that bundles
+# ./migrations/*.sql into the binary at compile time.
+[dependencies]
+sqlx = { workspace = true, features = ["macros", "migrate"] }
