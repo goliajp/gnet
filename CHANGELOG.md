@@ -34,6 +34,174 @@ public releases, have been removed — their content is rolled into the
 
 ---
 
+## [Unreleased] — 1.1.0 (in progress on `develop`)
+
+v1.1 is the **control-plane release**. The data plane is wire-stable
+(v1.0 daemons interoperate unchanged on a v1.1 fleet), but the surface
+around it grows substantially: a PG-backed dispatcher with an admin
+API, a SaaS-side console (`gnet.golia.jp`) that federates to user
+dispatchers, a lite admin surface on the relay, a v1.2-facing
+localhost admin endpoint on the daemon, an embedded SPA in three of
+the binaries, and a self-host `docker compose` bundle.
+
+The work is tracked under plan §17 in `docs/v1.1-plan.md`; everything
+in this entry has landed on `develop`.
+
+### Architectural invariants (unchanged from v1.0)
+
+- **Daemon zero-deps.** `cargo tree -p gnet` resolves to 10 workspace
+  crates and zero `crates.io` dependencies — verified across every
+  §17 slice. The control-plane crates (`gnet-discover`,
+  `gnet-relay-server`, `gnet-console`) carry their own dep trees,
+  walled off from the daemon's.
+- **v1.0 wire untouched.** `/peers`, `/endpoint-report`, `/join` on
+  the dispatcher and the daemon's UDP wire are bit-identical to
+  v1.0; a v1.0 daemon talking to a v1.1 dispatcher does not see the
+  new admin surface.
+- **All v1.1 features opt-in via env.** A dispatcher binary with no
+  `GNET_DISCOVER_DATABASE_URL` runs as a pure v1.0 coord; a relay
+  with no `GNET_RELAY_ADMIN_BIND` exposes no admin surface; a daemon
+  with no `GNET_LOCAL_ADMIN_ENABLE` runs unchanged.
+
+### Added — dispatcher (`gnet-discover`)
+
+- **v1.1 PG schema + state.json importer.** `--import-state` reads
+  the legacy `state.json` and round-trips it into PG so an in-place
+  v1.0 → v1.1 upgrade preserves device tokens. Schema lives in a new
+  `gnet-discover-schema` crate; migrations run automatically on
+  admin-server startup (§17.1).
+- **Admin API skeleton + local auth.** Cookie session (HttpOnly
+  `gnet_sess`, opaque 32-byte bearer hashed to SHA3-256 in Valkey)
+  + double-submit CSRF (`gnet_csrf` cookie ↔ `X-Csrf-Token` header)
+  + Argon2id passwords. Setup token bootstraps the first
+  `owner`-role admin account (§17.2).
+- **Daemon push channel.** Daemons periodically POST an admin
+  snapshot to `<admin_endpoint>/api/internal/snapshot`
+  (bearer-authed by their existing `device_token`); dispatcher
+  stores the JSONB blob in `device_snapshots` and surfaces it in
+  the SPA (§17.4).
+- **Device rename write path.** `PUT /api/devices/{id}/alias`
+  validates shape (3..32 chars `[a-z0-9_-]`), enforces uniqueness
+  per-network, and writes an `audit_log` row in the same
+  transaction. 400/404/409/403 map cleanly (§17.7).
+- **Federation receiver.** `POST /api/federation/register` accepts
+  a console-issued federation token + console origin; dispatcher
+  stores `(SHA3-256(token), origin)` in `federation_trust` and
+  thereafter accepts that bearer as an admin identity on the
+  proxy-routed API surface (§17.6).
+- **Defensive headers + brute-force throttle.** Every response
+  carries `X-Content-Type-Options: nosniff`, `X-Frame-Options:
+  DENY`, `Referrer-Policy: same-origin`; HSTS added when
+  `GNET_DISCOVER_SECURE_COOKIES=1`. Login throttle: per-tenant +
+  per-username Valkey counter, 5 attempts / 60s → 429 +
+  `Retry-After` (§17.12).
+
+### Added — console (`gnet-console`, gnet.golia.jp)
+
+- **New binary + crate.** Multi-tenant SaaS console: users sign in,
+  see their networks (own dispatcher endpoints federated by token),
+  and operate them through a transparent proxy surface
+  (`/api/networks/:id/proxy/*` → user's dispatcher) (§17.5a).
+- **Email + password auth + OAuth.** Argon2id passwords (m=64 MiB,
+  t=3, p=4). OAuth providers: Google (§17.5b), GitHub (§17.5c),
+  Apple Sign-In with ES256 client_secret JWT + JWKS cache (§17.5d).
+- **Federation token issuance.** Deterministic per-user-per-network
+  token derived from a server-side master secret + user UUID +
+  label + endpoint; the dispatcher receiver stores only its hash,
+  so a token leak from one console doesn't compromise others
+  (§17.6).
+- **Same defensive headers + login rate-limit** as the dispatcher,
+  with cookie `Secure` defaulting **on** (SaaS is HTTPS-only) —
+  `GNET_CONSOLE_SECURE_COOKIES=0` opts out for dev (§17.12).
+
+### Added — relay (`gnet-relay-server`)
+
+- **Lite admin HTTP surface.** Opt-in via `GNET_RELAY_ADMIN_BIND` +
+  `GNET_RELAY_ADMIN_TOKEN`. Endpoints: `GET /api/host-role` (open),
+  `GET /api/peers` (bearer), `GET /api/traffic` (bearer). The
+  forwarder stays single-threaded; the admin server runs on a
+  dedicated OS thread + current-thread Tokio runtime, sharing the
+  live peer table via `Arc<RwLock<HashMap>>` and the cumulative
+  counters via `AtomicU64`. Daemon dep tree unaffected (§17.8).
+
+### Added — daemon (`gnet`)
+
+- **Local HTTP admin surface (wire contract).** Opt-in via
+  `GNET_LOCAL_ADMIN_ENABLE=1`. Hand-rolled HTTP/1.1 parser (the
+  daemon zero-deps invariant rules out `httparse`/axum), bearer
+  auth against `/var/db/gnet/admin_token` (Linux) or
+  `/Library/Application Support/gnet/admin_token` (macOS), mode
+  must be exactly `0o400`. Routes: `/local/{status,alias,quit,
+  restart,join,upgrade}`. **`/local/status` is fully implemented**
+  (JSON snapshot of the live Node state); the five write endpoints
+  return `501 Not Implemented` with a structured
+  `{"not_implemented":..., "ships_in":"v1.2"}` body — the v1.2
+  macOS native-app consumer (plan §3.5) fills them in against this
+  stable wire. (§17.9)
+
+### Added — SPA + frontend
+
+- **`console/` React 19 + Vite 7 + Tailwind 4 SPA.** Single
+  codebase, role-aware: hits `GET /api/host-role` at boot and swaps
+  the visible tabs accordingly (dispatcher → Devices / Network /
+  Relays / Audit / Settings; relay → Peers / Traffic / Settings;
+  console → Networks / per-network proxy / Account / Audit).
+- **Embedded into three binaries** via `include_dir!` (plan §3.4):
+  the SPA bundle at `console/dist/` is baked into `gnet-discover`,
+  `gnet-relay-server`, and `gnet-console` at compile time;
+  `build.rs` in each consuming crate writes a stub `index.html`
+  when the SPA hasn't been built yet, so `cargo build` works on a
+  fresh clone without a Bun toolchain (§17.10a).
+- **Inline rename UX on the dispatcher's SPA**, wired to the new
+  `PUT /api/devices/{id}/alias` write path (§17.7).
+
+### Added — deployment
+
+- **Self-host docker-compose bundle.** New `self-host/` directory
+  ships a multi-stage `Dockerfile` (bun → rust → three minimal
+  runtime images), a `docker-compose.yml` with `db` (postgres:18)
+  + `kv` (valkey:9) + `dispatcher` + `relay`, `.env.example` with
+  required-var assertions, and a `README.md` walking the operator
+  through a 5-step init. Mode B (self-host, no SaaS dep) is fully
+  brought up by `cp .env.example .env && docker compose up -d`
+  (§17.10b).
+- **SaaS deploy spec bundle.** New `deploy/saas/` directory holds
+  the devops.golia.jp API bodies (`project.json`, `services.json`,
+  `caddy-site.json`, `dns-apex.json`, `dns-wildcard.json`), a
+  hardened systemd unit, a runtime `.env.local.example`, and a
+  6-step register README. The agent does not invoke the devops
+  API; the operator pastes these with their own `DEVOPS_API_KEY`
+  when the internal fleet has dogfooded long enough (§17.11).
+
+### Security
+
+- **OWASP ASVS L1 walkthrough.** `SECURITY.md` now carries a per-
+  control table (V2 / V3 / V4 / V5 / V7 / V8 / V9 / V11 / V12 / V13
+  / V14) with status (met / partially met / N/A / deferred) and the
+  source location for each control. Defers to v1.2: Content-
+  Security-Policy, explicit per-route body limits, per-IP login
+  throttle, CAPTCHA on signup, `audit_log` tamper-evidence.
+- **Cookie `Secure` flag** controllable per binary via env. Console
+  default on, dispatcher default off (matches the deployment posture
+  — SaaS is HTTPS-only; self-host's plain-HTTP default would
+  otherwise lock the operator out).
+- **Login brute-force throttle.** Per-account Valkey counter on both
+  console (email login) and dispatcher (local admin login); 5
+  attempts / 60s window, 429 + `Retry-After` on exceed.
+- **Daemon admin token file** must be exactly mode `0o400`; broader
+  permissions cause the local-admin server to refuse to start.
+
+### Wire / surface
+
+- v1.0 admin event log and `/peers` / `/endpoint-report` /
+  `/join` responses are byte-identical to v1.0. A v1.0 daemon and
+  a v1.1 daemon coexist on the same mesh without coordination.
+- New responses (`GET /api/host-role`, the daemon snapshot push,
+  etc.) are additive — v1.0 dispatcher binaries silently 404 on
+  them, which is the correct behaviour for a v1.0 deployment.
+
+---
+
 ## [1.0.2] — 2026-06-03
 
 Patch release. No wire change. Cosmetic + Prometheus label addition.
