@@ -2,16 +2,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api } from "../../api/client";
 import type {
   DeviceResponse,
-  HostRoleResponse,
   MeResponse,
   NetworkResponse,
 } from "../../api/types";
+import type { DispatcherHost } from "../../shells/DispatcherShell";
 
 export default function Dashboard({
   host,
   me,
 }: {
-  host: HostRoleResponse;
+  host: DispatcherHost;
   me: MeResponse;
 }) {
   const qc = useQueryClient();
