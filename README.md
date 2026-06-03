@@ -10,30 +10,22 @@ validated against its published RFC / NIST known-answer vectors.
 
 ## Status
 
-Pre-1.0. Tagged `gnet-v0.23` (June 2026). The `gnet` daemon runs internally
-on a small fleet (macOS arm64 + Linux x86_64 + AWS Graviton aarch64). The
-path to **gnet 1.0 — going public on GitHub** is tracked in
-[ROADMAP.md](ROADMAP.md). Publishing the zero-dependency library crates
-("stones") to crates.io is a separate, post-1.0 effort; see
-[crates/PUBLISH.md](crates/PUBLISH.md) for the publish topology when that
-lands.
+Tagged `gnet-v1.0.0` (June 2026). The `gnet` daemon runs internally on a
+small fleet (macOS arm64 + Linux x86_64 + AWS Graviton aarch64). The
+post-1.0 roadmap (notably v1.1 — the SaaS control plane + console at
+`gnet.golia.jp`) is in [ROADMAP.md](ROADMAP.md); shipping history is
+in [CHANGELOG.md](CHANGELOG.md). Publishing the zero-dependency
+library crates ("stones") to crates.io is a separate, deferred effort;
+see [crates/PUBLISH.md](crates/PUBLISH.md) for the publish topology.
 
-Recent landings:
-
-- **v0.18–v0.20** — coordinator state sync + warm-standby read-only
-  fence, discovery peer-leave / reconcile, relay health probing &
-  failover. Track A (fleet reliability) is feature-complete.
-- **v0.21** — admin unix-socket IPC on the daemon, fused live state in
-  `gnet status` (per-peer session phase, path, last successful
-  handshake), Prometheus exporter `gnet metrics`. The daemon stays
-  zero-deps; admin / metrics are CLI sidecars.
-- **v0.22** — `gnet doctor` diagnostic subcommand (green/red verdict
-  with reasons; non-zero exit on FAIL).
-- **v0.23** — Track B quality gate: [SECURITY.md](SECURITY.md) disclosure
-  policy, [KAT.md](crates/gnet-crypto/KAT.md) frozen RFC/NIST vector
-  inventory, [CT-REVIEW.md](crates/gnet-crypto/CT-REVIEW.md)
-  constant-time audit of the crypto hot paths, and
-  [fuzz harnesses](docs/fuzzing.md) for the four untrusted-input parsers.
+v1.0.0 includes the full operator surface (`gnet status` fused live
+view, `gnet doctor` pre-flight verdict, `gnet metrics` Prometheus
+exporter, admin unix-socket IPC), the quality-gate
+([SECURITY.md](SECURITY.md), [KAT.md](crates/gnet-crypto/KAT.md),
+[CT-REVIEW.md](crates/gnet-crypto/CT-REVIEW.md),
+[fuzzing](docs/fuzzing.md)), and the deploy docs for every supported
+posture. The toolchain policy is **always latest stable** — no version
+pinning.
 
 ## What's in the box
 

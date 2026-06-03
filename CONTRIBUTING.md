@@ -38,8 +38,10 @@ may add dependencies cautiously when the win is meaningful (e.g. `tokio`
 
 ## Dev loop
 
-You will need a Rust toolchain — see `rust-toolchain.toml` (currently
-`channel = "stable"`; this will pin to a specific minor in v0.24).
+You will need a Rust toolchain — see `rust-toolchain.toml`
+(`channel = "stable"`). The project's toolchain policy is **always
+latest stable** — no version pinning; CI uses
+`dtolnay/rust-toolchain@stable` (same).
 
 ```bash
 # fast inner loop
@@ -64,9 +66,10 @@ main "did I add a smell" gate. Both must be green to land a PR.
    `cargo publish --dry-run` on the Tier-0 leaf crates to catch
    accidental deps.
 
-2. **Wire compatibility within a minor version.** A v0.23.x deploy
-   must keep working when a v0.23.y daemon joins the mesh. Breaking
-   the wire takes a minor bump (and a CHANGELOG note).
+2. **Wire compatibility within a major.** Any two 1.x daemons must
+   interoperate on the same mesh — semver minor + patch never break
+   wire. Wire-breaking changes are major bumps with a CHANGELOG note
+   and a coordinated fleet upgrade.
 
 3. **Crypto changes need KAT + CT review.** Anything touching
    `crates/gnet-crypto/` updates

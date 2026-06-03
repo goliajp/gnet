@@ -251,7 +251,7 @@ dependencies = [
 
 [[package]]
 name = "gnet"
-version = "2.0.0-alpha.2"
+version = "1.0.0"
 dependencies = [
  "gnet-config",
  "gnet-crypto",
@@ -266,7 +266,7 @@ dependencies = [
 
 [[package]]
 name = "gnet-bench-compare"
-version = "2.0.0-alpha.2"
+version = "1.0.0"
 dependencies = [
  "chacha20poly1305",
  "gnet-crypto",
@@ -282,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "gnet-config"
-version = "2.0.0-alpha.2"
+version = "1.0.0"
 dependencies = [
  "gnet-crypto",
  "gnet-hex",
@@ -291,11 +291,11 @@ dependencies = [
 
 [[package]]
 name = "gnet-crypto"
-version = "2.0.0-alpha.2"
+version = "1.0.0"
 
 [[package]]
 name = "gnet-discover"
-version = "2.0.0-alpha.2"
+version = "1.0.0"
 dependencies = [
  "gnet-hex",
  "gnet-rand",
@@ -309,14 +309,14 @@ dependencies = [
 
 [[package]]
 name = "gnet-hex"
-version = "2.0.0-alpha.2"
+version = "1.0.0"
 dependencies = [
  "gnet-rand",
 ]
 
 [[package]]
 name = "gnet-noise"
-version = "2.0.0-alpha.2"
+version = "1.0.0"
 dependencies = [
  "gnet-crypto",
  "gnet-hex",
@@ -324,7 +324,7 @@ dependencies = [
 
 [[package]]
 name = "gnet-punch"
-version = "2.0.0-alpha.2"
+version = "1.0.0"
 dependencies = [
  "gnet-rand",
  "gnet-wire",
@@ -332,18 +332,18 @@ dependencies = [
 
 [[package]]
 name = "gnet-rand"
-version = "2.0.0-alpha.2"
+version = "1.0.0"
 
 [[package]]
 name = "gnet-relay"
-version = "2.0.0-alpha.2"
+version = "1.0.0"
 dependencies = [
  "gnet-rand",
 ]
 
 [[package]]
 name = "gnet-relay-server"
-version = "2.0.0-alpha.2"
+version = "1.0.0"
 dependencies = [
  "gnet-relay",
  "gnet-wire",
@@ -351,11 +351,11 @@ dependencies = [
 
 [[package]]
 name = "gnet-tun"
-version = "2.0.0-alpha.2"
+version = "1.0.0"
 
 [[package]]
 name = "gnet-wire"
-version = "2.0.0-alpha.2"
+version = "1.0.0"
 
 [[package]]
 name = "hex"
