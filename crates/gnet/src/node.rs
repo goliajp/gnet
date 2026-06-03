@@ -157,6 +157,7 @@ pub fn run(config: Config) -> io::Result<()> {
     let keepalive = config.keepalive;
     let coordinators = config.coordinators.clone();
     let device_token = config.device_token.clone();
+    let admin_endpoint = config.admin_endpoint.clone();
     // hosts-sync inputs, captured before `config.peers` is moved below.
     let manage_hosts = config.manage_hosts;
     let hosts_path = config.hosts_path.clone();
@@ -327,6 +328,7 @@ pub fn run(config: Config) -> io::Result<()> {
             node.clone(),
             coordinators,
             device_token.clone(),
+            admin_endpoint,
             discovery::HostsSync {
                 manage: manage_hosts,
                 path: hosts_path.unwrap_or_else(|| PathBuf::from("/etc/hosts")),
