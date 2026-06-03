@@ -1,0 +1,39 @@
+[Unit]
+Description=gnet v1.1 SaaS console (gnet.golia.jp)
+Documentation=https://github.com/goliajp/gnet/tree/develop/crates/gnet-console
+After=network-online.target postgresql.service valkey.service
+Wants=network-online.target
+Requires=postgresql.service valkey.service
+
+[Service]
+Type=simple
+User=gnet-console
+Group=gnet-console
+WorkingDirectory=/apps/gnet-console
+EnvironmentFile=/apps/gnet-console/.env.local
+ExecStart=/apps/gnet-console/target/release/gnet-console
+Restart=on-failure
+RestartSec=5
+
+# Sandboxing — see fleet conventions. The console is a pure HTTP
+# server with no special device/cap requirements.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+# Process limits — modest by default; bump if many concurrent
+# sessions stress the connection pool.
+LimitNOFILE=8192
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

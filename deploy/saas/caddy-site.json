@@ -1,0 +1,7 @@
+{
+  "id": "gnet-console",
+  "domains": ["gnet.golia.jp", "*.gnet.golia.jp"],
+  "caddy_device": "t01",
+  "block": "reverse_proxy {{resolve:t01:6015}}",
+  "enabled": true
+}
