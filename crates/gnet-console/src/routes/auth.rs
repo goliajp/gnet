@@ -119,6 +119,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/auth/email/register", post(register))
         .route("/api/auth/email/login", post(login))
+        .route("/api/auth/email/verify", post(verify_email))
         .route("/api/auth/me", get(me))
         .route("/api/auth/logout", post(logout))
 }
@@ -166,7 +167,47 @@ async fn register(
         .execute(&mut *tx)
         .await?;
 
+    // When the mail loop is on, mint a single-use verification token
+    // inside the same tx so the user row + the token always commit
+    // together (or both roll back).
+    let verify_token: Option<String> = if state.auto_verify_email {
+        None
+    } else {
+        let mut raw = [0u8; 32];
+        gnet_rand::fill(&mut raw);
+        let token = gnet_hex::encode(&raw);
+        sqlx::query(
+            "INSERT INTO email_verification_tokens (token, user_id) VALUES ($1, $2)",
+        )
+        .bind(&token)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+        Some(token)
+    };
+
     tx.commit().await?;
+
+    // Dispatch the verification mail AFTER commit. Failure here is
+    // logged but doesn't roll back the signup — the user can ask for
+    // a fresh token via the "resend" affordance (TODO when ready).
+    // The mail-loop branch is only entered when mail.is_some()
+    // because both come from the same env conditional in Config.
+    if let (Some(token), Some(mail)) = (verify_token.as_ref(), state.mail.as_ref()) {
+        let link = format!("{}/verify?token={}", state.public_url, token);
+        let body = format!(
+            "Welcome to gnet.\n\nConfirm this address to finish signing in:\n\n  {link}\n\nIf you didn't sign up for gnet, ignore this mail.\n\n— gnet.golia.jp\n"
+        );
+        let html_body = format!(
+            "<p>Welcome to gnet.</p><p>Confirm this address to finish signing in:</p><p><a href=\"{link}\">{link}</a></p><p>If you didn't sign up for gnet, ignore this mail.</p><p>— gnet.golia.jp</p>"
+        );
+        if let Err(e) = mail
+            .send(&email, "Confirm your gnet account", &body, Some(&html_body))
+            .await
+        {
+            tracing::error!(error = ?e, user_id = %user_id, "verification mail send failed");
+        }
+    }
 
     let (jar, _resp_session) = open_session(jar, &state, user_id, Some(email.clone())).await?;
 
@@ -181,6 +222,55 @@ async fn register(
             }),
         ),
     ))
+}
+
+#[derive(Deserialize)]
+pub struct VerifyEmailRequest {
+    pub token: String,
+}
+
+#[derive(Serialize)]
+pub struct VerifyEmailResponse {
+    pub verified: bool,
+}
+
+/// Confirm an email-address verification token. The token row stays
+/// in the table after use (with `used_at = now()`) so a stolen link
+/// that's already been redeemed gets the same 404 a never-existing
+/// one does — leaks neither the original validity nor when the user
+/// confirmed.
+async fn verify_email(
+    State(state): State<AppState>,
+    Json(req): Json<VerifyEmailRequest>,
+) -> Result<Json<VerifyEmailResponse>, AuthRouteError> {
+    let mut tx = state.pool.begin().await?;
+    let row: Option<(Uuid, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
+        "SELECT user_id, used_at FROM email_verification_tokens \
+         WHERE token = $1 AND created_at > now() - INTERVAL '1 hour' \
+         FOR UPDATE",
+    )
+    .bind(&req.token)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some((user_id, used_at)) = row else {
+        return Err(AuthRouteError::BadCreds);
+    };
+    if used_at.is_some() {
+        return Err(AuthRouteError::BadCreds);
+    }
+
+    sqlx::query("UPDATE email_credentials SET verified_at = now() WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE email_verification_tokens SET used_at = now() WHERE token = $1")
+        .bind(&req.token)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    Ok(Json(VerifyEmailResponse { verified: true }))
 }
 
 async fn login(

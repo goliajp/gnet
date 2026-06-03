@@ -20,6 +20,12 @@ const EXEMPT_PATHS: &[&str] = &[
     "/api/host-role",
     "/api/auth/email/login",
     "/api/auth/email/register",
+    // The verification link arrives in mail and is opened in a fresh
+    // tab; the user may not be signed in yet, so no session cookie
+    // → no CSRF cookie → no double-submit token. The token in the
+    // body IS the auth factor (single-use, one-hour TTL — see
+    // routes/auth.rs::verify_email).
+    "/api/auth/email/verify",
     "/api/auth/logout",
 ];
 

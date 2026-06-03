@@ -56,6 +56,14 @@ export type EmailRegisterRequest = {
   password: string;
 };
 
+export type VerifyEmailRequest = {
+  token: string;
+};
+
+export type VerifyEmailResponse = {
+  verified: boolean;
+};
+
 // User's federated networks (Mode A SaaS + Mode C federated self-host).
 export type UserNetworkRow = {
   id: string;

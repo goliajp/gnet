@@ -11,6 +11,7 @@ import { AuthShell, ErrorLine, Field } from "./Login";
 export default function ConsoleSignup() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [pendingMailFor, setPendingMailFor] = useState<string | null>(null);
   const qc = useQueryClient();
   const nav = useNavigate();
 
@@ -22,9 +23,40 @@ export default function ConsoleSignup() {
       }),
     onSuccess: (me) => {
       qc.setQueryData(["console", "me"], me);
-      nav("/dashboard", { replace: true });
+      // When the mail loop is on, the user has to click the link in
+      // their inbox before they can sign in — keep them on this page
+      // with a "check your mail" prompt instead of dropping them in
+      // a dashboard they can't use yet (login below will refuse with
+      // 401 unverified).
+      if (me.verified) {
+        nav("/dashboard", { replace: true });
+      } else {
+        setPendingMailFor(me.email ?? "");
+      }
     },
   });
+
+  if (pendingMailFor) {
+    return (
+      <AuthShell title="Check your inbox" subtitle="verification mail sent">
+        <p className="text-zinc-300">
+          We sent a sign-in link to{" "}
+          <span className="font-mono text-zinc-100">{pendingMailFor}</span>.
+          Open it to finish creating your account.
+        </p>
+        <p className="mt-4 text-xs text-zinc-500">
+          Didn't see it? Check spam, or{" "}
+          <Link
+            to="/login"
+            className="text-zinc-300 hover:text-zinc-100"
+          >
+            sign in
+          </Link>{" "}
+          if you already have one.
+        </p>
+      </AuthShell>
+    );
+  }
 
   return (
     <AuthShell
