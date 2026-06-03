@@ -1,6 +1,7 @@
 use axum::Json;
 use axum::Router;
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 use chrono::{DateTime, Utc};
@@ -34,8 +35,9 @@ pub fn routes() -> Router<AdminState> {
 async fn list_devices(
     State(state): State<AdminState>,
     jar: CookieJar,
+    headers: HeaderMap,
 ) -> Result<Json<Vec<DeviceResponse>>, AuthRouteError> {
-    let _session = require_login(&state, &jar).await?;
+    let _session = require_login(&state, &jar, &headers).await?;
 
     // INET is cast to text because we didn't enable sqlx-postgres's
     // `ipnetwork` feature — and we never operate numerically on the vip

@@ -17,7 +17,7 @@
 use axum::Json;
 use axum::Router;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum_extra::extract::cookie::CookieJar;
@@ -92,9 +92,10 @@ pub fn routes() -> Router<AdminState> {
 async fn register(
     State(state): State<AdminState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Json(req): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<RegisterResponse>), FederationError> {
-    let session = require_login(&state, &jar).await?;
+    let session = require_login(&state, &jar, &headers).await?;
 
     if req.token.len() != 64 {
         return Err(FederationError::BadToken);

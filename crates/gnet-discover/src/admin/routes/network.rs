@@ -1,6 +1,7 @@
 use axum::Json;
 use axum::Router;
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 use chrono::{DateTime, Utc};
@@ -29,8 +30,9 @@ pub fn routes() -> Router<AdminState> {
 async fn get_network(
     State(state): State<AdminState>,
     jar: CookieJar,
+    headers: HeaderMap,
 ) -> Result<Json<NetworkResponse>, AuthRouteError> {
-    let _session = require_login(&state, &jar).await?;
+    let _session = require_login(&state, &jar, &headers).await?;
 
     let row: (Uuid, String, Vec<u8>, Vec<u8>, DateTime<Utc>) = sqlx::query_as(
         "SELECT id, name, overlay_v4_prefix, overlay_v6_prefix, created_at \

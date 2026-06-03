@@ -57,6 +57,19 @@ pub async fn guard(req: Request, next: Next) -> Result<Response, Response> {
         return Ok(next.run(req).await);
     }
 
+    // Federation-bearer requests carry no cookie and so have no CSRF
+    // attack surface (no ambient credentials in a browser to exploit).
+    // Skip CSRF when an `Authorization: Bearer …` header is present.
+    if req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.starts_with("Bearer ") || s.starts_with("bearer "))
+        .unwrap_or(false)
+    {
+        return Ok(next.run(req).await);
+    }
+
     let headers = req.headers();
     let Some(cookie_value) = parse_cookie(headers, CSRF_COOKIE_NAME) else {
         return Err(forbidden("missing csrf cookie"));

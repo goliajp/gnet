@@ -13,7 +13,7 @@
 use axum::Json;
 use axum::Router;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::put;
 use axum_extra::extract::cookie::CookieJar;
@@ -86,10 +86,11 @@ pub fn routes() -> Router<AdminState> {
 async fn rename(
     State(state): State<AdminState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Path(device_id): Path<Uuid>,
     Json(req): Json<UpdateAliasRequest>,
 ) -> Result<Json<DeviceResponse>, DeviceWriteError> {
-    let session = require_login(&state, &jar).await?;
+    let session = require_login(&state, &jar, &headers).await?;
 
     if !valid_alias(&req.alias) {
         return Err(DeviceWriteError::BadAlias);

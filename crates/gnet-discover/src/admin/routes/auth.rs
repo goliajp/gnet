@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::Router;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
@@ -161,8 +161,9 @@ async fn logout(State(state): State<AdminState>, jar: CookieJar) -> (CookieJar, 
 async fn me(
     State(state): State<AdminState>,
     jar: CookieJar,
+    headers: HeaderMap,
 ) -> Result<Json<MeResponse>, AuthRouteError> {
-    let session = require_login(&state, &jar).await?;
+    let session = require_login(&state, &jar, &headers).await?;
     Ok(Json(MeResponse {
         user_id: session.user_id,
         username: session.username,
@@ -170,17 +171,67 @@ async fn me(
     }))
 }
 
-/// Shared helper for any handler that needs the current session. Returns
-/// the loaded `Session` or `AuthRouteError::NotLoggedIn` on
-/// missing/malformed cookie / absent session row.
+/// Shared helper for any handler that needs the current session.
+///
+/// Tries two auth methods in order:
+///
+/// 1. `gnet_sess` cookie → Valkey session (the SPA / local admin path).
+/// 2. `Authorization: Bearer <token>` matched against
+///    `federation_trust.token_hash` (the SaaS-console-proxied path,
+///    plan §6.3).
+///
+/// Returns `NotLoggedIn` only when neither method authenticates. The
+/// federation-bearer fallback synthesises a `Session` whose `user_id`
+/// is the `federation_trust` row id and whose `username` carries the
+/// trusted `console_origin` for audit attribution.
 pub async fn require_login(
     state: &AdminState,
     jar: &CookieJar,
+    headers: &HeaderMap,
 ) -> Result<Session, AuthRouteError> {
-    let cookie = jar.get(COOKIE_NAME).ok_or(AuthRouteError::NotLoggedIn)?;
-    let key = session::key_from_cookie(state.network_id, cookie.value())
-        .ok_or(AuthRouteError::NotLoggedIn)?;
-    let mut kv = state.kv.clone();
-    let session = session::fetch(&mut kv, &key).await?.ok_or(AuthRouteError::NotLoggedIn)?;
-    Ok(session)
+    if let Some(cookie) = jar.get(COOKIE_NAME) {
+        if let Some(key) = session::key_from_cookie(state.network_id, cookie.value()) {
+            let mut kv = state.kv.clone();
+            if let Some(s) = session::fetch(&mut kv, &key).await? {
+                return Ok(s);
+            }
+        }
+    }
+
+    if let Some(token) = bearer_from_headers(headers) {
+        // Match the hashing the federation/register handler does: decode
+        // the 64-char hex bearer back to its 32 raw bytes and hash *those*.
+        // Hashing the hex ASCII directly would silently never match.
+        if let Some(token_raw) = gnet_hex::decode_32(token) {
+            let token_hash = gnet_crypto::sha3::sha3_256(&token_raw);
+            let row: Option<(Uuid, Option<chrono::DateTime<Utc>>, String)> = sqlx::query_as(
+                "SELECT id, revoked_at, console_origin FROM federation_trust \
+                 WHERE network_id = $1 AND token_hash = $2",
+            )
+            .bind(state.network_id)
+            .bind(&token_hash[..])
+            .fetch_optional(&state.pool)
+            .await?;
+            if let Some((fed_id, None, origin)) = row {
+                return Ok(Session {
+                    user_id: fed_id,
+                    network_id: state.network_id,
+                    username: format!("federation:{origin}"),
+                    role: "owner".to_string(),
+                    created_at: Utc::now(),
+                });
+            }
+        }
+    }
+
+    Err(AuthRouteError::NotLoggedIn)
+}
+
+fn bearer_from_headers(headers: &HeaderMap) -> Option<&str> {
+    let v = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let rest = v
+        .strip_prefix("Bearer ")
+        .or_else(|| v.strip_prefix("bearer "))?
+        .trim();
+    if rest.is_empty() { None } else { Some(rest) }
 }
