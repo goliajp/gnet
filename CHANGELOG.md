@@ -173,6 +173,47 @@ in this entry has landed on `develop`.
   API; the operator pastes these with their own `DEVOPS_API_KEY`
   when the internal fleet has dogfooded long enough (§17.11).
 
+### Added — federation revocation (plan §6.3, §15)
+
+Federation can now be revoked from either side; the two paths are
+independent and either alone is sufficient to break the trust.
+
+- **Dispatcher side (operator):** `DELETE /api/federation/{trust_id}`
+  sets `federation_trust.revoked_at = now()` + writes an
+  `action='federation.revoke'` audit row. The existing
+  `auth::require_login` federation-bearer branch already filters
+  revoked rows, so the next request bearing the revoked token gets
+  the canonical 401 without a separate code path.
+- **Console side (user):** `DELETE /api/networks/{id}` soft-deletes a
+  `user_networks` row (`removed_at` column added by migration
+  `0004_user_networks_removed_at.sql`). The proxy route + the
+  network list both filter `removed_at IS NULL` so a removed
+  network drops out of the user's view and out of the federation
+  forwarder before any token re-derivation happens. UNIQUE
+  `(user_id, network_label)` relaxes to a partial index so the
+  user can re-register a label they previously removed (the
+  derivation is deterministic — a re-register wins back the same
+  bearer).
+
+### Added — CI
+
+- **Self-host smoke** (`.github/workflows/self-host-smoke.yml`).
+  PRs touching the self-host bundle, the control-plane crates, or
+  the SPA bring up `docker compose up -d --build --wait` from
+  `self-host/`, then verify with `jq -e`: dispatcher / relay
+  `/api/host-role` shape, relay `/api/peers` 401 without bearer +
+  empty list with bearer, `/api/traffic` shape. Compose's `--wait`
+  blocks on the healthchecks in `docker-compose.yml`, so a service
+  that fails to come healthy trips the job before curl runs. Logs
+  uploaded as an artefact on failure. (Plan §13, §15.)
+- **Upgrade smoke** (`.github/workflows/upgrade-smoke.yml`). PRs
+  touching the importer / schema boot a clean `postgres:18-alpine`,
+  copy `tests/fixtures/v1_0_state.json` (two devices, one
+  env-supplied relay), run `gnet-discover --import-state`, then
+  `psql`-assert: `networks.name` matches the env override,
+  `count(devices) == 2`, alias list, `count(relays) == 1`, source
+  file renamed to `*.imported`. (Plan §15.)
+
 ### Security
 
 - **OWASP ASVS L1 walkthrough.** `SECURITY.md` now carries a per-
