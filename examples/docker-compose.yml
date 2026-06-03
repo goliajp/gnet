@@ -1,0 +1,39 @@
+# gnet overlay daemon — Docker Compose example.
+#
+# Quick start:
+#   1. Drop your main.conf next to this file (or `gnet keygen` to make one).
+#   2. docker compose up -d
+#   3. docker compose logs -f gnet
+#   4. docker compose exec gnet gnet status
+#
+# Notes:
+#   - cap_add: NET_ADMIN + device /dev/net/tun are both required for the
+#     daemon to bring up its overlay interface. Without them the daemon
+#     starts but the tun open fails.
+#   - network_mode: host is used because the daemon's UDP overlay needs
+#     to share the host's network namespace (the tun interface lives in
+#     the same namespace as the underlay socket).
+#   - The :ro mount on main.conf keeps the container from rewriting your
+#     conf; the daemon never needs to write it at runtime
+#     (rotate-key / join CLI commands are operator-side, not daemon).
+
+services:
+  gnet:
+    image: goliakk/gnet:latest
+    container_name: gnet
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    network_mode: host
+    volumes:
+      - ./main.conf:/etc/gnet/main.conf:ro
+    command: ["up", "/etc/gnet/main.conf"]
+    healthcheck:
+      # `gnet doctor` exits non-zero on any FAIL — perfect compose health gate.
+      test: ["CMD", "gnet", "doctor"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
