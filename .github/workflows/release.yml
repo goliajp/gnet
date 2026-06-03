@@ -57,9 +57,14 @@ jobs:
 
       - name: install aarch64-linux cross toolchain
         if: matrix.target == 'aarch64-unknown-linux-gnu'
+        # gcc-aarch64-linux-gnu = cross-compiler;
+        # libc6-dev-arm64-cross = the actual aarch64 libc headers + crt
+        # (Scrt1.o / crti.o) that the linker needs to produce a PIE.
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu \
+            libc6-dev-arm64-cross
           mkdir -p .cargo
           {
             echo '[target.aarch64-unknown-linux-gnu]'
