@@ -19,6 +19,7 @@
 mod admin;
 mod discovery;
 mod handshake;
+mod local_admin;
 mod local_ips;
 mod pump;
 mod punch;
@@ -344,6 +345,18 @@ pub fn run(config: Config) -> io::Result<()> {
     // Best-effort — a bind failure logs and the daemon proceeds without it
     // (observability must not block the wire path).
     admin::spawn(node.clone(), admin::default_socket_path());
+
+    // v1.1 §17.9 local HTTP admin surface (opt-in via env). The
+    // contract behind it ships in v1.2 (native macOS app); this just
+    // lands the wire endpoints + bearer auth + status implementation.
+    // Disabled by default — daemons in the fleet keep the v1.0 unix
+    // socket as their only admin surface until the operator flips
+    // `GNET_LOCAL_ADMIN_ENABLE=1`.
+    match local_admin::LocalAdminConfig::from_env() {
+        Ok(Some(cfg)) => local_admin::spawn(node.clone(), cfg),
+        Ok(None) => {}
+        Err(e) => eprintln!("event=local_admin_cfg_err err={e}"),
+    }
 
     let up = pump::uplink(tun.clone(), socket.clone(), node.clone());
     let down = pump::downlink(tun, socket, node, dial_wake);
