@@ -1,0 +1,179 @@
+//! Device write paths (plan §17 step 7, first slice).
+//!
+//! Today: rename. Kick / rotate-key follow once we wire the daemon
+//! control channel (a rotate decision the dispatcher pushes the daemon
+//! is more than a row edit). All writes:
+//!
+//! - require a logged-in admin session (cookie + CSRF, already enforced
+//!   by the surrounding middleware);
+//! - run inside a single transaction with the corresponding
+//!   `audit_log` insert, so we never get a state change without its
+//!   audit trail.
+
+use axum::Json;
+use axum::Router;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::put;
+use axum_extra::extract::cookie::CookieJar;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
+use uuid::Uuid;
+
+use crate::admin::AdminState;
+use crate::admin::routes::auth::{AuthRouteError, require_login};
+use crate::admin::routes::devices::DeviceResponse;
+
+#[derive(Deserialize)]
+pub struct UpdateAliasRequest {
+    pub alias: String,
+}
+
+#[derive(Serialize, FromRow)]
+struct AliasRow {
+    id: Uuid,
+    alias: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DeviceWriteError {
+    #[error("not logged in")]
+    NotLoggedIn,
+    #[error("device not found")]
+    NotFound,
+    #[error("alias must be 3-32 chars of [a-z0-9_-]")]
+    BadAlias,
+    #[error("alias already in use in this network")]
+    AliasConflict,
+    #[error("session store: {0}")]
+    Session(#[from] crate::admin::session::SessionError),
+    #[error("database: {0}")]
+    Db(#[from] sqlx::Error),
+}
+
+impl From<AuthRouteError> for DeviceWriteError {
+    fn from(e: AuthRouteError) -> Self {
+        match e {
+            AuthRouteError::NotLoggedIn => DeviceWriteError::NotLoggedIn,
+            AuthRouteError::BadCreds => DeviceWriteError::NotLoggedIn,
+            AuthRouteError::Session(s) => DeviceWriteError::Session(s),
+            AuthRouteError::Db(d) => DeviceWriteError::Db(d),
+        }
+    }
+}
+
+impl IntoResponse for DeviceWriteError {
+    fn into_response(self) -> Response {
+        let code = match self {
+            DeviceWriteError::NotLoggedIn => StatusCode::UNAUTHORIZED,
+            DeviceWriteError::NotFound => StatusCode::NOT_FOUND,
+            DeviceWriteError::BadAlias => StatusCode::BAD_REQUEST,
+            DeviceWriteError::AliasConflict => StatusCode::CONFLICT,
+            DeviceWriteError::Session(_) | DeviceWriteError::Db(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        };
+        (code, self.to_string()).into_response()
+    }
+}
+
+pub fn routes() -> Router<AdminState> {
+    Router::new().route("/api/devices/{id}/alias", put(rename))
+}
+
+async fn rename(
+    State(state): State<AdminState>,
+    jar: CookieJar,
+    Path(device_id): Path<Uuid>,
+    Json(req): Json<UpdateAliasRequest>,
+) -> Result<Json<DeviceResponse>, DeviceWriteError> {
+    let session = require_login(&state, &jar).await?;
+
+    if !valid_alias(&req.alias) {
+        return Err(DeviceWriteError::BadAlias);
+    }
+
+    let mut tx = state.pool.begin().await?;
+
+    let existing: Option<AliasRow> = sqlx::query_as(
+        "SELECT id, alias FROM devices \
+         WHERE network_id = $1 AND id = $2 \
+         FOR UPDATE",
+    )
+    .bind(state.network_id)
+    .bind(device_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let prev = existing.ok_or(DeviceWriteError::NotFound)?;
+
+    let update = sqlx::query("UPDATE devices SET alias = $1 WHERE id = $2")
+        .bind(&req.alias)
+        .bind(prev.id)
+        .execute(&mut *tx)
+        .await;
+    match update {
+        Ok(_) => {}
+        Err(sqlx::Error::Database(db_err)) if db_err.code().as_deref() == Some("23505") => {
+            return Err(DeviceWriteError::AliasConflict);
+        }
+        Err(other) => return Err(other.into()),
+    }
+
+    let detail = serde_json::json!({ "from": prev.alias, "to": req.alias });
+    sqlx::query(
+        "INSERT INTO audit_log (network_id, actor_kind, actor_id, action, target, detail) \
+         VALUES ($1, 'local_admin', $2, 'device.rename', $3, $4)",
+    )
+    .bind(state.network_id)
+    .bind(session.user_id.to_string())
+    .bind(device_id.to_string())
+    .bind(&detail)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    let updated: DeviceResponse = sqlx::query_as(
+        "SELECT id, alias, \
+                encode(x25519_pubkey, 'hex') AS x25519_pubkey_hex, \
+                vip_v4::text AS vip_v4, \
+                vip_v6::text AS vip_v6, \
+                relay_eligible, last_reflexive, last_seen_at, created_at \
+         FROM devices WHERE id = $1",
+    )
+    .bind(device_id)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(Json(updated))
+}
+
+fn valid_alias(s: &str) -> bool {
+    let len = s.len();
+    if !(3..=32).contains(&len) {
+        return false;
+    }
+    s.bytes()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
+#[allow(dead_code)]
+fn _force_imports() -> Option<DateTime<Utc>> {
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_alias;
+
+    #[test]
+    fn alias_rules_match_username() {
+        assert!(valid_alias("alpha"));
+        assert!(valid_alias("node-01"));
+        assert!(!valid_alias("ab"));
+        assert!(!valid_alias("Has Caps"));
+        assert!(!valid_alias("dot.name"));
+        assert!(!valid_alias(&"x".repeat(33)));
+    }
+}
