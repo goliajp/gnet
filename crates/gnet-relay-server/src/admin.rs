@@ -74,6 +74,12 @@ pub fn router(state: AdminState) -> Router {
         .route("/api/peers", get(peers))
         .route("/api/traffic", get(traffic))
         .layer(middleware::from_fn_with_state(state.clone(), bearer_guard))
+        // SPA fallback after the bearer layer so static assets are
+        // open (the SPA shell needs to load before sign-in to render
+        // the login form). The fallback never wraps under the bearer
+        // guard since `Router::fallback` is matched outside the merge
+        // chain; the API surface above stays protected.
+        .merge(crate::spa::routes())
         .with_state(state)
 }
 

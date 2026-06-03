@@ -29,6 +29,8 @@ tokio = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Compile-time SPA embed (plan §3.4); build.rs ensures the dir exists.
+include_dir = { workspace = true }
 
 [lints]
 workspace = true

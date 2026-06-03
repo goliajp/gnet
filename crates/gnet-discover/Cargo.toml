@@ -38,3 +38,6 @@ argon2.workspace = true
 chrono.workspace = true
 redis.workspace = true
 time.workspace = true
+# Compile-time SPA embed (plan §3.4). build.rs in this crate ensures
+# console/dist/index.html exists before the macro runs.
+include_dir.workspace = true
