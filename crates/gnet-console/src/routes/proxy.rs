@@ -70,9 +70,15 @@ async fn proxy(
 ) -> Result<Response, ProxyError> {
     let session = require_login(&state, &jar).await?;
 
+    // `removed_at IS NULL` filters out user-side revoked networks
+    // (plan §6.3 / §15: federation revocation must work in both
+    // directions). The dispatcher-side revocation is independent —
+    // the dispatcher's auth path checks its own
+    // `federation_trust.revoked_at` — so either side alone is
+    // sufficient to break federation.
     let row: Option<(String, String)> = sqlx::query_as(
         "SELECT network_label, dispatcher_endpoint FROM user_networks \
-         WHERE id = $1 AND user_id = $2",
+         WHERE id = $1 AND user_id = $2 AND removed_at IS NULL",
     )
     .bind(id)
     .bind(session.user_id)

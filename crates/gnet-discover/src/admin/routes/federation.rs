@@ -16,10 +16,10 @@
 
 use axum::Json;
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{delete, post};
 use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -54,6 +54,12 @@ pub enum FederationError {
     BadOrigin,
     #[error("token already registered")]
     Duplicate,
+    /// Operator asked to revoke a federation trust row that either
+    /// doesn't exist or is already revoked. We collapse both into a
+    /// single 404 so the dispatcher doesn't leak whether a given
+    /// trust id ever existed.
+    #[error("federation trust not found")]
+    NotFound,
     #[error("session: {0}")]
     Session(#[from] crate::admin::session::SessionError),
     #[error("database: {0}")]
@@ -85,6 +91,7 @@ impl IntoResponse for FederationError {
             FederationError::NotLoggedIn => StatusCode::UNAUTHORIZED,
             FederationError::BadToken | FederationError::BadOrigin => StatusCode::BAD_REQUEST,
             FederationError::Duplicate => StatusCode::CONFLICT,
+            FederationError::NotFound => StatusCode::NOT_FOUND,
             FederationError::Session(_)
             | FederationError::Db(_)
             | FederationError::Cache(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -94,7 +101,9 @@ impl IntoResponse for FederationError {
 }
 
 pub fn routes() -> Router<AdminState> {
-    Router::new().route("/api/federation/register", post(register))
+    Router::new()
+        .route("/api/federation/register", post(register))
+        .route("/api/federation/{trust_id}", delete(revoke))
 }
 
 async fn register(
@@ -172,4 +181,63 @@ async fn register(
     tx.commit().await?;
 
     Ok((StatusCode::CREATED, Json(RegisterResponse { federation_id })))
+}
+
+/// Operator-side revocation. Sets `revoked_at = now()` on a single
+/// `federation_trust` row, writes an audit entry, and returns 204.
+///
+/// `require_login`'s federation-bearer branch already rejects rows
+/// whose `revoked_at IS NOT NULL` (see `auth::require_login`), so
+/// the next request bearing the revoked token gets 401 — no
+/// further code path needs to know about revocation.
+///
+/// Idempotency: a second DELETE on the same trust id returns 404
+/// (the UPDATE … WHERE revoked_at IS NULL returns 0 rows). This
+/// trades easy retry for not leaking "the row used to exist but
+/// you already revoked it" — the operator's audit log carries the
+/// canonical history.
+async fn revoke(
+    State(state): State<AdminState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Path(trust_id): Path<Uuid>,
+) -> Result<StatusCode, FederationError> {
+    let session = require_login(&state, &jar, &headers).await?;
+
+    let mut tx = state.pool.begin().await?;
+
+    // Single UPDATE scoped to the live row for this network. WHERE
+    // revoked_at IS NULL collapses "absent" + "already revoked"
+    // into a single zero-rows outcome.
+    let res = sqlx::query(
+        "UPDATE federation_trust \
+         SET revoked_at = now() \
+         WHERE id = $1 AND network_id = $2 AND revoked_at IS NULL",
+    )
+    .bind(trust_id)
+    .bind(state.network_id)
+    .execute(&mut *tx)
+    .await?;
+
+    if res.rows_affected() == 0 {
+        return Err(FederationError::NotFound);
+    }
+
+    let detail = serde_json::json!({
+        "federation_id": trust_id,
+    });
+    sqlx::query(
+        "INSERT INTO audit_log (network_id, actor_kind, actor_id, action, target, detail) \
+         VALUES ($1, 'local_admin', $2, 'federation.revoke', $3, $4)",
+    )
+    .bind(state.network_id)
+    .bind(session.user_id.to_string())
+    .bind(trust_id.to_string())
+    .bind(&detail)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
