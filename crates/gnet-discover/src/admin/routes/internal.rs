@@ -81,12 +81,16 @@ async fn snapshot(
 
     // Two-factor lookup: a stolen token alone is not enough; the row's
     // x25519_pubkey must match too. (And we scope by network_id, since
-    // each device belongs to exactly one network in v1.1.)
+    // each device belongs to exactly one network in v1.1.) A kicked row
+    // (`removed_at IS NOT NULL`) is treated as if it didn't exist, so a
+    // device that's been kicked stops being able to push snapshots —
+    // the daemon sees 401 and stays disconnected until it re-registers.
     let row: Option<(Uuid,)> = sqlx::query_as(
         "SELECT id FROM devices \
          WHERE network_id = $1 \
            AND x25519_pubkey = $2 \
-           AND device_token_hash = $3",
+           AND device_token_hash = $3 \
+           AND removed_at IS NULL",
     )
     .bind(state.network_id)
     .bind(&pubkey_raw[..])

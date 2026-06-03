@@ -49,7 +49,7 @@ async fn list_devices(
                 vip_v6::text AS vip_v6, \
                 relay_eligible, last_reflexive, last_seen_at, created_at \
          FROM devices \
-         WHERE network_id = $1 \
+         WHERE network_id = $1 AND removed_at IS NULL \
          ORDER BY alias",
     )
     .bind(state.network_id)
