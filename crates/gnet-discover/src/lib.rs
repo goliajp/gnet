@@ -7,10 +7,12 @@
 //! Dependency footprint is intentionally constrained — see memory
 //! `[[feedback-gnet-0dep-self-research]]` → "Control plane 边界".
 
+pub mod admin;
 pub mod api;
 pub mod auth;
 pub mod config;
 pub mod http;
+pub mod import;
 pub mod state;
 pub mod sync;
 pub mod time;

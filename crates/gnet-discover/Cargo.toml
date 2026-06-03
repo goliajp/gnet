@@ -14,7 +14,11 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 # control-plane allow-list — see memory [[feedback-gnet-0dep-self-research]]
-# "Control plane 边界 (2026-05-26 v0.2 协商)".
+# "Control plane 边界 (2026-05-26 v0.2 协商)". v1.1 expands the budget to
+# include the dispatcher's PG layer + admin web stack (sqlx, uuid,
+# gnet-discover-schema, gnet-crypto for SHA-3-256). These are dispatcher-
+# only — the daemon's dep tree (`cargo tree -p gnet`) stays unchanged and
+# is verified in CI.
 [dependencies]
 tokio.workspace = true
 serde.workspace = true
@@ -24,3 +28,13 @@ thiserror.workspace = true
 tracing.workspace = true
 gnet-rand.workspace = true
 gnet-hex.workspace = true
+gnet-crypto.workspace = true
+gnet-discover-schema.workspace = true
+sqlx = { workspace = true, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "macros"] }
+uuid.workspace = true
+axum.workspace = true
+axum-extra.workspace = true
+argon2.workspace = true
+chrono.workspace = true
+redis.workspace = true
+time.workspace = true

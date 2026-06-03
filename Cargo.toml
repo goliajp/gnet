@@ -16,6 +16,7 @@ members = [
     "crates/gnet-console-schema",
     "crates/gnet-crypto",
     "crates/gnet-discover",
+    "crates/gnet-discover-schema",
     "crates/gnet-hex",
     "crates/gnet-noise",
     "crates/gnet-punch",
@@ -34,6 +35,7 @@ members = [
 gnet-config = { path = "crates/gnet-config", version = "1.0.0" }
 gnet-console-schema = { path = "crates/gnet-console-schema", version = "1.0.0" }
 gnet-crypto = { path = "crates/gnet-crypto", version = "1.0.0" }
+gnet-discover-schema = { path = "crates/gnet-discover-schema", version = "1.0.0" }
 gnet-hex = { path = "crates/gnet-hex", version = "1.0.0" }
 gnet-noise = { path = "crates/gnet-noise", version = "1.0.0" }
 gnet-punch = { path = "crates/gnet-punch", version = "1.0.0" }
@@ -63,6 +65,24 @@ snow = "0.10"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
 sqlx = { version = "0.8", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+# Argon2id for local-admin password hashing (plan §11). Parameters live in
+# a single constant in `gnet-discover/src/admin/auth.rs`; bump in one place.
+argon2 = "0.5"
+# RFC 3339 / timestamptz friendly time type — sqlx already accepts
+# chrono::DateTime<Utc> against `TIMESTAMPTZ` columns via this feature.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+# Valkey client (RESP-compatible). connection-manager gives us a single
+# multiplexed connection with automatic reconnect — plenty for the
+# dispatcher's session / federation-cache workload.
+redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager"] }
+# Cookie jar + Set-Cookie helpers on top of axum. cookie feature transitively
+# pulls the `cookie` crate; we reach for SameSite / Cookie through axum-extra
+# re-exports so there's only one cookie crate version in the tree.
+axum-extra = { version = "0.10", default-features = false, features = ["cookie"] }
+# `time::Duration` for cookie max-age. cookie 0.18 uses time 0.3 internally;
+# pinning the version here keeps the dep tree consistent.
+time = { version = "0.3", default-features = false }
 
 [workspace.lints.rust]
 warnings = "deny"
