@@ -151,6 +151,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          # only the binary tarballs we uploaded — skip the buildx-emitted
+          # `.dockerbuild` summary artifact which is for the Actions UI only.
+          pattern: binary-*
 
       - name: stage tarballs
         run: |
