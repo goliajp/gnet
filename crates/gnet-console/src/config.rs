@@ -23,6 +23,10 @@ pub struct Config {
     /// supported mode). When mailrs is configured the binary flips this
     /// off so the verification link gates first sign-in.
     pub auto_verify_email: bool,
+    /// Externally-visible base URL of this console. OAuth callbacks are
+    /// constructed against this — e.g. `<public_url>/api/auth/oauth/google/callback`.
+    /// Defaults to the `bind` address in dev (`http://127.0.0.1:6015`).
+    pub public_url: String,
 }
 
 impl Config {
@@ -52,11 +56,18 @@ impl Config {
             .map(|s| s.trim().is_empty())
             .unwrap_or(true);
 
+        let public_url = std::env::var("GNET_CONSOLE_PUBLIC_URL")
+            .ok()
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("http://{bind}"));
+
         Ok(Self {
             bind,
             database_url,
             valkey_url,
             auto_verify_email,
+            public_url,
         })
     }
 }

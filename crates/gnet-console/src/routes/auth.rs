@@ -239,15 +239,27 @@ async fn open_session(
     user_id: Uuid,
     email: Option<String>,
 ) -> Result<(CookieJar, Session), AuthRouteError> {
-    let sid = session::new();
-    let key = sid.key();
     let session = Session {
         user_id,
         email,
         created_at: Utc::now(),
     };
+    let jar = open_session_cookies(jar, state, &session).await?;
+    Ok((jar, session))
+}
+
+/// Lower-level: write `session` into Valkey + attach the session + CSRF
+/// cookies to `jar`. Exposed for OAuth callbacks where the upstream
+/// flow constructs the `Session` itself.
+pub async fn open_session_cookies(
+    jar: CookieJar,
+    state: &AppState,
+    session: &Session,
+) -> Result<CookieJar, AuthRouteError> {
+    let sid = session::new();
+    let key = sid.key();
     let mut kv = state.kv.clone();
-    session::store(&mut kv, &key, &session).await?;
+    session::store(&mut kv, &key, session).await?;
 
     let session_cookie = Cookie::build((SESSION_COOKIE, sid.cookie_value()))
         .http_only(true)
@@ -266,7 +278,7 @@ async fn open_session(
         .max_age(Duration::seconds(SESSION_TTL_SECS as i64))
         .build();
 
-    Ok((jar.add(session_cookie).add(csrf_cookie), session))
+    Ok(jar.add(session_cookie).add(csrf_cookie))
 }
 
 pub async fn require_login(
