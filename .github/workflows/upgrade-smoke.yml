@@ -1,0 +1,114 @@
+# v1.0 -> v1.1 state.json importer smoke test (plan §15).
+#
+# Boots a clean Postgres 18, runs `gnet-discover --import-state`
+# against a small `tests/fixtures/v1_0_state.json`, and asserts:
+#   - the importer exits 0
+#   - the `networks` row matches GNET_DISPATCHER_IMPORT_NETWORK_NAME
+#   - `devices` count matches the fixture (2 rows)
+#   - the source file has been renamed to `<path>.imported`
+#
+# This is the upgrade-path gate: a v1.0 operator with a populated
+# state.json must be able to point a v1.1 dispatcher at it and end
+# up with the same fleet visible in PG. The fixture is tiny so the
+# job is cheap; richer upgrade scenarios (token preservation under
+# rotation, etc.) live in the internal-fleet dogfood loop.
+
+name: upgrade-smoke
+
+on:
+  pull_request:
+    paths:
+      - 'crates/gnet-discover/**'
+      - 'crates/gnet-discover-schema/**'
+      - 'tests/fixtures/v1_0_state.json'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/upgrade-smoke.yml'
+  workflow_dispatch:
+
+jobs:
+  importer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: gnet
+          POSTGRES_PASSWORD: ci-pg-password-not-secret
+          POSTGRES_DB: gnet_dispatcher
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gnet -d gnet_dispatcher"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install psql client
+        # Needed for the PG assertions below; the runner's base image
+        # ships docker but not the postgres client.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Stage the fixture (the importer renames it on success)
+        run: |
+          mkdir -p /tmp/gnet-import
+          cp tests/fixtures/v1_0_state.json /tmp/gnet-import/state.json
+
+      - name: Run --import-state
+        env:
+          GNET_DISCOVER_STATE_PATH: /tmp/gnet-import/state.json
+          GNET_DISCOVER_DATABASE_URL: postgres://gnet:ci-pg-password-not-secret@127.0.0.1:5432/gnet_dispatcher
+          GNET_DISPATCHER_IMPORT_NETWORK_NAME: ci-import
+          GNET_DISCOVER_RELAYS: 198.51.100.10:65433
+        run: cargo run -p gnet-discover -- --import-state
+
+      - name: Verify imported state in PG
+        env:
+          PGPASSWORD: ci-pg-password-not-secret
+        run: |
+          set -e
+
+          # network row matches the env-supplied name
+          name=$(psql -h 127.0.0.1 -U gnet -d gnet_dispatcher -tA \
+            -c "SELECT name FROM networks LIMIT 1;")
+          echo "network name: '$name'"
+          test "$name" = "ci-import" \
+            || { echo "expected name ci-import, got '$name'"; exit 1; }
+
+          # device count matches fixture
+          count=$(psql -h 127.0.0.1 -U gnet -d gnet_dispatcher -tA \
+            -c "SELECT count(*) FROM devices;")
+          echo "device count: $count"
+          test "$count" = "2" \
+            || { echo "expected 2 devices, got $count"; exit 1; }
+
+          # both alias rows are present
+          aliases=$(psql -h 127.0.0.1 -U gnet -d gnet_dispatcher -tA \
+            -c "SELECT alias FROM devices ORDER BY alias;")
+          echo "aliases: $aliases"
+          expected=$(printf 'ci-alpha\nci-beta')
+          test "$aliases" = "$expected" \
+            || { echo "alias mismatch"; exit 1; }
+
+          # relay env-supplied row is present
+          relay_count=$(psql -h 127.0.0.1 -U gnet -d gnet_dispatcher -tA \
+            -c "SELECT count(*) FROM relays;")
+          echo "relay count: $relay_count"
+          test "$relay_count" = "1" \
+            || { echo "expected 1 relay, got $relay_count"; exit 1; }
+
+      - name: Verify source file was renamed
+        run: |
+          test ! -f /tmp/gnet-import/state.json \
+            || { echo "source state.json should have been renamed"; exit 1; }
+          test -f /tmp/gnet-import/state.json.imported \
+            || { echo "expected /tmp/gnet-import/state.json.imported"; exit 1; }
