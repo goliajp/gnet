@@ -124,6 +124,14 @@ pub struct Config {
     /// Override for the hosts file the managed block is spliced into.
     /// `None` uses the default `/etc/hosts`. Mirrors `gnet join --hosts`.
     pub hosts_path: Option<PathBuf>,
+    /// Dispatcher admin endpoint base URL — `http://host:port`, without a
+    /// trailing slash. When set together with `device_token`, the daemon
+    /// periodically POSTs an admin snapshot to
+    /// `<admin_endpoint>/api/internal/snapshot`. Independent of
+    /// `coordinator` so the operator can run the dispatcher's admin
+    /// server on a separate port (the v1.1 default; see
+    /// `docs/v1.1-plan.md` §17.4). `None` disables the push channel.
+    pub admin_endpoint: Option<String>,
     /// Configured peers.
     pub peers: Vec<PeerConfig>,
 }
@@ -141,6 +149,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
     let mut alias: Option<String> = None;
     let mut manage_hosts: Option<bool> = None;
     let mut hosts_path: Option<PathBuf> = None;
+    let mut admin_endpoint: Option<String> = None;
     let mut peers = Vec::new();
 
     for (lineno, raw) in text.lines().enumerate() {
@@ -216,6 +225,15 @@ pub fn parse(text: &str) -> Result<Config, String> {
                 let p = t.next().ok_or_else(|| err("hosts_path: missing path"))?;
                 hosts_path = Some(PathBuf::from(p));
             }
+            "admin_endpoint" => {
+                let url = t.next().ok_or_else(|| err("admin_endpoint: missing url"))?;
+                if !(url.starts_with("http://") || url.starts_with("https://")) {
+                    return Err(err(
+                        "admin_endpoint: url must start with http:// or https://",
+                    ));
+                }
+                admin_endpoint = Some(url.trim_end_matches('/').to_string());
+            }
             "peer" => {
                 let pk = t.next().ok_or_else(|| err("peer: missing public key"))?;
                 let public = hex::decode_32(pk).ok_or_else(|| err("peer: bad 32-byte hex"))?;
@@ -272,6 +290,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
         alias,
         manage_hosts: manage_hosts.unwrap_or(true),
         hosts_path,
+        admin_endpoint,
         peers,
     })
 }

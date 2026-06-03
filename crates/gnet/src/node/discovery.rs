@@ -123,6 +123,7 @@ pub(super) fn spawn(
     node: Arc<Mutex<Node>>,
     coordinators: Vec<String>,
     device_token: Option<String>,
+    admin_endpoint: Option<String>,
     hosts: HostsSync,
 ) {
     let our_pk_hex = {
@@ -199,6 +200,25 @@ pub(super) fn spawn(
                 }
             }
 
+            // Admin snapshot push (plan §17.4). Only fires when both a
+            // device_token (auth) and an admin_endpoint (target) are
+            // configured. Reuses the same curl shell-out the daemon
+            // already uses for /endpoint-report — no new HTTP dep.
+            if let (Some(tok), Some(admin)) =
+                (device_token.as_deref(), admin_endpoint.as_deref())
+            {
+                let (reflexive, peer_count) = {
+                    let g = node.lock().expect("node mutex");
+                    (g.reflexive, g.peers.len())
+                };
+                match push_snapshot(admin, tok, &our_pk_hex, reflexive, peer_count) {
+                    Ok(()) => eprintln!(
+                        "event=snapshot_pushed admin={admin} peers={peer_count}"
+                    ),
+                    Err(e) => eprintln!("event=snapshot_push_failed error=\"{e}\""),
+                }
+            }
+
             thread::sleep(POLL_INTERVAL);
         }
     });
@@ -224,6 +244,58 @@ fn try_in_order<T>(
         }
     }
     Err(last_err.unwrap_or_else(|| io::Error::other("no coordinators configured")))
+}
+
+/// POST a small admin snapshot to `<admin_endpoint>/api/internal/snapshot`
+/// (plan §17.4). Body shape is the JSON the dispatcher's
+/// `admin/routes/internal.rs::SnapshotRequest` expects. We hand-roll the
+/// body string because the daemon is zero-deps — no serde_json — and the
+/// payload is small + escape-free (the only string fields are the hex
+/// pubkey and a SocketAddr's Display, neither of which contains a quote
+/// or backslash).
+fn push_snapshot(
+    admin_endpoint: &str,
+    device_token: &str,
+    pubkey_hex: &str,
+    reflexive: Option<SocketAddr>,
+    peer_count: usize,
+) -> io::Result<()> {
+    let url = format!("{admin_endpoint}/api/internal/snapshot");
+    let reflexive_json = match reflexive {
+        Some(ep) => format!("\"{ep}\""),
+        None => "null".to_string(),
+    };
+    let body = format!(
+        r#"{{"device_pubkey_hex":"{pubkey_hex}","snapshot":{{"version":"{}","reflexive":{reflexive_json},"peer_count":{peer_count}}}}}"#,
+        env!("CARGO_PKG_VERSION")
+    );
+    let out = Command::new("curl")
+        .arg("--silent")
+        .arg("--show-error")
+        .arg("--fail-with-body")
+        .arg("--connect-timeout")
+        .arg("10")
+        .arg("--max-time")
+        .arg("30")
+        .arg("-X")
+        .arg("POST")
+        .arg("-H")
+        .arg(format!("Authorization: Bearer {device_token}"))
+        .arg("-H")
+        .arg("Content-Type: application/json")
+        .arg("--data-binary")
+        .arg(&body)
+        .arg(&url)
+        .output()?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        return Err(io::Error::other(format!(
+            "curl POST {url} exit={:?} stderr={stderr} body={stdout}",
+            out.status.code()
+        )));
+    }
+    Ok(())
 }
 
 /// POST our reflexive endpoint to `<coordinator>/endpoint-report` with the
