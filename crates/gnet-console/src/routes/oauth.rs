@@ -156,8 +156,10 @@ async fn callback(
         state.public_url,
         p.name()
     );
-    let access_token = p.exchange(&state.http, &code, &redirect_uri).await?;
-    let ext = p.fetch_userinfo(&state.http, &access_token).await?;
+    let mut kv = state.kv.clone();
+    let ext = p
+        .identify(&state.http, &mut kv, &code, &redirect_uri)
+        .await?;
 
     let mut tx = state.pool.begin().await?;
     let existing: Option<(Uuid,)> = sqlx::query_as(

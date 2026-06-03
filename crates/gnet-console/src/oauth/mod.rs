@@ -7,6 +7,7 @@
 //! Providers are an `enum` (not a `dyn Trait`) so handlers can take a
 //! plain reference and async methods compose without `Box<dyn ...>`.
 
+pub mod apple;
 pub mod github;
 pub mod google;
 
@@ -43,6 +44,7 @@ pub struct ExternalUser {
 pub enum Provider {
     Google(google::Google),
     GitHub(github::GitHub),
+    Apple(apple::Apple),
 }
 
 impl Provider {
@@ -50,6 +52,7 @@ impl Provider {
         match self {
             Provider::Google(_) => "google",
             Provider::GitHub(_) => "github",
+            Provider::Apple(_) => "apple",
         }
     }
 
@@ -57,29 +60,31 @@ impl Provider {
         match self {
             Provider::Google(g) => g.authorize_url(state, redirect_uri),
             Provider::GitHub(g) => g.authorize_url(state, redirect_uri),
+            Provider::Apple(a) => a.authorize_url(state, redirect_uri),
         }
     }
 
-    pub async fn exchange(
+    /// Run the code → identity flow. For Google / GitHub this is a
+    /// two-step (exchange code → access_token → userinfo); for Apple
+    /// it's one combined ID-token step. We hide the split behind the
+    /// `Provider` so the route handler stays uniform.
+    pub async fn identify(
         &self,
         http: &reqwest::Client,
+        kv: &mut redis::aio::ConnectionManager,
         code: &str,
         redirect_uri: &str,
-    ) -> Result<String, OAuthError> {
-        match self {
-            Provider::Google(g) => g.exchange(http, code, redirect_uri).await,
-            Provider::GitHub(g) => g.exchange(http, code, redirect_uri).await,
-        }
-    }
-
-    pub async fn fetch_userinfo(
-        &self,
-        http: &reqwest::Client,
-        access_token: &str,
     ) -> Result<ExternalUser, OAuthError> {
         match self {
-            Provider::Google(g) => g.userinfo(http, access_token).await,
-            Provider::GitHub(g) => g.userinfo(http, access_token).await,
+            Provider::Google(g) => {
+                let tok = g.exchange(http, code, redirect_uri).await?;
+                g.userinfo(http, &tok).await
+            }
+            Provider::GitHub(g) => {
+                let tok = g.exchange(http, code, redirect_uri).await?;
+                g.userinfo(http, &tok).await
+            }
+            Provider::Apple(a) => a.exchange_and_identify(http, kv, code, redirect_uri).await,
         }
     }
 }
