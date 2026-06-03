@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+/* Tailwind v4 is CSS-first; we keep the default theme + add the
+   monospace stack we want as the surface font for the admin UI.
+   Picking a stack rather than loading a webfont keeps the dev cycle
+   instant and the prod bundle small. */
+@theme {
+  --font-mono:
+    "JetBrains Mono", "SF Mono", ui-monospace, "Cascadia Code",
+    "Roboto Mono", monospace;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
