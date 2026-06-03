@@ -32,6 +32,14 @@
 //!   egress can be capped externally; the binary itself logs only one line
 //!   per minute summarising relay throughput + active peer count.
 //!
+//! # Admin HTTP surface (v1.1 §17.8, opt-in lite mode)
+//!
+//! When `GNET_RELAY_ADMIN_BIND` is set, a dedicated OS thread runs an
+//! axum HTTP server with bearer-auth read endpoints (`/api/host-role`,
+//! `/api/peers`, `/api/traffic`) for the v1.1 dispatcher / console to
+//! inspect this relay. The forwarder's UDP loop stays on the main thread,
+//! unchanged. See `admin.rs` for the lite-mode trade-offs vs. plan §5.3.
+//!
 //! Usage:
 //!
 //! ```text
@@ -40,15 +48,22 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
+mod admin;
+mod shared;
+
 use std::env;
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use gnet_relay::KEY_LEN;
 use gnet_wire::Kind;
+
+use crate::admin::{AdminState, MIN_ADMIN_TOKEN_LEN};
+use crate::shared::{PeerEntry, PeerKey, SharedPeers, Stats, StatsSnapshot, new_peers};
 
 /// MTU-sized recv buffer reused on every iteration. 1500 covers a typical
 /// public-internet path MTU; gnet datagrams stay below 1400 by design.
@@ -72,7 +87,15 @@ fn main() -> ExitCode {
         }
     };
 
-    match run(cfg) {
+    let admin_cfg = match AdminConfig::from_env() {
+        Ok(c) => c,
+        Err(msg) => {
+            eprintln!("gnet-relay-server: admin env: {msg}");
+            return ExitCode::from(2);
+        }
+    };
+
+    match run(cfg, admin_cfg) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("gnet-relay-server: fatal: {e}");
@@ -118,24 +141,39 @@ impl Config {
     }
 }
 
-/// Per-peer registry entry: where we last saw them and when.
-struct PeerEntry {
-    endpoint: SocketAddr,
-    last_seen: Instant,
+/// Opt-in admin HTTP surface config, parsed from env vars (no CLI flag —
+/// keeps the public usage line unchanged from v1.0 deployments).
+/// `Some(..)` only when both bind + token are present and valid;
+/// otherwise the forwarder runs without an admin server (`None`).
+#[derive(Debug)]
+struct AdminConfig {
+    bind: SocketAddr,
+    token: String,
 }
 
-/// Periodically-logged counters, reset on each emission.
-#[derive(Default)]
-struct Stats {
-    forwarded: u64,
-    bytes_in: u64,
-    bytes_out: u64,
-    unknown_dst: u64,
-    non_relay: u64,
-    self_addressed: u64,
+impl AdminConfig {
+    fn from_env() -> Result<Option<Self>, String> {
+        let bind = match env::var("GNET_RELAY_ADMIN_BIND") {
+            Ok(v) if !v.is_empty() => v,
+            _ => return Ok(None),
+        };
+        let bind: SocketAddr = bind
+            .parse()
+            .map_err(|e| format!("GNET_RELAY_ADMIN_BIND {bind:?}: {e}"))?;
+        let token = env::var("GNET_RELAY_ADMIN_TOKEN").map_err(|_| {
+            "GNET_RELAY_ADMIN_TOKEN required when GNET_RELAY_ADMIN_BIND is set".to_string()
+        })?;
+        if token.len() < MIN_ADMIN_TOKEN_LEN {
+            return Err(format!(
+                "GNET_RELAY_ADMIN_TOKEN must be at least {MIN_ADMIN_TOKEN_LEN} bytes (got {})",
+                token.len()
+            ));
+        }
+        Ok(Some(Self { bind, token }))
+    }
 }
 
-fn run(cfg: Config) -> io::Result<()> {
+fn run(cfg: Config, admin_cfg: Option<AdminConfig>) -> io::Result<()> {
     let sock = UdpSocket::bind(cfg.listen)?;
     eprintln!(
         "gnet-relay-server: listening on {} (idle prune after {}s)",
@@ -143,11 +181,35 @@ fn run(cfg: Config) -> io::Result<()> {
         cfg.stale_after.as_secs()
     );
 
+    let peers: SharedPeers = new_peers();
+    let stats: Arc<Stats> = Arc::new(Stats::default());
+    let started_at = Instant::now();
+
+    if let Some(adm) = admin_cfg {
+        let admin_state = AdminState {
+            peers: peers.clone(),
+            stats: stats.clone(),
+            started_at,
+            expected_token: Arc::new(adm.token),
+        };
+        let bind = adm.bind;
+        // Dedicated OS thread keeps the forwarder's recv loop on the
+        // main thread untouched. The admin server spins up its own
+        // current-thread Tokio runtime inside.
+        std::thread::Builder::new()
+            .name("gnet-relay-admin".into())
+            .spawn(move || {
+                if let Err(e) = admin::run_blocking(bind, admin_state) {
+                    eprintln!("gnet-relay-server: admin HTTP exited: {e}");
+                }
+            })
+            .expect("spawning admin thread");
+    }
+
     let mut buf = [0u8; MTU];
-    let mut peers: HashMap<[u8; KEY_LEN], PeerEntry> = HashMap::new();
-    let mut stats = Stats::default();
     let mut last_log = Instant::now();
     let mut last_prune = Instant::now();
+    let mut prev_log_snapshot = StatsSnapshot::default();
     let prune_interval = cfg.stale_after / 4;
 
     loop {
@@ -156,21 +218,25 @@ fn run(cfg: Config) -> io::Result<()> {
         // activity, which on a real relay is many packets/sec — fine.
         let now = Instant::now();
         if now.duration_since(last_log) >= LOG_INTERVAL {
+            let cur = stats.snapshot();
+            let d = cur.delta(prev_log_snapshot);
+            let peer_count = peers.read().map(|t| t.len()).unwrap_or(0);
             eprintln!(
-                "gnet-relay-server: peers={} forwarded={} in={}B out={}B unknown_dst={} non_relay={} self_addr={}",
-                peers.len(),
-                stats.forwarded,
-                stats.bytes_in,
-                stats.bytes_out,
-                stats.unknown_dst,
-                stats.non_relay,
-                stats.self_addressed,
+                "gnet-relay-server: peers={peer_count} forwarded={} in={}B out={}B unknown_dst={} non_relay={} self_addr={}",
+                d.forwarded,
+                d.bytes_in,
+                d.bytes_out,
+                d.unknown_dst,
+                d.non_relay,
+                d.self_addressed,
             );
-            stats = Stats::default();
+            prev_log_snapshot = cur;
             last_log = now;
         }
         if now.duration_since(last_prune) >= prune_interval {
-            peers.retain(|_, e| now.duration_since(e.last_seen) < cfg.stale_after);
+            if let Ok(mut t) = peers.write() {
+                t.retain(|_, e| now.duration_since(e.last_seen) < cfg.stale_after);
+            }
             last_prune = now;
         }
 
@@ -179,41 +245,57 @@ fn run(cfg: Config) -> io::Result<()> {
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(e),
         };
-        stats.bytes_in = stats.bytes_in.saturating_add(n as u64);
+        stats.bytes_in.fetch_add(n as u64, Ordering::Relaxed);
 
         let Some((kind, body)) = gnet_wire::parse(&buf[..n]) else {
-            stats.non_relay += 1;
+            stats.non_relay.fetch_add(1, Ordering::Relaxed);
             continue;
         };
         if kind != Kind::RelayData {
-            stats.non_relay += 1;
+            stats.non_relay.fetch_add(1, Ordering::Relaxed);
             continue;
         }
         let Some((src, dst, _inner)) = gnet_relay::decode(body) else {
-            stats.non_relay += 1;
+            stats.non_relay.fetch_add(1, Ordering::Relaxed);
             continue;
         };
 
-        match register_and_route(&mut peers, src, dst, from, now) {
+        let route = {
+            // Write-lock window kept to the registry mutation + the
+            // immediate routing decision. Forwarding (the actual UDP
+            // send) happens after the lock drops — admin readers and
+            // future forwarder iterations don't queue behind the syscall.
+            let mut table = match peers.write() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            register_and_route(&mut table, src, dst, from, now)
+        };
+
+        match route {
             Route::Echo(ep) => {
-                stats.self_addressed += 1;
+                stats.self_addressed.fetch_add(1, Ordering::Relaxed);
                 // Echo the self-addressed keepalive back unchanged so the
                 // sender can measure this relay's liveness + RTT and route
                 // around a dead relay. The node identifies it by src==dst==self.
                 match sock.send_to(&buf[..n], ep) {
-                    Ok(sent) => stats.bytes_out = stats.bytes_out.saturating_add(sent as u64),
+                    Ok(sent) => {
+                        stats.bytes_out.fetch_add(sent as u64, Ordering::Relaxed);
+                    }
                     Err(e) => eprintln!("gnet-relay-server: echo to {ep} failed: {e}"),
                 }
             }
-            Route::UnknownDst => stats.unknown_dst += 1,
+            Route::UnknownDst => {
+                stats.unknown_dst.fetch_add(1, Ordering::Relaxed);
+            }
             Route::Forward(endpoint) => {
                 // Forward the whole datagram unchanged. We don't rewrite
                 // anything: the receiver's gnet daemon parses `RelayData ‖
                 // src ‖ dst ‖ inner` exactly as it would from any path.
                 match sock.send_to(&buf[..n], endpoint) {
                     Ok(sent) => {
-                        stats.forwarded += 1;
-                        stats.bytes_out = stats.bytes_out.saturating_add(sent as u64);
+                        stats.forwarded.fetch_add(1, Ordering::Relaxed);
+                        stats.bytes_out.fetch_add(sent as u64, Ordering::Relaxed);
                     }
                     Err(e) => {
                         eprintln!("gnet-relay-server: send to {endpoint} failed: {e}");
@@ -252,7 +334,7 @@ enum Route {
 /// forwarding — the relay-registration keepalive) and is dropped, not
 /// looped back.
 fn register_and_route(
-    peers: &mut HashMap<[u8; KEY_LEN], PeerEntry>,
+    peers: &mut std::collections::HashMap<PeerKey, PeerEntry>,
     src: &[u8; KEY_LEN],
     dst: &[u8; KEY_LEN],
     from: SocketAddr,
@@ -275,6 +357,7 @@ fn register_and_route(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     fn key(b: u8) -> [u8; KEY_LEN] {
         [b; KEY_LEN]
@@ -353,4 +436,5 @@ mod tests {
     fn cli_rejects_unknown_arg() {
         assert!(Config::from_argv(vec!["--no-such".into()]).is_err());
     }
+
 }

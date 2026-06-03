@@ -903,8 +903,13 @@ dependencies = [
 name = "gnet-relay-server"
 version = "1.0.0"
 dependencies = [
+ "axum",
+ "gnet-hex",
  "gnet-relay",
  "gnet-wire",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
