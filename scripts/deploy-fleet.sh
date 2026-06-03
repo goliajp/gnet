@@ -29,6 +29,12 @@
 
 set -euo pipefail
 
+# Repo root from this script's location — so `sudo …/deploy-fleet.sh mini`
+# resolves cargo / target / contrib paths correctly even when sudo doesn't
+# preserve the caller's cwd.
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+
 ALL_HOSTS=${ALL_HOSTS:-"t01 t02 lx64 mini"}
 # Hosts handled locally (cargo build on this Mac + launchctl), not via ssh.
 # The single-Mac fleet member "mini" is this workstation itself.
@@ -100,13 +106,14 @@ deploy_local() {
     local host=$1
     echo "==> [deploy] $host (local macOS — cargo build + launchctl)"
 
-    # build host-arch release
-    cargo build --release -p gnet 2>&1 | tail -3
+    # build host-arch release in the repo root, not whatever sudo's cwd is
+    ( cd "$REPO_ROOT" && cargo build --release -p gnet 2>&1 | tail -3 )
 
-    # backup unconditionally + atomic install
+    # backup unconditionally + atomic install (absolute paths throughout)
     sudo cp /usr/local/bin/gnet /usr/local/bin/gnet.bak 2>/dev/null || true
-    sudo install -m 0755 target/release/gnet /usr/local/bin/gnet
-    sudo install -m 0644 -o root -g wheel crates/gnet/contrib/launchd/com.gnet.gnet.plist \
+    sudo install -m 0755 "$REPO_ROOT/target/release/gnet" /usr/local/bin/gnet
+    sudo install -m 0644 -o root -g wheel \
+        "$REPO_ROOT/crates/gnet/contrib/launchd/com.gnet.gnet.plist" \
         /Library/LaunchDaemons/com.gnet.gnet.plist
 
     # bootout is non-idempotent: returns non-zero if already booted-out.
