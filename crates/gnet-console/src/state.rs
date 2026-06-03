@@ -15,4 +15,5 @@ pub struct AppState {
     pub oauth: Arc<HashMap<&'static str, Provider>>,
     /// Mirrored from [`crate::config::Config::auto_verify_email`].
     pub auto_verify_email: bool,
+    pub federation_secret: [u8; 32],
 }

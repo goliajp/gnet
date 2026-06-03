@@ -8,6 +8,7 @@ pub mod banner;
 pub mod csrf;
 pub mod health;
 pub mod host_role;
+pub mod networks;
 pub mod oauth;
 
 pub fn router(state: AppState) -> Router {
@@ -17,6 +18,7 @@ pub fn router(state: AppState) -> Router {
         .merge(host_role::routes())
         .merge(auth::routes())
         .merge(oauth::routes())
+        .merge(networks::routes())
         .with_state(state)
         .layer(middleware::from_fn(csrf::guard))
 }
