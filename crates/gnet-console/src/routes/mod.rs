@@ -6,6 +6,7 @@ use crate::state::AppState;
 pub mod auth;
 pub mod banner;
 pub mod csrf;
+pub mod headers;
 pub mod health;
 pub mod host_role;
 pub mod networks;
@@ -29,4 +30,7 @@ pub fn router(state: AppState) -> Router {
         .merge(spa::routes())
         .with_state(state)
         .layer(middleware::from_fn(csrf::guard))
+        // Defensive HTTP headers ride on every response. Outermost
+        // so they wrap CSRF rejections too (plan §17.12 hardening).
+        .layer(middleware::from_fn(headers::add_headers))
 }

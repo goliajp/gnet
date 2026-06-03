@@ -27,6 +27,18 @@ use crate::state::AppState;
 const SESSION_COOKIE: &str = "gnet_sess";
 const MIN_PASSWORD_LEN: usize = 12;
 
+/// Whether the SaaS console is fronted by HTTPS — controls the
+/// `Secure` attribute on session + CSRF + OAuth-state cookies.
+/// Default `true`: the console is a SaaS surface served behind
+/// Caddy with TLS. Set `GNET_CONSOLE_SECURE_COOKIES=0` to opt out
+/// for plain-HTTP dev setups; any non-empty non-zero value keeps
+/// the default.
+pub(super) fn secure_cookies() -> bool {
+    std::env::var("GNET_CONSOLE_SECURE_COOKIES")
+        .map(|v| v != "0" && !v.is_empty())
+        .unwrap_or(true)
+}
+
 #[derive(Deserialize)]
 pub struct RegisterRequest {
     pub email: String,
@@ -60,25 +72,44 @@ pub enum AuthRouteError {
     NotLoggedIn,
     #[error("email already registered")]
     AlreadyExists,
+    /// Brute-force throttle tripped. `retry_after_secs` becomes
+    /// the `Retry-After` header on the 429 response (plan §17.12).
+    #[error("too many login attempts; retry in {retry_after_secs}s")]
+    Throttled { retry_after_secs: u64 },
     #[error("password hash: {0}")]
     Hash(#[from] AuthError),
     #[error("session: {0}")]
     Session(#[from] crate::session::SessionError),
     #[error("database: {0}")]
     Db(#[from] sqlx::Error),
+    #[error("backend: {0}")]
+    App(#[from] crate::error::AppError),
 }
 
 impl IntoResponse for AuthRouteError {
     fn into_response(self) -> Response {
+        // Throttled responses carry a Retry-After header so an
+        // honest client (browser, password manager) backs off.
+        if let AuthRouteError::Throttled { retry_after_secs } = &self {
+            let secs = *retry_after_secs;
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(axum::http::header::RETRY_AFTER, secs.to_string())],
+                self.to_string(),
+            )
+                .into_response();
+        }
         let code = match self {
             AuthRouteError::BadEmail | AuthRouteError::WeakPassword => StatusCode::BAD_REQUEST,
             AuthRouteError::BadCreds
             | AuthRouteError::NotLoggedIn
             | AuthRouteError::Unverified => StatusCode::UNAUTHORIZED,
             AuthRouteError::AlreadyExists => StatusCode::CONFLICT,
+            AuthRouteError::Throttled { .. } => StatusCode::TOO_MANY_REQUESTS,
             AuthRouteError::Hash(_)
             | AuthRouteError::Session(_)
-            | AuthRouteError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            | AuthRouteError::Db(_)
+            | AuthRouteError::App(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (code, self.to_string()).into_response()
     }
@@ -159,6 +190,22 @@ async fn login(
 ) -> Result<(CookieJar, Json<MeResponse>), AuthRouteError> {
     let email = req.email.trim().to_lowercase();
 
+    // Brute-force throttle BEFORE the expensive password verify +
+    // DB roundtrip. Bucket is keyed on the lowercased email so an
+    // attacker can't bypass via case-folding (`ALICE@x` vs.
+    // `alice@x`). The counter is always-incremented; honest users
+    // with a typo burn at most LOGIN_ATTEMPT_LIMIT attempts before
+    // having to wait one window. See `ratelimit.rs`.
+    {
+        let mut kv = state.kv.clone();
+        match crate::ratelimit::account_attempt(&mut kv, &email).await? {
+            crate::ratelimit::Decision::Allow => {}
+            crate::ratelimit::Decision::Throttle { retry_after_secs } => {
+                return Err(AuthRouteError::Throttled { retry_after_secs });
+            }
+        }
+    }
+
     let row: Option<(Uuid, String, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
         "SELECT u.id, c.password_hash, c.verified_at \
          FROM users u JOIN email_credentials c ON c.user_id = u.id \
@@ -174,6 +221,16 @@ async fn login(
     }
     if verified_at.is_none() {
         return Err(AuthRouteError::Unverified);
+    }
+
+    // Successful login — clear the bucket so the user doesn't get
+    // throttled when they next sign in from another device after a
+    // few failed attempts on this one. Best-effort: a failure here
+    // would only mean the bucket decays naturally at the window
+    // boundary, so we ignore the error.
+    {
+        let mut kv = state.kv.clone();
+        let _ = crate::ratelimit::account_clear(&mut kv, &email).await;
     }
 
     let (jar, _) = open_session(jar, &state, user_id, Some(email.clone())).await?;
@@ -261,9 +318,11 @@ pub async fn open_session_cookies(
     let mut kv = state.kv.clone();
     session::store(&mut kv, &key, session).await?;
 
+    let secure = secure_cookies();
     let session_cookie = Cookie::build((SESSION_COOKIE, sid.cookie_value()))
         .http_only(true)
         .same_site(SameSite::Lax)
+        .secure(secure)
         .path("/")
         .max_age(Duration::seconds(SESSION_TTL_SECS as i64))
         .build();
@@ -274,6 +333,7 @@ pub async fn open_session_cookies(
     let csrf_cookie = Cookie::build((CSRF_COOKIE_NAME, csrf_token))
         .http_only(false)
         .same_site(SameSite::Lax)
+        .secure(secure)
         .path("/")
         .max_age(Duration::seconds(SESSION_TTL_SECS as i64))
         .build();

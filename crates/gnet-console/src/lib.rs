@@ -10,6 +10,7 @@ pub mod config;
 pub mod error;
 pub mod federation;
 pub mod oauth;
+pub mod ratelimit;
 pub mod routes;
 pub mod session;
 pub mod state;

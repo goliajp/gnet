@@ -20,6 +20,7 @@
 pub mod auth;
 pub mod bootstrap;
 pub mod config;
+pub mod ratelimit;
 pub mod routes;
 pub mod session;
 pub mod state;

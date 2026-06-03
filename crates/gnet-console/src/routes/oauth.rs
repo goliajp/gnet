@@ -111,6 +111,7 @@ async fn start(
     let cookie = Cookie::build((STATE_COOKIE, nonce))
         .http_only(true)
         .same_site(SameSite::Lax)
+        .secure(super::auth::secure_cookies())
         .path("/")
         .max_age(Duration::seconds(STATE_TTL_SECS as i64))
         .build();
