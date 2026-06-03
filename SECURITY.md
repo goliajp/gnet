@@ -75,15 +75,17 @@ The data plane does not defend against:
 - Compromise of the coordinator's signing key (if/when one exists in a
   later version) — that would let an attacker substitute peer static
   keys in `/peers` responses, which the daemon currently TOFUs.
-- Side-channels outside the constant-time hot paths audited in v0.23
-  Track B (e.g. timing of `/etc/hosts` file writes or systemd journal
-  emission).
+- Side-channels outside the constant-time hot paths audited in the
+  v1.0.0 CT review (e.g. timing of `/etc/hosts` file writes or systemd
+  journal emission) — see
+  [CT-REVIEW.md](crates/gnet-crypto/CT-REVIEW.md) for the scoped
+  audit.
 
 ## Cryptographic primitives
 
 All primitives are hand-rolled and KAT-validated against the official
-RFC / NIST vectors frozen in each crate's test fixtures (v0.23 Track B
-audit). The crypto stack:
+RFC / NIST vectors frozen in each crate's test fixtures (v1.0.0 KAT
+audit; see [KAT.md](crates/gnet-crypto/KAT.md)). The crypto stack:
 
 | primitive | spec | crate |
 |---|---|---|
@@ -97,6 +99,9 @@ audit). The crypto stack:
 
 ## Versions
 
-Until `gnet-v1.0` ships publicly, only the **`develop` branch HEAD** is
-"supported" — older tags do not get backports. Once v1.0 lands, the
-support window will be documented here.
+The latest **`gnet-v1.x.y` release on the `develop` branch** is the
+supported line. Within a 1.x minor, the most recent patch is what
+backports land on. Older 1.x minors get critical security fixes for
+the duration documented in the release notes; pre-1.0 tags
+(`gnet-v0.5` through `gnet-v0.20`) are unsupported and unlikely to
+receive backports.

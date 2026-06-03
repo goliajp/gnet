@@ -1,5 +1,5 @@
 [workspace.package]
-version = "2.0.0-alpha.2"
+version = "1.0.0"
 edition = "2024"
 authors = ["GOLIA K.K."]
 license = "MIT OR Apache-2.0"
@@ -29,15 +29,15 @@ members = [
 # kicks in at `cargo publish` time (Cargo strips `path` and keeps `version`
 # in the uploaded manifest). One workspace.version bump cascades to every
 # internal dep edge through these declarations.
-gnet-config = { path = "crates/gnet-config", version = "2.0.0-alpha.2" }
-gnet-crypto = { path = "crates/gnet-crypto", version = "2.0.0-alpha.2" }
-gnet-hex = { path = "crates/gnet-hex", version = "2.0.0-alpha.2" }
-gnet-noise = { path = "crates/gnet-noise", version = "2.0.0-alpha.2" }
-gnet-punch = { path = "crates/gnet-punch", version = "2.0.0-alpha.2" }
-gnet-rand = { path = "crates/gnet-rand", version = "2.0.0-alpha.2" }
-gnet-relay = { path = "crates/gnet-relay", version = "2.0.0-alpha.2" }
-gnet-tun = { path = "crates/gnet-tun", version = "2.0.0-alpha.2" }
-gnet-wire = { path = "crates/gnet-wire", version = "2.0.0-alpha.2" }
+gnet-config = { path = "crates/gnet-config", version = "1.0.0" }
+gnet-crypto = { path = "crates/gnet-crypto", version = "1.0.0" }
+gnet-hex = { path = "crates/gnet-hex", version = "1.0.0" }
+gnet-noise = { path = "crates/gnet-noise", version = "1.0.0" }
+gnet-punch = { path = "crates/gnet-punch", version = "1.0.0" }
+gnet-rand = { path = "crates/gnet-rand", version = "1.0.0" }
+gnet-relay = { path = "crates/gnet-relay", version = "1.0.0" }
+gnet-tun = { path = "crates/gnet-tun", version = "1.0.0" }
+gnet-wire = { path = "crates/gnet-wire", version = "1.0.0" }
 
 # External crates — kept to the minimum the control-plane (gnet-discover)
 # and the cross-ecosystem bench harness (gnet-bench-compare) need. The
