@@ -195,6 +195,82 @@ independent and either alone is sufficient to break the trust.
   derivation is deterministic — a re-register wins back the same
   bearer).
 
+### Added — SaaS console UX
+
+- **Marketing landing + sign-in flow at `gnet.golia.jp/`.** The
+  `/` banner JSON of the first deploy is replaced by the real SPA
+  shell. React-router renders four public pages — `/` landing,
+  `/login`, `/signup`, `/forgot-password`, `/reset-password`,
+  `/verify` — and one auth-gated `/dashboard`. The Landing has hero
+  + three pillars (post-quantum / self-host first / hybrid) + a
+  sign-up CTA; the Dashboard lists the user's federated dispatchers
+  with add/remove affordances. The "add a network" form derives a
+  fresh federation token and reveals the plaintext exactly once in
+  an amber banner, then drops it from memory.
+- **Discriminated-union HostRoleResponse on the SPA.** Per-role
+  variants narrow at the App switch, so DispatcherShell takes a
+  type that proves the network identity is present and the
+  ConsoleShell takes a type that proves it isn't.
+
+### Added — email verification + password recovery (mailrs)
+
+- **Mail loop on, end-to-end.** When all four `MAILRS_*` env vars
+  (`API_BASE`, `LOGIN_ADDRESS`, `LOGIN_PASSWORD`, `FROM_ADDRESS`)
+  are set the console flips `auto_verify_email` off and drives the
+  full transactional surface through a mailrs HTTP-API client
+  (`crates/gnet-console/src/mail.rs`). Bearer session cached
+  between calls; on 401 the cache is dropped, login is retried
+  once. `from:` can be any address — mailrs doesn't enforce it
+  against the login account's send_as, that field is operator-
+  facing only.
+- **Six new endpoints** on the console binary:
+
+  | Method | Path | Auth | Purpose |
+  |---|---|---|---|
+  | POST | `/api/auth/email/verify` | URL token | claim a verification token |
+  | POST | `/api/auth/email/resend-verification` | flat-200 | reissue verification mail |
+  | POST | `/api/auth/email/forgot-password` | flat-200 | mail a reset link |
+  | POST | `/api/auth/email/reset-password` | URL token | rotate password + drop all sessions |
+
+  Every public-facing endpoint returns 200 regardless of whether
+  the address matched a row, so an attacker can't enumerate
+  accounts from response shape. Tokens are 32 random bytes
+  hex-encoded with a one-hour TTL, single-use (`used_at IS NULL`
+  gates re-use; reused links 401 the same way never-existing ones
+  do). `password_reset_tokens` and `email_verification_tokens`
+  live in separate tables so a stolen verification link can never
+  be redeemed as a reset link.
+
+- **Session invalidation on password reset.** After a successful
+  reset the console SCANs the `gnet:console:sess:*` prefix in
+  Valkey and DROPs every session that belongs to the user, so a
+  thief with the old session cookie loses access at reset time
+  instead of at the cookie TTL.
+
+- **Migrations 0005 + 0006** (`email_verification_tokens`,
+  `password_reset_tokens`).
+
+- **build.rs in both schema crates** (`gnet-console-schema`,
+  `gnet-discover-schema`) emits
+  `cargo:rerun-if-changed=migrations` so adding a new `.sql` file
+  busts the build cache. Without this the `sqlx::migrate!` macro
+  doesn't re-expand and a freshly committed migration silently
+  doesn't ship.
+
+### Operational
+
+- **`gnet.golia.jp` is live on t01.** The first SaaS deployment
+  landed: postgres:18 + valkey:9 + gnet-console in one docker-
+  compose bundle at `/apps/gnet/`, Caddy reverse-proxies the apex
+  to `t01:6015`, DNS `gnet CNAME t01.golia.jp.` was already in
+  place. Deploy is manual rsync from mac → t01 (the devops binary-
+  deploy pipeline runs rsync from lx64 which has no checkout; ETA
+  for the standard pipeline depends on pushing to GitHub origin).
+  Recorded as `deploy_job_id=82` in devops ProjectStore.
+- **mailrs at `mail.golia.ai`** wired via `MAILRS_*` env on t01.
+  Sender is `noreply@golia.jp`; login is the superadmin
+  `lihao@golia.jp` (next slice: dedicated service account).
+
 ### Added — CI
 
 - **Self-host smoke** (`.github/workflows/self-host-smoke.yml`).
