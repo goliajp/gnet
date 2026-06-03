@@ -48,6 +48,7 @@ function DevicesTable({ devices }: { devices: DeviceResponse[] }) {
             <th className="px-4 py-2 font-normal">relay</th>
             <th className="px-4 py-2 font-normal">last reflexive</th>
             <th className="px-4 py-2 font-normal">created</th>
+            <th className="px-4 py-2 font-normal"></th>
           </tr>
         </thead>
         <tbody className="divide-y divide-zinc-800">
@@ -72,15 +73,35 @@ function DeviceRow({ device }: { device: DeviceResponse }) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["devices"] }),
   });
 
+  const kick = useMutation({
+    mutationFn: () =>
+      api<void>("/api/devices/" + device.id + "/kick", { method: "POST" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["devices"] }),
+  });
+
   const onRename = () => {
     const next = window.prompt(`rename "${device.alias}" to:`, device.alias);
     if (next && next !== device.alias) rename.mutate(next);
+  };
+
+  const onKick = () => {
+    if (
+      window.confirm(
+        `Kick "${device.alias}"? It will be removed from the network until it re-registers; its history stays in the audit log.`,
+      )
+    ) {
+      kick.mutate();
+    }
   };
 
   const errMsg =
     rename.error instanceof ApiError
       ? rename.error.body || rename.error.message
       : (rename.error as Error | undefined)?.message;
+  const kickErr =
+    kick.error instanceof ApiError
+      ? kick.error.body || kick.error.message
+      : (kick.error as Error | undefined)?.message;
 
   return (
     <tr className="text-zinc-300">
@@ -116,6 +137,19 @@ function DeviceRow({ device }: { device: DeviceResponse }) {
       </td>
       <td className="px-4 py-2 text-zinc-500">
         {new Date(device.created_at).toISOString().slice(0, 10)}
+      </td>
+      <td className="px-4 py-2 text-right">
+        <button
+          onClick={onKick}
+          disabled={kick.isPending}
+          title="kick"
+          className="rounded border border-zinc-800 px-2 py-1 text-xs text-zinc-400 transition hover:border-rose-800 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          kick
+        </button>
+        {kick.isError && (
+          <span className="ml-2 text-xs text-red-300">{kickErr}</span>
+        )}
       </td>
     </tr>
   );

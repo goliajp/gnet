@@ -1,11 +1,27 @@
-//! Device write paths (plan §17 step 7, first slice).
+//! Device write paths (plan §17 step 7).
 //!
-//! Today: rename. Kick / rotate-key follow once we wire the daemon
-//! control channel (a rotate decision the dispatcher pushes the daemon
-//! is more than a row edit). All writes:
+//! - `rename`  PUT  /api/devices/{id}/alias     — already lived here
+//! - `kick`    POST /api/devices/{id}/kick      — soft-delete + audit
+//! - `rotate_key` POST /api/devices/{id}/rotate-key — 501 wire contract
+//! - `restart` POST /api/devices/{id}/restart   — 501 wire contract
 //!
-//! - require a logged-in admin session (cookie + CSRF, already enforced
-//!   by the surrounding middleware);
+//! Kick is a DB-only operation. We mark `devices.removed_at = now()`
+//! inside a transaction with the matching audit row; the partial
+//! unique indexes added in migration 0003 keep the (network, pubkey)
+//! and (network, alias) slots free so the same device can re-register
+//! after a kick, and `/api/internal/snapshot` filters on `removed_at
+//! IS NULL` so the kicked daemon's next push gets 401 — that's how
+//! "kick" becomes a daemon-visible event without a dispatcher→daemon
+//! control channel.
+//!
+//! Rotate-key and restart need such a channel (plan §5.2: "forwarded
+//! to the daemon via the relay or via a future control channel"); the
+//! routes are stubbed with 501 so the SPA can wire them up against a
+//! stable URL surface that v1.2 fills in.
+//!
+//! All writes:
+//! - require a logged-in admin session (cookie + CSRF, already
+//!   enforced by surrounding middleware);
 //! - run inside a single transaction with the corresponding
 //!   `audit_log` insert, so we never get a state change without its
 //!   audit trail.
@@ -15,7 +31,7 @@ use axum::Router;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::put;
+use axum::routing::{post, put};
 use axum_extra::extract::cookie::CookieJar;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -35,6 +51,13 @@ pub struct UpdateAliasRequest {
 struct AliasRow {
     id: Uuid,
     alias: String,
+}
+
+#[derive(Serialize, FromRow)]
+struct KickRow {
+    id: Uuid,
+    alias: String,
+    x25519_pubkey_hex: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -88,7 +111,11 @@ impl IntoResponse for DeviceWriteError {
 }
 
 pub fn routes() -> Router<AdminState> {
-    Router::new().route("/api/devices/{id}/alias", put(rename))
+    Router::new()
+        .route("/api/devices/{id}/alias", put(rename))
+        .route("/api/devices/{id}/kick", post(kick))
+        .route("/api/devices/{id}/rotate-key", post(rotate_key))
+        .route("/api/devices/{id}/restart", post(restart))
 }
 
 async fn rename(
@@ -108,7 +135,7 @@ async fn rename(
 
     let existing: Option<AliasRow> = sqlx::query_as(
         "SELECT id, alias FROM devices \
-         WHERE network_id = $1 AND id = $2 \
+         WHERE network_id = $1 AND id = $2 AND removed_at IS NULL \
          FOR UPDATE",
     )
     .bind(state.network_id)
@@ -156,6 +183,94 @@ async fn rename(
     .fetch_one(&state.pool)
     .await?;
     Ok(Json(updated))
+}
+
+/// Soft-delete: stamp `removed_at = now()` and write the audit row in
+/// the same tx. A second kick on the same id returns 404 (the row is
+/// no longer visible to the same `removed_at IS NULL` predicate), so
+/// the operation is idempotent only by virtue of the 404 being safe
+/// to ignore on the caller side.
+async fn kick(
+    State(state): State<AdminState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Path(device_id): Path<Uuid>,
+) -> Result<StatusCode, DeviceWriteError> {
+    let session = require_login(&state, &jar, &headers).await?;
+
+    let mut tx = state.pool.begin().await?;
+
+    let existing: Option<KickRow> = sqlx::query_as(
+        "SELECT id, alias, encode(x25519_pubkey, 'hex') AS x25519_pubkey_hex \
+         FROM devices \
+         WHERE network_id = $1 AND id = $2 AND removed_at IS NULL \
+         FOR UPDATE",
+    )
+    .bind(state.network_id)
+    .bind(device_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let prev = existing.ok_or(DeviceWriteError::NotFound)?;
+
+    sqlx::query("UPDATE devices SET removed_at = now() WHERE id = $1")
+        .bind(prev.id)
+        .execute(&mut *tx)
+        .await?;
+
+    let detail = serde_json::json!({
+        "alias": prev.alias,
+        "x25519_pubkey_hex": prev.x25519_pubkey_hex,
+    });
+    sqlx::query(
+        "INSERT INTO audit_log (network_id, actor_kind, actor_id, action, target, detail) \
+         VALUES ($1, 'local_admin', $2, 'device.kick', $3, $4)",
+    )
+    .bind(state.network_id)
+    .bind(session.user_id.to_string())
+    .bind(device_id.to_string())
+    .bind(&detail)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// 501 wire contract. The dispatcher decision is just a row edit, but
+/// the daemon needs to acknowledge the new key before we can flip the
+/// active row — that needs a dispatcher→daemon control channel that
+/// v1.1 doesn't ship.
+async fn rotate_key(
+    State(state): State<AdminState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Path(device_id): Path<Uuid>,
+) -> Result<Response, DeviceWriteError> {
+    let _ = (require_login(&state, &jar, &headers).await?, device_id);
+    Ok(not_implemented_v1_2("rotate_key"))
+}
+
+/// 501 wire contract. Restart needs the dispatcher→daemon control
+/// channel (plan §5.2: "forwarded to the daemon via the relay or via
+/// a future control channel"); v1.1 only carries the URL.
+async fn restart(
+    State(state): State<AdminState>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Path(device_id): Path<Uuid>,
+) -> Result<Response, DeviceWriteError> {
+    let _ = (require_login(&state, &jar, &headers).await?, device_id);
+    Ok(not_implemented_v1_2("restart"))
+}
+
+fn not_implemented_v1_2(op: &'static str) -> Response {
+    let body = serde_json::json!({
+        "not_implemented": op,
+        "ships_in": "v1.2",
+        "reason": "needs dispatcher→daemon control channel",
+    });
+    (StatusCode::NOT_IMPLEMENTED, Json(body)).into_response()
 }
 
 fn valid_alias(s: &str) -> bool {
