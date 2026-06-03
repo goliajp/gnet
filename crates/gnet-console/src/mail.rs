@@ -13,11 +13,14 @@
 //!                           `https://mail.golia.ai` — no path,
 //!                           no trailing slash. UNSET → console runs
 //!                           in auto-verify mode (no mail loop).
-//!   MAILRS_LOGIN_ADDRESS    service-account email
-//!   MAILRS_LOGIN_PASSWORD   password (or app password)
-//!   MAILRS_FROM_ADDRESS     `from:` header on outbound mail. Must be
-//!                           in the service account's send_as list on
-//!                           the mailrs side.
+//!   MAILRS_LOGIN_ADDRESS    account used to log in to mailrs
+//!   MAILRS_LOGIN_PASSWORD   password for that account
+//!   MAILRS_FROM_ADDRESS     `from:` on outbound mail. mailrs does
+//!                           NOT enforce that this match LOGIN_ADDRESS
+//!                           or appear in its send_as list — superadmin
+//!                           tokens can send from any address, existing
+//!                           or not. Operators typically point this at
+//!                           `noreply@<domain>` for transactional mail.
 //!
 //! All three must be set together; absence of any one falls the
 //! console back to `auto_verify_email = true`.
