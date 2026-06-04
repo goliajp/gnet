@@ -271,7 +271,17 @@ fn dispatch(req: &Request<'_>, node: &Arc<Mutex<Node>>) -> (u16, &'static str, V
         ("PUT", "/local/alias") => not_implemented("alias"),
         ("POST", "/local/join") => not_implemented("join"),
         ("POST", "/local/quit") => not_implemented("quit"),
-        ("POST", "/local/restart") => not_implemented("restart"),
+        ("POST", "/local/restart") => {
+            // Fire the supervisor request AFTER returning so the 202
+            // reply lands first; the request_restart() spawn keeps the
+            // exit on a short delay timer.
+            super::supervisor::request_restart();
+            (
+                202,
+                "application/json",
+                br#"{"restart":"scheduled"}"#.to_vec(),
+            )
+        }
         ("POST", "/local/upgrade") => not_implemented("upgrade"),
 
         // 405 for known paths called with the wrong verb. Helps the
@@ -1001,12 +1011,13 @@ mod tests {
     }
 
     #[test]
-    fn wire_alias_quit_restart_join_upgrade_are_501() {
+    fn wire_alias_quit_join_upgrade_still_501() {
+        // restart now ships (v1.2-plan §18.A3.1); the remaining four
+        // stay on the v1.1 §17.9 wire contract until §18.A3.2+.
         let (addr, _node, t) = boot_for_test();
         for (method, path) in [
             ("PUT", "/local/alias"),
             ("POST", "/local/quit"),
-            ("POST", "/local/restart"),
             ("POST", "/local/join"),
             ("POST", "/local/upgrade"),
         ] {
@@ -1018,5 +1029,21 @@ mod tests {
             assert!(body.contains("not_implemented"), "{body}");
             assert!(body.contains("v1.2"), "{body}");
         }
+    }
+
+    #[test]
+    fn wire_restart_returns_202_and_schedules_supervisor() {
+        // cfg(test) overrides the supervisor exit timer so the test
+        // process survives this call.
+        super::super::supervisor::reset_restart_for_test();
+        let (addr, _node, t) = boot_for_test();
+        let req = format!(
+            "POST /local/restart HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {t}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let (st, body) = raw_request(addr, &req);
+        assert_eq!(st, 202, "{body}");
+        assert!(body.contains("\"restart\":\"scheduled\""), "{body}");
+        assert!(super::super::supervisor::was_restart_requested());
+        super::super::supervisor::reset_restart_for_test();
     }
 }

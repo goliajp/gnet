@@ -23,6 +23,7 @@ mod local_admin;
 mod local_ips;
 mod pump;
 mod punch;
+mod supervisor;
 mod types;
 
 pub use admin::default_socket_path as admin_socket_path;
