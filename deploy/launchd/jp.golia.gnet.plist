@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS launchd unit for the gnet daemon. Drop into:
+    /Library/LaunchDaemons/jp.golia.gnet.plist   (system-wide, recommended)
+  Then:
+    sudo launchctl bootstrap system /Library/LaunchDaemons/jp.golia.gnet.plist
+
+  The `KeepAlive` block restarts the daemon on ANY exit — including the
+  clean exit(0) that /local/restart and the control-channel `restart` op
+  schedule (v1.2-plan §18.A3.1). `ThrottleInterval=2` keeps a crash loop
+  from spinning the CPU but is short enough that an operator-triggered
+  restart feels instant.
+
+  Edit ProgramArguments + UserName + WorkingDirectory for your install.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>jp.golia.gnet</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/gnet</string>
+        <string>up</string>
+        <string>/etc/gnet/gnet.conf</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>2</integer>
+
+    <key>UserName</key>
+    <string>root</string>
+
+    <key>WorkingDirectory</key>
+    <string>/var/lib/gnet</string>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/gnet.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/var/log/gnet.err.log</string>
+
+    <!--
+      Pass the local-admin enable env when the operator wants menubar
+      / CLI control-plane (v1.1 §17.9). Leave commented when not used.
+    -->
+    <!--
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>GNET_LOCAL_ADMIN_ENABLE</key>
+        <string>1</string>
+    </dict>
+    -->
+</dict>
+</plist>

@@ -366,16 +366,31 @@ fn parse_pending_ops(body: &str) -> Vec<PendingOp> {
     out
 }
 
-/// A1 stub. v1.2-plan §18.A1 explicitly only delivers parse + ack; the
-/// real `/local/{alias,join,quit,restart,upgrade}` handlers and
-/// rotate-key path land in §18.A3, at which point this function dispatches
-/// on `op.op` into the corresponding executor. Until then any op the
-/// dispatcher manages to enqueue (none, until §18.A2 flips the operator
-/// writes off 501) gets a structured `error: not_implemented_in_a1` ack so
-/// the row at least transitions out of the pending state.
+/// Route a dispatcher-enqueued op to its executor. The ack POST that
+/// follows this call reflects the returned `Result` (Ok → ack ok,
+/// Err(detail) → ack error + last_error). Per v1.2-plan §18.A3 ops
+/// land one slice at a time; ops not yet wired return
+/// `not_implemented_in_a<N>` so the queue row at least transitions out
+/// of the pending state instead of looping.
+///
+/// Wired so far:
+/// - `restart` (§18.A3.1) — schedule a graceful exit; the supervising
+///   launchd / systemd unit (see `deploy/launchd/` + `deploy/systemd/`)
+///   brings the daemon back. The 500 ms exit delay is long enough that
+///   the snapshot/ack POST queued right after this returns lands first.
 fn dispatch_pending_op(op: &PendingOp) -> Result<(), String> {
     eprintln!("event=snapshot_op_received op_id={} op={}", op.op_id, op.op);
-    Err("not_implemented_in_a1".to_string())
+    match op.op.as_str() {
+        "restart" => {
+            super::supervisor::request_restart();
+            Ok(())
+        }
+        // rotate_key / upgrade / kick fall through until §18.A3.2+ wire
+        // them. (kick is canonically driven by `removed_at` → snapshot
+        // push 401, not by this queue, but is in the schema enum for
+        // completeness.)
+        _ => Err("not_implemented_in_a1".to_string()),
+    }
 }
 
 /// POST `/api/internal/snapshot/ack` with the daemon's per-op verdict.
@@ -1628,11 +1643,27 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_pending_op_returns_not_implemented_in_a1() {
-        // A1 contract: every op gets a structured error ack until §18.A3.
+    fn dispatch_pending_op_restart_triggers_supervisor() {
+        // §18.A3.1: restart ops are now wired. cfg(test) overrides the
+        // real exit timer so the test process survives.
+        super::super::supervisor::reset_restart_for_test();
         let op = PendingOp {
             op_id: "0".to_string(),
             op: "restart".to_string(),
+            args_raw: "{}".to_string(),
+        };
+        assert_eq!(dispatch_pending_op(&op), Ok(()));
+        assert!(super::super::supervisor::was_restart_requested());
+        super::super::supervisor::reset_restart_for_test();
+    }
+
+    #[test]
+    fn dispatch_pending_op_unknown_ops_still_unimplemented() {
+        // rotate_key / upgrade / kick are not wired in A3.1; they keep
+        // the A1 structured-error fallback so the queue row finalises.
+        let op = PendingOp {
+            op_id: "0".to_string(),
+            op: "rotate_key".to_string(),
             args_raw: "{}".to_string(),
         };
         assert_eq!(dispatch_pending_op(&op), Err("not_implemented_in_a1".to_string()));

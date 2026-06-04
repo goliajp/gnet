@@ -1,0 +1,35 @@
+# Linux systemd unit for the gnet daemon. Drop into:
+#   /etc/systemd/system/gnet.service
+# Then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now gnet.service
+#
+# `Restart=always` brings the daemon back on the clean exit(0) that
+# /local/restart and the control-channel `restart` op schedule
+# (v1.2-plan §18.A3.1). `RestartSec=2` keeps a crash loop from
+# spinning, but is short enough that an operator-triggered restart
+# feels instant.
+
+[Unit]
+Description=gnet WireGuard-style overlay daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/gnet up /etc/gnet/gnet.conf
+Restart=always
+RestartSec=2
+User=root
+WorkingDirectory=/var/lib/gnet
+
+# Pass the local-admin enable env when the operator wants menubar /
+# CLI control-plane (v1.1 §17.9). Leave commented when not used.
+# Environment=GNET_LOCAL_ADMIN_ENABLE=1
+
+# CAP_NET_ADMIN is needed for TUN; running as root grants it. For an
+# unprivileged install, replace User=root + the cap drops with a
+# dedicated user + AmbientCapabilities=CAP_NET_ADMIN.
+
+[Install]
+WantedBy=multi-user.target
