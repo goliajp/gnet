@@ -75,6 +75,18 @@ pub struct RotateKeyCompleteRequest {
     pub new_pubkey_hex: String,
 }
 
+/// Daemon-initiated alias swap (v1.2-plan §18.A3.3). The daemon's
+/// `/local/alias` PUT lands here; the dispatcher commits the new alias
+/// to `devices.alias` and writes an audit row, but does NOT enqueue a
+/// `rename` op (unlike the SPA-side PUT) because the daemon already
+/// knows the target — it will swap its conf the moment this returns
+/// 204 and then schedule a restart.
+#[derive(Deserialize)]
+pub struct AliasSetRequest {
+    pub device_pubkey_hex: String,
+    pub new_alias: String,
+}
+
 /// Daemon's per-op acknowledgement.
 #[derive(Deserialize)]
 pub struct AckRequest {
@@ -107,6 +119,10 @@ pub enum InternalError {
     BadNewPubkey,
     #[error("new pubkey already in use in this network")]
     PubkeyConflict,
+    #[error("alias must be 3-32 chars of [a-z0-9_-]")]
+    BadAlias,
+    #[error("alias already in use in this network")]
+    AliasConflict,
     #[error("no device matched the token + pubkey")]
     Unauthorized,
     #[error("op_id does not belong to this device or is already finalised")]
@@ -121,8 +137,8 @@ impl IntoResponse for InternalError {
             InternalError::NoBearer | InternalError::Unauthorized | InternalError::BadPubkey => {
                 StatusCode::UNAUTHORIZED
             }
-            InternalError::BadNewPubkey => StatusCode::BAD_REQUEST,
-            InternalError::PubkeyConflict => StatusCode::CONFLICT,
+            InternalError::BadNewPubkey | InternalError::BadAlias => StatusCode::BAD_REQUEST,
+            InternalError::PubkeyConflict | InternalError::AliasConflict => StatusCode::CONFLICT,
             InternalError::UnknownOp => StatusCode::NOT_FOUND,
             InternalError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
@@ -135,6 +151,7 @@ pub fn routes() -> Router<AdminState> {
         .route("/api/internal/snapshot", post(snapshot))
         .route("/api/internal/snapshot/ack", post(snapshot_ack))
         .route("/api/internal/rotate_key/complete", post(rotate_key_complete))
+        .route("/api/internal/alias/set", post(alias_set))
 }
 
 async fn snapshot(
@@ -358,6 +375,81 @@ async fn rotate_key_complete(
     tx.commit().await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Daemon-driven alias swap (v1.2-plan §18.A3.3). Mirror of the SPA's
+/// device_writes::rename, but originated by the daemon itself and
+/// authenticated against the snapshot pair (token + OLD pubkey).
+/// Skips the rename op enqueue — the daemon already knows the target
+/// and will swap its own conf the moment this returns 204.
+async fn alias_set(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Json(req): Json<AliasSetRequest>,
+) -> Result<StatusCode, InternalError> {
+    let device_id = authenticate(&state.pool, state.network_id, &headers, &req.device_pubkey_hex).await?;
+
+    if !is_valid_alias(&req.new_alias) {
+        return Err(InternalError::BadAlias);
+    }
+
+    let mut tx = state.pool.begin().await?;
+
+    // SELECT the previous alias for the audit detail; if the daemon
+    // ends up renaming a row that's been kicked between authenticate()
+    // and now this is the safety net.
+    let prev: Option<(String,)> = sqlx::query_as(
+        "SELECT alias FROM devices \
+         WHERE id = $1 AND removed_at IS NULL FOR UPDATE",
+    )
+    .bind(device_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (old_alias,) = prev.ok_or(InternalError::Unauthorized)?;
+
+    match sqlx::query("UPDATE devices SET alias = $1 WHERE id = $2")
+        .bind(&req.new_alias)
+        .bind(device_id)
+        .execute(&mut *tx)
+        .await
+    {
+        Ok(_) => {}
+        Err(sqlx::Error::Database(db_err)) if db_err.code().as_deref() == Some("23505") => {
+            return Err(InternalError::AliasConflict);
+        }
+        Err(other) => return Err(other.into()),
+    }
+
+    let detail = serde_json::json!({
+        "from": old_alias,
+        "to": req.new_alias,
+    });
+    sqlx::query(
+        "INSERT INTO audit_log (network_id, actor_kind, actor_id, action, target, detail) \
+         VALUES ($1, 'daemon', $2, 'device.rename', $3, $4)",
+    )
+    .bind(state.network_id)
+    .bind(device_id.to_string())
+    .bind(device_id.to_string())
+    .bind(&detail)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Same rules as device_writes::valid_alias — copied here to avoid the
+/// dependency cycle (internal.rs is referenced by device_writes via
+/// enqueue_op).
+fn is_valid_alias(s: &str) -> bool {
+    let len = s.len();
+    if !(3..=32).contains(&len) {
+        return false;
+    }
+    s.bytes()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 
 /// Two-factor lookup shared by snapshot + ack: bearer token bytes hash

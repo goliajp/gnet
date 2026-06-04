@@ -160,6 +160,7 @@ pub fn run(config: Config, conf_path: PathBuf) -> io::Result<()> {
     let coordinators = config.coordinators.clone();
     let device_token = config.device_token.clone();
     let admin_endpoint = config.admin_endpoint.clone();
+    let admin_endpoint_for_local = config.admin_endpoint.clone();
     // hosts-sync inputs, captured before `config.peers` is moved below.
     let manage_hosts = config.manage_hosts;
     let hosts_path = config.hosts_path.clone();
@@ -338,7 +339,7 @@ pub fn run(config: Config, conf_path: PathBuf) -> io::Result<()> {
                 self_v4,
                 self_v6,
             },
-            conf_path,
+            conf_path.clone(),
         );
     }
 
@@ -354,7 +355,16 @@ pub fn run(config: Config, conf_path: PathBuf) -> io::Result<()> {
     // Disabled by default — daemons in the fleet keep the v1.0 unix
     // socket as their only admin surface until the operator flips
     // `GNET_LOCAL_ADMIN_ENABLE=1`.
-    match local_admin::LocalAdminConfig::from_env() {
+    let our_pk_hex = {
+        let g = node.lock().expect("node mutex");
+        gnet_hex::encode(&g.public)
+    };
+    match local_admin::LocalAdminConfig::from_env(
+        admin_endpoint_for_local.clone(),
+        device_token.clone(),
+        our_pk_hex,
+        conf_path.clone(),
+    ) {
         Ok(Some(cfg)) => local_admin::spawn(node.clone(), cfg),
         Ok(None) => {}
         Err(e) => eprintln!("event=local_admin_cfg_err err={e}"),

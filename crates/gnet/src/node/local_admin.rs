@@ -87,13 +87,36 @@ pub const CONN_TIMEOUT: Duration = Duration::from_secs(15);
 pub struct LocalAdminConfig {
     pub bind: SocketAddr,
     pub token: String,
+    /// Dispatcher endpoint the daemon already pushes snapshots to.
+    /// `None` means the daemon is not federated and `/local/*` write
+    /// endpoints that need the dispatcher (alias, future ops) return a
+    /// structured error.
+    pub admin_endpoint: Option<String>,
+    /// device_token bytes the daemon uses to authenticate against the
+    /// dispatcher (Bearer header). Mirror of the `device_token` conf
+    /// directive.
+    pub device_token: Option<String>,
+    /// Hex-encoded X25519 pubkey — second auth factor against the
+    /// dispatcher, paired with `device_token`.
+    pub pubkey_hex: String,
+    /// Path to the daemon's conf file; needed for in-place rewrites
+    /// (alias, future rotate-key via /local).
+    pub conf_path: PathBuf,
 }
 
 impl LocalAdminConfig {
-    /// Resolve the bind address + token from env. Returns `Ok(None)` when
-    /// the listener is not opted in (no `GNET_LOCAL_ADMIN_ENABLE=1`), so
-    /// the caller can treat absence as "don't spawn the thread".
-    pub fn from_env() -> Result<Option<Self>, String> {
+    /// Resolve the bind address + token from env, then merge in the
+    /// daemon-conf-derived bits (`admin_endpoint`, `device_token`,
+    /// `pubkey_hex`, `conf_path`) supplied by the caller. Returns
+    /// `Ok(None)` when the listener is not opted in (no
+    /// `GNET_LOCAL_ADMIN_ENABLE=1`), so the caller can treat absence as
+    /// "don't spawn the thread".
+    pub fn from_env(
+        admin_endpoint: Option<String>,
+        device_token: Option<String>,
+        pubkey_hex: String,
+        conf_path: PathBuf,
+    ) -> Result<Option<Self>, String> {
         let enabled = std::env::var("GNET_LOCAL_ADMIN_ENABLE")
             .map(|v| v == "1")
             .unwrap_or(false);
@@ -116,7 +139,14 @@ impl LocalAdminConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|_| default_token_path());
         let token = load_token(&token_path)?;
-        Ok(Some(Self { bind, token }))
+        Ok(Some(Self {
+            bind,
+            token,
+            admin_endpoint,
+            device_token,
+            pubkey_hex,
+            conf_path,
+        }))
     }
 }
 
@@ -259,16 +289,20 @@ fn handle(
         );
     }
 
-    let (status, ctype, body) = dispatch(&req, node);
+    let (status, ctype, body) = dispatch(&req, node, cfg);
     write_response(&mut stream, status, ctype, &body)
 }
 
 /// Route a parsed + authenticated request to its handler. Each handler
 /// owns its full response body (we don't stream — bodies are tiny).
-fn dispatch(req: &Request<'_>, node: &Arc<Mutex<Node>>) -> (u16, &'static str, Vec<u8>) {
+fn dispatch(
+    req: &Request<'_>,
+    node: &Arc<Mutex<Node>>,
+    cfg: &LocalAdminConfig,
+) -> (u16, &'static str, Vec<u8>) {
     match (req.method, req.path) {
         ("GET", "/local/status") => (200, "application/json", render_status(node).into_bytes()),
-        ("PUT", "/local/alias") => not_implemented("alias"),
+        ("PUT", "/local/alias") => handle_alias(req.body, cfg),
         ("POST", "/local/join") => not_implemented("join"),
         ("POST", "/local/quit") => not_implemented("quit"),
         ("POST", "/local/restart") => {
@@ -314,6 +348,162 @@ fn not_implemented(endpoint: &str) -> (u16, &'static str, Vec<u8>) {
         r#"{{"not_implemented":"{endpoint}","plan_ref":"docs/v1.1-plan.md §5.1","ships_in":"v1.2"}}"#
     );
     (501, "application/json", body.into_bytes())
+}
+
+/// PUT /local/alias handler (v1.2-plan §18.A3.3).
+///
+/// Body `{"alias":"<new>"}`. The daemon talks to the dispatcher
+/// (`POST /api/internal/alias/set`) so the dispatcher's `devices.alias`
+/// — the network's source of truth — is the first thing to change. On
+/// 204 the daemon swaps its own conf and schedules a restart so the
+/// next snapshot push, hosts splice, and `/local/status` all reflect
+/// the new name. If the dispatcher rejects (BadAlias 400, AliasConflict
+/// 409, ...), the conf is untouched and the daemon mirrors the
+/// dispatcher's status + body back to the menubar / CLI caller.
+fn handle_alias(body: &[u8], cfg: &LocalAdminConfig) -> (u16, &'static str, Vec<u8>) {
+    let Some(new_alias) = parse_alias_body(body) else {
+        return (
+            400,
+            "application/json",
+            br#"{"error":"body must be {\"alias\":\"<name>\"}"}"#.to_vec(),
+        );
+    };
+    let (Some(admin), Some(token)) = (cfg.admin_endpoint.as_deref(), cfg.device_token.as_deref())
+    else {
+        // Daemon isn't federated — `/local/alias` only edits the local
+        // conf's alias directive when there's a dispatcher to commit
+        // to. (Standalone-daemon rename is a CLI-only path; the user
+        // edits the conf directly + restarts.)
+        return (
+            503,
+            "application/json",
+            br#"{"error":"daemon not federated (no admin_endpoint or device_token)"}"#.to_vec(),
+        );
+    };
+
+    let url = format!("{admin}/api/internal/alias/set");
+    let set_body = format!(
+        r#"{{"device_pubkey_hex":"{}","new_alias":"{}"}}"#,
+        cfg.pubkey_hex, new_alias
+    );
+    let out = match std::process::Command::new("curl")
+        .arg("--silent")
+        .arg("--show-error")
+        .arg("--connect-timeout")
+        .arg("10")
+        .arg("--max-time")
+        .arg("30")
+        .arg("-X")
+        .arg("POST")
+        .arg("-H")
+        .arg(format!("Authorization: Bearer {token}"))
+        .arg("-H")
+        .arg("Content-Type: application/json")
+        .arg("--data-binary")
+        .arg(&set_body)
+        .arg("-w")
+        .arg("\n%{http_code}")
+        .arg(&url)
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            return (
+                502,
+                "application/json",
+                format!(r#"{{"error":"alias/set spawn: {e}"}}"#).into_bytes(),
+            );
+        }
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let (resp_body, status_str) = match stdout.rsplit_once('\n') {
+        Some((b, c)) => (b.to_string(), c.trim().to_string()),
+        None => (String::new(), stdout.trim().to_string()),
+    };
+    let status: u16 = status_str.parse().unwrap_or(0);
+    if status != 204 {
+        // Mirror the dispatcher's failure back. Default to 502 when the
+        // status didn't parse.
+        let final_status = if (400..600).contains(&status) { status } else { 502 };
+        let body = format!(
+            r#"{{"error":"dispatcher rejected alias/set","status":{status},"body":{}}}"#,
+            serde_json_str(&resp_body)
+        );
+        return (final_status, "application/json", body.into_bytes());
+    }
+
+    // Dispatcher committed. Rewrite local conf — read failure here is
+    // operator-visible but rare; the dispatcher already moved on.
+    let text = match std::fs::read_to_string(&cfg.conf_path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!(
+                "event=local_alias_conf_read_failed path={} err={e}",
+                cfg.conf_path.display()
+            );
+            return (
+                500,
+                "application/json",
+                format!(r#"{{"error":"alias committed at dispatcher but conf read failed: {e}"}}"#)
+                    .into_bytes(),
+            );
+        }
+    };
+    let new_text = crate::conf_io::swap_alias_directive(&text, new_alias);
+    if let Err(e) = crate::conf_io::write_atomic(&cfg.conf_path, &new_text) {
+        eprintln!(
+            "event=local_alias_conf_write_failed path={} err={e}",
+            cfg.conf_path.display()
+        );
+        return (
+            500,
+            "application/json",
+            format!(r#"{{"error":"alias committed at dispatcher but conf write failed: {e}"}}"#)
+                .into_bytes(),
+        );
+    }
+    super::supervisor::request_restart();
+    (
+        202,
+        "application/json",
+        format!(r#"{{"alias":"{new_alias}","restart":"scheduled"}}"#).into_bytes(),
+    )
+}
+
+/// Pull `"alias"` out of `{"alias":"<value>"}` without bringing in a
+/// JSON parser dep. Tolerates whitespace + key ordering when there's
+/// only one key; this body has exactly one field so anything else is a
+/// caller error.
+fn parse_alias_body(body: &[u8]) -> Option<&str> {
+    let s = std::str::from_utf8(body).ok()?;
+    let needle = "\"alias\"";
+    let i = s.find(needle)?;
+    let rest = s[i + needle.len()..].trim_start();
+    let rest = rest.strip_prefix(':')?.trim_start();
+    let rest = rest.strip_prefix('"')?;
+    let end = rest.bytes().position(|b| b == b'"')?;
+    Some(&rest[..end])
+}
+
+/// Serialise a raw byte slice as a JSON string. We control all callers;
+/// the only chars to escape are `"` and `\`. Newlines pass through as
+/// `\n` so a JSON consumer's parser doesn't break.
+fn serde_json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Hand-rolled JSON snapshot of the daemon's live state — mirror of the
@@ -915,7 +1105,13 @@ mod tests {
             // care about are exercised below.
             return;
         }
-        let r = LocalAdminConfig::from_env().unwrap();
+        let r = LocalAdminConfig::from_env(
+            None,
+            None,
+            "00".repeat(32),
+            std::path::PathBuf::from("/tmp/unused.conf"),
+        )
+        .unwrap();
         assert!(r.is_none());
     }
 
@@ -932,6 +1128,10 @@ mod tests {
         let cfg = Arc::new(LocalAdminConfig {
             bind: addr,
             token: token.clone(),
+            admin_endpoint: None,
+            device_token: None,
+            pubkey_hex: "00".repeat(32),
+            conf_path: std::path::PathBuf::from("/tmp/unused.conf"),
         });
         let node_for_thread = node.clone();
         thread::spawn(move || {
@@ -1011,12 +1211,12 @@ mod tests {
     }
 
     #[test]
-    fn wire_alias_quit_join_upgrade_still_501() {
-        // restart now ships (v1.2-plan §18.A3.1); the remaining four
-        // stay on the v1.1 §17.9 wire contract until §18.A3.2+.
+    fn wire_quit_join_upgrade_still_501() {
+        // restart (§18.A3.1) and alias (§18.A3.3) now ship; quit /
+        // join / upgrade stay on the v1.1 §17.9 wire contract until
+        // §18.A3.4+.
         let (addr, _node, t) = boot_for_test();
         for (method, path) in [
-            ("PUT", "/local/alias"),
             ("POST", "/local/quit"),
             ("POST", "/local/join"),
             ("POST", "/local/upgrade"),
@@ -1045,5 +1245,43 @@ mod tests {
         assert!(body.contains("\"restart\":\"scheduled\""), "{body}");
         assert!(super::super::supervisor::was_restart_requested());
         super::super::supervisor::reset_restart_for_test();
+    }
+
+    #[test]
+    fn wire_alias_without_federation_is_503() {
+        // boot_for_test() configures cfg.admin_endpoint=None +
+        // device_token=None — i.e. a non-federated daemon. PUT
+        // /local/alias still parses the body but refuses to commit
+        // anywhere because there's no dispatcher to talk to.
+        let (addr, _node, t) = boot_for_test();
+        let body = r#"{"alias":"new-name"}"#;
+        let req = format!(
+            "PUT /local/alias HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {t}\r\nContent-Type: application/json\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n{body}",
+            len = body.len()
+        );
+        let (st, body) = raw_request(addr, &req);
+        assert_eq!(st, 503, "{body}");
+        assert!(body.contains("not federated"), "{body}");
+    }
+
+    #[test]
+    fn wire_alias_with_bad_body_is_400() {
+        let (addr, _node, t) = boot_for_test();
+        let body = r#"{"wrong_key":"x"}"#;
+        let req = format!(
+            "PUT /local/alias HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {t}\r\nContent-Type: application/json\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n{body}",
+            len = body.len()
+        );
+        let (st, body) = raw_request(addr, &req);
+        assert_eq!(st, 400, "{body}");
+    }
+
+    #[test]
+    fn parse_alias_body_handles_basic_shapes() {
+        assert_eq!(parse_alias_body(br#"{"alias":"foo"}"#), Some("foo"));
+        assert_eq!(parse_alias_body(br#"{ "alias" : "bar" }"#), Some("bar"));
+        assert_eq!(parse_alias_body(br#"{"other":"x","alias":"baz"}"#), Some("baz"));
+        assert_eq!(parse_alias_body(br#"{"nope":"x"}"#), None);
+        assert_eq!(parse_alias_body(br#"not json"#), None);
     }
 }
