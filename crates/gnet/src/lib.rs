@@ -11,6 +11,10 @@
 pub(crate) const MTU_BUF: usize = 2048;
 
 pub mod channel;
+/// In-place conf rewrite helpers used by both the `gnet rotate-key`
+/// CLI and the control-channel `rotate_key` op handler (v1.2-plan
+/// §18.A3.2).
+pub mod conf_io;
 /// `/etc/hosts` block splicing — shared by `gnet join` (one-shot) and the
 /// daemon's discovery loop (re-splice on every peer-set change).
 pub mod hosts;

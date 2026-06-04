@@ -136,7 +136,7 @@ fn configure(name: &str, address: IpAddr) -> io::Result<()> {
 }
 
 /// Run a static multi-peer node until a fatal socket/device error.
-pub fn run(config: Config) -> io::Result<()> {
+pub fn run(config: Config, conf_path: PathBuf) -> io::Result<()> {
     let socket = Arc::new(UdpSocket::bind(config.listen)?);
     let tun = Arc::new(Tun::open()?);
     configure(tun.name(), config.address)?;
@@ -338,6 +338,7 @@ pub fn run(config: Config) -> io::Result<()> {
                 self_v4,
                 self_v6,
             },
+            conf_path,
         );
     }
 
