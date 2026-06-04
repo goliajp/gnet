@@ -58,6 +58,23 @@ pub struct PendingOp {
     pub args: Json_,
 }
 
+/// Daemon's rotate-key follow-up (v1.2-plan §18.A3.2). The daemon
+/// generated `new_pubkey_hex` locally, persisted the new private key,
+/// and is asking the dispatcher to atomically commit the new pubkey
+/// and finalise the matching pending op in one tx. Same auth as the
+/// snapshot push (token + OLD pubkey), so a stolen token alone is
+/// not enough to rewrite a device's pubkey.
+#[derive(Deserialize)]
+pub struct RotateKeyCompleteRequest {
+    /// Old pubkey hex (the one the row currently has). Two-factor
+    /// lookup confirms the caller is the device that owns this row.
+    pub device_pubkey_hex: String,
+    /// The pending op being completed. Must belong to the same device.
+    pub op_id: Uuid,
+    /// Hex-encoded fresh 32-byte X25519 public key.
+    pub new_pubkey_hex: String,
+}
+
 /// Daemon's per-op acknowledgement.
 #[derive(Deserialize)]
 pub struct AckRequest {
@@ -86,6 +103,10 @@ pub enum InternalError {
     NoBearer,
     #[error("device pubkey hex did not decode")]
     BadPubkey,
+    #[error("new pubkey hex did not decode")]
+    BadNewPubkey,
+    #[error("new pubkey already in use in this network")]
+    PubkeyConflict,
     #[error("no device matched the token + pubkey")]
     Unauthorized,
     #[error("op_id does not belong to this device or is already finalised")]
@@ -100,6 +121,8 @@ impl IntoResponse for InternalError {
             InternalError::NoBearer | InternalError::Unauthorized | InternalError::BadPubkey => {
                 StatusCode::UNAUTHORIZED
             }
+            InternalError::BadNewPubkey => StatusCode::BAD_REQUEST,
+            InternalError::PubkeyConflict => StatusCode::CONFLICT,
             InternalError::UnknownOp => StatusCode::NOT_FOUND,
             InternalError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
@@ -111,6 +134,7 @@ pub fn routes() -> Router<AdminState> {
     Router::new()
         .route("/api/internal/snapshot", post(snapshot))
         .route("/api/internal/snapshot/ack", post(snapshot_ack))
+        .route("/api/internal/rotate_key/complete", post(rotate_key_complete))
 }
 
 async fn snapshot(
@@ -246,6 +270,92 @@ async fn snapshot_ack(
     if affected == 0 {
         return Err(InternalError::UnknownOp);
     }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Daemon-driven key rotation commit (v1.2-plan §18.A3.2). The daemon
+/// has already generated the fresh keypair and persisted the new private
+/// key locally; this endpoint atomically swaps `devices.x25519_pubkey`,
+/// finalises the matching `device_pending_ops` row (so the queue does
+/// not need a separate ack POST), and records the swap in audit.
+///
+/// Auth is the snapshot pair (token + OLD pubkey) — done BEFORE the
+/// pubkey is swapped so the daemon's still-current credentials let it
+/// through. After this 204 the OLD pubkey stops authenticating; the
+/// daemon's next snapshot push must use the new pubkey, which is why
+/// the daemon side schedules a restart immediately after this call.
+async fn rotate_key_complete(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Json(req): Json<RotateKeyCompleteRequest>,
+) -> Result<StatusCode, InternalError> {
+    let device_id = authenticate(&state.pool, state.network_id, &headers, &req.device_pubkey_hex).await?;
+
+    let new_pubkey_raw =
+        gnet_hex::decode_32(&req.new_pubkey_hex).ok_or(InternalError::BadNewPubkey)?;
+
+    let mut tx = state.pool.begin().await?;
+
+    // Atomic swap. UNIQUE (network_id, x25519_pubkey) WHERE removed_at
+    // IS NULL (migration 0003) catches a collision with another live
+    // device row → 23505 → PubkeyConflict; everything else surfaces as
+    // a DB error.
+    match sqlx::query("UPDATE devices SET x25519_pubkey = $1 WHERE id = $2")
+        .bind(&new_pubkey_raw[..])
+        .bind(device_id)
+        .execute(&mut *tx)
+        .await
+    {
+        Ok(_) => {}
+        Err(sqlx::Error::Database(db_err)) if db_err.code().as_deref() == Some("23505") => {
+            return Err(InternalError::PubkeyConflict);
+        }
+        Err(other) => return Err(other.into()),
+    }
+
+    let affected = sqlx::query(
+        "UPDATE device_pending_ops \
+         SET completed_at = now() \
+         WHERE id = $1 \
+           AND device_id = $2 \
+           AND op = 'rotate_key' \
+           AND completed_at IS NULL \
+           AND failed_at IS NULL",
+    )
+    .bind(req.op_id)
+    .bind(device_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+
+    if affected == 0 {
+        // Roll the pubkey swap back implicitly — no commit yet — and tell
+        // the caller the op_id didn't match. (Most likely: op already
+        // ack'd, or this complete arrived for a different device's op.)
+        return Err(InternalError::UnknownOp);
+    }
+
+    // The daemon authenticates against (token, device_pubkey), so the
+    // detail row carries both the old and the new pubkey for an audit
+    // reader walking the chain without needing to join across snapshots.
+    let detail = serde_json::json!({
+        "op_id": req.op_id,
+        "old_pubkey_hex": req.device_pubkey_hex,
+        "new_pubkey_hex": req.new_pubkey_hex,
+    });
+    sqlx::query(
+        "INSERT INTO audit_log (network_id, actor_kind, actor_id, action, target, detail) \
+         VALUES ($1, 'daemon', $2, 'device.rotate_key.completed', $3, $4)",
+    )
+    .bind(state.network_id)
+    .bind(device_id.to_string())
+    .bind(device_id.to_string())
+    .bind(&detail)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
