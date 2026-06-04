@@ -59,10 +59,10 @@ services:
 
   # ── dispatcher: admin API + v1.0 coord listener ─────────────────
   dispatcher:
-    build:
-      context: ..
-      dockerfile: self-host/Dockerfile
-      target: dispatcher
+    # Unified gnet image; entrypoint routes by the `dispatcher` arg
+    # to the gnet-discover binary.
+    image: goliakk/gnet:${GNET_IMAGE_TAG:-1.1.0}
+    command: ["dispatcher"]
     restart: unless-stopped
     depends_on:
       db:
@@ -106,18 +106,14 @@ services:
 
   # ── relay: UDP forwarder + lite admin (plan §17.8) ──────────────
   relay:
-    build:
-      context: ..
-      dockerfile: self-host/Dockerfile
-      target: relay
+    image: goliakk/gnet:${GNET_IMAGE_TAG:-1.1.0}
     restart: unless-stopped
     environment:
       GNET_RELAY_ADMIN_BIND: 0.0.0.0:8766
       GNET_RELAY_ADMIN_TOKEN: ${RELAY_ADMIN_TOKEN:?RELAY_ADMIN_TOKEN must be set (≥16 chars)}
-    # The image's CMD already passes --listen 0.0.0.0:65433; the
-    # explicit form here makes the bind visible in `docker compose
-    # config` for ops inspection.
-    command: ["--listen", "0.0.0.0:65433"]
+    # First positional arg selects the relay binary; the rest are the
+    # `gnet-relay-server` flags.
+    command: ["relay", "--listen", "0.0.0.0:65433"]
     ports:
       - "${RELAY_PORT:-65433}:65433/udp"
       - "${RELAY_ADMIN_PORT:-8766}:8766/tcp"

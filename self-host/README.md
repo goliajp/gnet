@@ -34,13 +34,15 @@ Fill in:
 
 Anything you don't override (ports, log level) takes the defaults from `.env.example`.
 
-### 3. Build and start
+### 3. Pull and start
 
 ```sh
-docker compose up -d --build
+docker compose up -d
 ```
 
-First run builds three images (one each for dispatcher / relay / console-binary stages); subsequent runs reuse BuildKit's cache. The four services come up in dependency order — PG and Valkey become healthy first, the dispatcher waits for them.
+Pulls `goliakk/gnet:1.1.0` (unified image — daemon + dispatcher + relay + console binaries in one; the entrypoint dispatches by `GNET_ROLE` / leading positional arg) and `postgres:18-alpine` + `valkey/valkey:9-alpine`. The four services come up in dependency order — PG and Valkey become healthy first, the dispatcher waits for them.
+
+To pin a different tag, set `GNET_IMAGE_TAG=1.1.x` in `.env` before `docker compose up`.
 
 ### 4. Watch the boot
 
