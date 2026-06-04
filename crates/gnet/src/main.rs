@@ -220,9 +220,10 @@ fn cmd_tunnel_connect(args: &[String]) -> io::Result<()> {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn cmd_up(args: &[String]) -> io::Result<()> {
     let path = arg(args, 2, "<config_path>")?;
+    let conf_path = std::path::PathBuf::from(&path);
     let text = std::fs::read_to_string(path)?;
     let config = gnet_config::parse(&text).map_err(io::Error::other)?;
-    gnet::node::run(config)
+    gnet::node::run(config, conf_path)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]

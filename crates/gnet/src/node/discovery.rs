@@ -30,7 +30,7 @@
 
 use std::io;
 use std::net::{IpAddr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -125,6 +125,7 @@ pub(super) fn spawn(
     device_token: Option<String>,
     admin_endpoint: Option<String>,
     hosts: HostsSync,
+    conf_path: PathBuf,
 ) {
     let our_pk_hex = {
         let g = node.lock().expect("node mutex");
@@ -209,7 +210,14 @@ pub(super) fn spawn(
                     let g = node.lock().expect("node mutex");
                     (g.reflexive, g.peers.len())
                 };
-                match push_snapshot(admin, tok, &our_pk_hex, reflexive, peer_count) {
+                match push_snapshot(
+                    admin,
+                    tok,
+                    &our_pk_hex,
+                    reflexive,
+                    peer_count,
+                    &conf_path,
+                ) {
                     Ok(()) => eprintln!("event=snapshot_pushed admin={admin} peers={peer_count}"),
                     Err(e) => eprintln!("event=snapshot_push_failed error=\"{e}\""),
                 }
@@ -266,6 +274,7 @@ fn push_snapshot(
     pubkey_hex: &str,
     reflexive: Option<SocketAddr>,
     peer_count: usize,
+    conf_path: &Path,
 ) -> io::Result<()> {
     let url = format!("{admin_endpoint}/api/internal/snapshot");
     let reflexive_json = match reflexive {
@@ -311,15 +320,34 @@ fn push_snapshot(
     match status_code {
         "204" | "" => Ok(()),
         "200" => {
+            let ctx = DispatchCtx {
+                conf_path,
+                admin_endpoint,
+                device_token,
+                pubkey_hex,
+            };
             for op in parse_pending_ops(resp_body) {
-                let result = dispatch_pending_op(&op);
-                if let Err(e) =
-                    ack_pending_op(admin_endpoint, device_token, pubkey_hex, &op.op_id, &result)
-                {
-                    eprintln!(
-                        "event=snapshot_ack_failed op_id={} op={} error=\"{e}\"",
-                        op.op_id, op.op
-                    );
+                match dispatch_pending_op(&op, &ctx) {
+                    DispatchOutcome::Skip => {
+                        // Side-channel (rotate_key/complete) already
+                        // finalised the op at the dispatcher — no ack
+                        // POST needed and any we sent would 404 on the
+                        // already-finalised row.
+                    }
+                    DispatchOutcome::Ack(result) => {
+                        if let Err(e) = ack_pending_op(
+                            admin_endpoint,
+                            device_token,
+                            pubkey_hex,
+                            &op.op_id,
+                            &result,
+                        ) {
+                            eprintln!(
+                                "event=snapshot_ack_failed op_id={} op={} error=\"{e}\"",
+                                op.op_id, op.op
+                            );
+                        }
+                    }
                 }
             }
             Ok(())
@@ -366,10 +394,29 @@ fn parse_pending_ops(body: &str) -> Vec<PendingOp> {
     out
 }
 
-/// Route a dispatcher-enqueued op to its executor. The ack POST that
-/// follows this call reflects the returned `Result` (Ok → ack ok,
-/// Err(detail) → ack error + last_error). Per v1.2-plan §18.A3 ops
-/// land one slice at a time; ops not yet wired return
+/// Per-push routing context — collected up front so each op handler
+/// sees the same daemon credentials + conf path without threading them
+/// individually through every match arm.
+struct DispatchCtx<'a> {
+    conf_path: &'a Path,
+    admin_endpoint: &'a str,
+    device_token: &'a str,
+    pubkey_hex: &'a str,
+}
+
+/// Outcome of dispatching one op. `Ack` carries the result the caller
+/// should POST via /api/internal/snapshot/ack (`Ok(())` → ok ack,
+/// `Err(detail)` → error ack + last_error). `Skip` says the op was
+/// already finalised at the dispatcher via a side-channel (today only
+/// `rotate_key/complete`) — sending an ack would 404 on the already-
+/// finalised row.
+enum DispatchOutcome {
+    Ack(Result<(), String>),
+    Skip,
+}
+
+/// Route a dispatcher-enqueued op to its executor. Per v1.2-plan §18.A3
+/// ops land one slice at a time; ops not yet wired return
 /// `not_implemented_in_a<N>` so the queue row at least transitions out
 /// of the pending state instead of looping.
 ///
@@ -378,19 +425,128 @@ fn parse_pending_ops(body: &str) -> Vec<PendingOp> {
 ///   launchd / systemd unit (see `deploy/launchd/` + `deploy/systemd/`)
 ///   brings the daemon back. The 500 ms exit delay is long enough that
 ///   the snapshot/ack POST queued right after this returns lands first.
-fn dispatch_pending_op(op: &PendingOp) -> Result<(), String> {
+/// - `rotate_key` (§18.A3.2b) — generate a fresh X25519 keypair, POST
+///   `/api/internal/rotate_key/complete` with the new pubkey (the
+///   dispatcher's same-tx atomic swap finalises the op), then write the
+///   new private key into the conf and schedule a restart so the daemon
+///   comes back up using it. Returns `Skip` because the dispatcher
+///   already finalised the op via the side-channel.
+fn dispatch_pending_op(op: &PendingOp, ctx: &DispatchCtx<'_>) -> DispatchOutcome {
     eprintln!("event=snapshot_op_received op_id={} op={}", op.op_id, op.op);
     match op.op.as_str() {
         "restart" => {
             super::supervisor::request_restart();
-            Ok(())
+            DispatchOutcome::Ack(Ok(()))
         }
-        // rotate_key / upgrade / kick fall through until §18.A3.2+ wire
-        // them. (kick is canonically driven by `removed_at` → snapshot
-        // push 401, not by this queue, but is in the schema enum for
+        "rotate_key" => match handle_rotate_key_op(ctx, &op.op_id) {
+            Ok(()) => DispatchOutcome::Skip,
+            Err(detail) => DispatchOutcome::Ack(Err(detail)),
+        },
+        // upgrade / kick fall through until §18.A3.5 wires them.
+        // (kick is canonically driven by `removed_at` → snapshot push
+        // 401, not by this queue, but is in the schema enum for
         // completeness.)
-        _ => Err("not_implemented_in_a1".to_string()),
+        _ => DispatchOutcome::Ack(Err("not_implemented_in_a1".to_string())),
     }
+}
+
+/// Execute one queued `rotate_key` op (v1.2-plan §18.A3.2b).
+///
+/// Order is load-bearing:
+///   1. Generate the new keypair locally — cheap, no side effects.
+///   2. POST `/api/internal/rotate_key/complete` with the NEW pubkey
+///      using the daemon's OLD credentials. The dispatcher swaps
+///      `devices.x25519_pubkey` and finalises the op in one tx
+///      (§18.A3.2a); on 204 the OLD pubkey stops authenticating.
+///   3. Rewrite the local conf's `private` directive atomically.
+///   4. Schedule a restart so the daemon reloads conf and the next
+///      snapshot push goes out under the NEW pubkey.
+///
+/// Failure modes:
+/// - POST fails before the dispatcher commits → conf untouched, no
+///   restart, return Err(detail) → row goes to failed_at via ack.
+/// - POST succeeds but the conf write fails → dispatcher has the new
+///   pubkey, daemon still on the old one. We DO NOT trigger a restart
+///   in this case; the next snapshot push will 401 and surface the
+///   inconsistency rather than silently looping. Operator must repair.
+fn handle_rotate_key_op(ctx: &DispatchCtx<'_>, op_id: &str) -> Result<(), String> {
+    use crate::conf_io::{swap_private_directive, write_atomic};
+    use crate::keys;
+
+    let (new_sk, new_pk) = keys::generate_static();
+    let new_sk_hex = hex::encode(&new_sk);
+    let new_pk_hex = hex::encode(&new_pk);
+    eprintln!(
+        "event=rotate_key_start op_id={op_id} new_pubkey={new_pk_hex}"
+    );
+
+    let url = format!("{}/api/internal/rotate_key/complete", ctx.admin_endpoint);
+    let body = format!(
+        r#"{{"device_pubkey_hex":"{}","op_id":"{}","new_pubkey_hex":"{}"}}"#,
+        ctx.pubkey_hex, op_id, new_pk_hex
+    );
+    let out = Command::new("curl")
+        .arg("--silent")
+        .arg("--show-error")
+        .arg("--fail-with-body")
+        .arg("--connect-timeout")
+        .arg("10")
+        .arg("--max-time")
+        .arg("30")
+        .arg("-X")
+        .arg("POST")
+        .arg("-H")
+        .arg(format!("Authorization: Bearer {}", ctx.device_token))
+        .arg("-H")
+        .arg("Content-Type: application/json")
+        .arg("--data-binary")
+        .arg(&body)
+        .arg(&url)
+        .output()
+        .map_err(|e| format!("rotate_key: curl spawn failed: {e}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let resp = String::from_utf8_lossy(&out.stdout);
+        return Err(format!(
+            "rotate_key: complete POST failed exit={:?} stderr={stderr} body={resp}",
+            out.status.code()
+        ));
+    }
+
+    // Dispatcher has committed the swap. Now persist the new private
+    // key so a restart picks it up.
+    let text = match std::fs::read_to_string(ctx.conf_path) {
+        Ok(t) => t,
+        Err(e) => {
+            // Dispatcher already swapped pubkey; we cannot persist new
+            // private and must not restart, since coming back up with
+            // the old private key would 401 indefinitely.
+            eprintln!(
+                "event=rotate_key_conf_read_failed op_id={op_id} path={} error=\"{e}\"",
+                ctx.conf_path.display()
+            );
+            return Err(format!(
+                "rotate_key: dispatcher swapped pubkey but conf read failed: {e}; operator repair required"
+            ));
+        }
+    };
+    let new_text = swap_private_directive(&text, &new_sk_hex);
+    if let Err(e) = write_atomic(ctx.conf_path, &new_text) {
+        eprintln!(
+            "event=rotate_key_conf_write_failed op_id={op_id} path={} error=\"{e}\"",
+            ctx.conf_path.display()
+        );
+        return Err(format!(
+            "rotate_key: dispatcher swapped pubkey but conf write failed: {e}; operator repair required"
+        ));
+    }
+
+    eprintln!(
+        "event=rotate_key_complete op_id={op_id} conf={}",
+        ctx.conf_path.display()
+    );
+    super::supervisor::request_restart();
+    Ok(())
 }
 
 /// POST `/api/internal/snapshot/ack` with the daemon's per-op verdict.
@@ -1642,9 +1798,23 @@ mod tests {
         assert_eq!(ops[0].op_id, "33333333-3333-3333-3333-333333333333");
     }
 
+    fn fake_ctx() -> (PathBuf, DispatchCtx<'static>) {
+        // Tests that don't reach the rotate_key conf-IO path are happy
+        // with any path string; ones that DO reach it own constructing
+        // a real tempfile and rebuilding the ctx inline.
+        let path = PathBuf::from("/tmp/gnet-discovery-test-unused.conf");
+        let ctx = DispatchCtx {
+            conf_path: Box::leak(path.clone().into_boxed_path()),
+            admin_endpoint: "http://127.0.0.1:1", // unreachable on purpose
+            device_token: "tok-test",
+            pubkey_hex: "00".repeat(32).leak(),
+        };
+        (path, ctx)
+    }
+
     #[test]
     fn dispatch_pending_op_restart_triggers_supervisor() {
-        // §18.A3.1: restart ops are now wired. cfg(test) overrides the
+        // §18.A3.1: restart ops are wired. cfg(test) overrides the
         // real exit timer so the test process survives.
         super::super::supervisor::reset_restart_for_test();
         let op = PendingOp {
@@ -1652,20 +1822,55 @@ mod tests {
             op: "restart".to_string(),
             args_raw: "{}".to_string(),
         };
-        assert_eq!(dispatch_pending_op(&op), Ok(()));
+        let (_path, ctx) = fake_ctx();
+        match dispatch_pending_op(&op, &ctx) {
+            DispatchOutcome::Ack(Ok(())) => {}
+            other => panic!("expected Ack(Ok), got {:?}", outcome_dbg(&other)),
+        }
         assert!(super::super::supervisor::was_restart_requested());
         super::super::supervisor::reset_restart_for_test();
     }
 
     #[test]
-    fn dispatch_pending_op_unknown_ops_still_unimplemented() {
-        // rotate_key / upgrade / kick are not wired in A3.1; they keep
-        // the A1 structured-error fallback so the queue row finalises.
+    fn dispatch_pending_op_rotate_key_unreachable_admin_returns_ack_err() {
+        // §18.A3.2b: rotate_key with an unreachable admin endpoint
+        // surfaces the curl failure as Ack(Err) — the dispatcher never
+        // committed, so the row should go to failed_at via ack rather
+        // than be skipped.
         let op = PendingOp {
-            op_id: "0".to_string(),
+            op_id: "11111111-1111-1111-1111-111111111111".to_string(),
             op: "rotate_key".to_string(),
             args_raw: "{}".to_string(),
         };
-        assert_eq!(dispatch_pending_op(&op), Err("not_implemented_in_a1".to_string()));
+        let (_path, ctx) = fake_ctx();
+        match dispatch_pending_op(&op, &ctx) {
+            DispatchOutcome::Ack(Err(detail)) => {
+                assert!(detail.contains("rotate_key"), "detail: {detail}");
+            }
+            other => panic!("expected Ack(Err), got {:?}", outcome_dbg(&other)),
+        }
+    }
+
+    #[test]
+    fn dispatch_pending_op_unknown_ops_still_unimplemented() {
+        // upgrade / kick are not wired in A3.2; they keep the A1
+        // structured-error fallback so the queue row finalises.
+        let op = PendingOp {
+            op_id: "0".to_string(),
+            op: "upgrade".to_string(),
+            args_raw: "{}".to_string(),
+        };
+        let (_path, ctx) = fake_ctx();
+        match dispatch_pending_op(&op, &ctx) {
+            DispatchOutcome::Ack(Err(d)) => assert_eq!(d, "not_implemented_in_a1"),
+            other => panic!("expected Ack(Err), got {:?}", outcome_dbg(&other)),
+        }
+    }
+
+    fn outcome_dbg(o: &DispatchOutcome) -> String {
+        match o {
+            DispatchOutcome::Skip => "Skip".to_string(),
+            DispatchOutcome::Ack(r) => format!("Ack({r:?})"),
+        }
     }
 }
