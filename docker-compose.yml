@@ -65,14 +65,12 @@ services:
 
   # ── console binary ────────────────────────────────────────────
   console:
-    build:
-      # Context is the repo root (where this compose lives), so the
-      # Dockerfile's COPY paths resolve relative to the rsynced repo.
-      context: .
-      dockerfile: self-host/Dockerfile
-      target: console
+    # Pinned major.minor of the unified gnet image; the entrypoint
+    # routes by GNET_ROLE below to the gnet-console binary.
+    image: goliakk/gnet:${GNET_IMAGE_TAG:-1.1.0}
     container_name: gnet-saas-console
     restart: unless-stopped
+    command: ["console"]
     depends_on:
       postgres:
         condition: service_healthy

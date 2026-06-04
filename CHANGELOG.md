@@ -34,7 +34,11 @@ public releases, have been removed — their content is rolled into the
 
 ---
 
-## [Unreleased] — 1.1.0 (in progress on `develop`)
+## [Unreleased]
+
+_No entries yet on `develop`._
+
+## [1.1.0] — 2026-06-04
 
 v1.1 is the **control-plane release**. The data plane is wire-stable
 (v1.0 daemons interoperate unchanged on a v1.1 fleet), but the surface
@@ -84,6 +88,21 @@ in this entry has landed on `develop`.
   validates shape (3..32 chars `[a-z0-9_-]`), enforces uniqueness
   per-network, and writes an `audit_log` row in the same
   transaction. 400/404/409/403 map cleanly (§17.7).
+- **Device kick write path.** `POST /api/devices/{id}/kick` soft-
+  deletes via a new `devices.removed_at` column (migration 0003);
+  the two natural unique constraints become partial indexes scoped
+  to live rows so a kicked device can re-register and a freed alias
+  can be reused. `/api/devices` list and `/api/internal/snapshot`
+  both filter `removed_at IS NULL`, so the kicked daemon's next
+  snapshot push lands at 401 — that's how "kick" becomes daemon-
+  visible without a dispatcher → daemon control channel (§17.7).
+- **`rotate-key` / `restart` wire contract.** `POST
+  /api/devices/{id}/rotate-key` and `.../restart` return `501 Not
+  Implemented` with a structured
+  `{"not_implemented":..., "ships_in":"v1.2", "reason":"needs
+  dispatcher→daemon control channel"}` body — same pattern as the
+  daemon's `/local/*` 501 stubs; the URL is pinned so v1.2 fills in
+  the implementation without breaking SPA wiring (§17.7).
 - **Federation receiver.** `POST /api/federation/register` accepts
   a console-issued federation token + console origin; dispatcher
   stores `(SHA3-256(token), origin)` in `federation_trust` and
@@ -113,6 +132,21 @@ in this entry has landed on `develop`.
 - **Same defensive headers + login rate-limit** as the dispatcher,
   with cookie `Secure` defaulting **on** (SaaS is HTTPS-only) —
   `GNET_CONSOLE_SECURE_COOKIES=0` opts out for dev (§17.12).
+- **Dispatcher SPA mounted over the federation proxy at
+  `/networks/:id`.** Clicking a network row on the dashboard takes
+  the user into the dispatcher UI without leaving the console
+  origin. `createApi(basePath)` factory + an `ApiContext` Provider
+  let the same DispatcherShell subtree run standalone (basePath="")
+  and proxied (basePath=`/api/networks/:id/proxy`). DispatcherShell
+  gains a `mode` prop: in `proxy` mode an unauthenticated probe
+  surfaces a "federation rejected" notice instead of falling back
+  to a Login form whose cookie can't cross origins.
+- **Dispatcher SPA split into Overview / Network / Devices
+  routes.** DispatcherShell now renders a layout (header + left
+  nav) and delegates the content area to a nested `<Routes>` with
+  relative paths, so the same subtree resolves correctly under "/"
+  in the standalone binary and under "/networks/:id" when mounted
+  by the federation proxy.
 
 ### Added — relay (`gnet-relay-server`)
 
@@ -157,14 +191,25 @@ in this entry has landed on `develop`.
 
 ### Added — deployment
 
-- **Self-host docker-compose bundle.** New `self-host/` directory
-  ships a multi-stage `Dockerfile` (bun → rust → three minimal
-  runtime images), a `docker-compose.yml` with `db` (postgres:18)
-  + `kv` (valkey:9) + `dispatcher` + `relay`, `.env.example` with
+- **Unified `goliakk/gnet` container image (Docker Hub + ghcr).**
+  One image ships all four binaries (daemon, dispatcher, relay,
+  console); the entrypoint dispatches to the right one by
+  `GNET_ROLE` env or a leading positional arg
+  (`daemon|dispatcher|relay|console`). Bare `docker run
+  goliakk/gnet up /etc/gnet/main.conf` keeps working — the daemon
+  remains the default when no role is supplied, so the v1.0 docs
+  stay valid on 1.1.0+. The old per-target `self-host/Dockerfile`
+  is replaced; `self-host/docker-compose.yml`, the SaaS
+  `docker-compose.yml`, and `examples/docker-compose.yml` all
+  reference the unified image. Built + pushed multi-arch
+  (linux/amd64 + linux/arm64) on every `v*` tag by the release
+  pipeline.
+- **Self-host docker-compose bundle** (carried over from §17.10b,
+  now pointing at the unified image). `db` (postgres:18) + `kv`
+  (valkey:9) + `dispatcher` + `relay`, `.env.example` with
   required-var assertions, and a `README.md` walking the operator
   through a 5-step init. Mode B (self-host, no SaaS dep) is fully
-  brought up by `cp .env.example .env && docker compose up -d`
-  (§17.10b).
+  brought up by `cp .env.example .env && docker compose up -d`.
 - **SaaS deploy spec bundle.** New `deploy/saas/` directory holds
   the devops.golia.jp API bodies (`project.json`, `services.json`,
   `caddy-site.json`, `dns-apex.json`, `dns-wildcard.json`), a

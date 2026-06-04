@@ -759,7 +759,7 @@ dependencies = [
 
 [[package]]
 name = "gnet"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "gnet-config",
  "gnet-crypto",
@@ -774,7 +774,7 @@ dependencies = [
 
 [[package]]
 name = "gnet-bench-compare"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "chacha20poly1305",
  "gnet-crypto",
@@ -790,7 +790,7 @@ dependencies = [
 
 [[package]]
 name = "gnet-config"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "gnet-crypto",
  "gnet-hex",
@@ -799,7 +799,7 @@ dependencies = [
 
 [[package]]
 name = "gnet-console"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "argon2",
  "axum",
@@ -826,18 +826,18 @@ dependencies = [
 
 [[package]]
 name = "gnet-console-schema"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sqlx",
 ]
 
 [[package]]
 name = "gnet-crypto"
-version = "1.0.0"
+version = "1.1.0"
 
 [[package]]
 name = "gnet-discover"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "argon2",
  "axum",
@@ -862,21 +862,21 @@ dependencies = [
 
 [[package]]
 name = "gnet-discover-schema"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sqlx",
 ]
 
 [[package]]
 name = "gnet-hex"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "gnet-rand",
 ]
 
 [[package]]
 name = "gnet-noise"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "gnet-crypto",
  "gnet-hex",
@@ -884,7 +884,7 @@ dependencies = [
 
 [[package]]
 name = "gnet-punch"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "gnet-rand",
  "gnet-wire",
@@ -892,18 +892,18 @@ dependencies = [
 
 [[package]]
 name = "gnet-rand"
-version = "1.0.0"
+version = "1.1.0"
 
 [[package]]
 name = "gnet-relay"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "gnet-rand",
 ]
 
 [[package]]
 name = "gnet-relay-server"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "axum",
  "gnet-hex",
@@ -917,11 +917,11 @@ dependencies = [
 
 [[package]]
 name = "gnet-tun"
-version = "1.0.0"
+version = "1.1.0"
 
 [[package]]
 name = "gnet-wire"
-version = "1.0.0"
+version = "1.1.0"
 
 [[package]]
 name = "hashbrown"
