@@ -57,12 +57,14 @@ impl AdminConfig {
             })?;
 
         let network_id_hint = match std::env::var("GNET_DISCOVER_NETWORK_ID") {
-            Ok(s) if !s.trim().is_empty() => Some(
-                uuid::Uuid::parse_str(s.trim()).map_err(|source| AdminConfigError::BadUuid {
-                    var: "GNET_DISCOVER_NETWORK_ID",
-                    source,
-                })?,
-            ),
+            Ok(s) if !s.trim().is_empty() => {
+                Some(uuid::Uuid::parse_str(s.trim()).map_err(|source| {
+                    AdminConfigError::BadUuid {
+                        var: "GNET_DISCOVER_NETWORK_ID",
+                        source,
+                    }
+                })?)
+            }
             _ => None,
         };
 

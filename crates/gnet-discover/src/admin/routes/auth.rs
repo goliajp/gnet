@@ -6,8 +6,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use chrono::Utc;
-use time::Duration;
 use serde::{Deserialize, Serialize};
+use time::Duration;
 use uuid::Uuid;
 
 use crate::admin::AdminState;
@@ -86,9 +86,9 @@ impl IntoResponse for AuthRouteError {
         let code = match self {
             AuthRouteError::BadCreds | AuthRouteError::NotLoggedIn => StatusCode::UNAUTHORIZED,
             AuthRouteError::Throttled { .. } => StatusCode::TOO_MANY_REQUESTS,
-            AuthRouteError::Session(_)
-            | AuthRouteError::Db(_)
-            | AuthRouteError::Cache(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            AuthRouteError::Session(_) | AuthRouteError::Db(_) | AuthRouteError::Cache(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
         (code, self.to_string()).into_response()
     }
@@ -189,13 +189,13 @@ async fn login(
 }
 
 async fn logout(State(state): State<AdminState>, jar: CookieJar) -> (CookieJar, StatusCode) {
-    if let Some(cookie) = jar.get(COOKIE_NAME) {
-        if let Some(key) = session::key_from_cookie(state.network_id, cookie.value()) {
-            // Best-effort: a delete failure shouldn't keep the user
-            // logged in client-side, so we still clear the cookie below.
-            let mut kv = state.kv.clone();
-            let _ = session::delete(&mut kv, &key).await;
-        }
+    if let Some(cookie) = jar.get(COOKIE_NAME)
+        && let Some(key) = session::key_from_cookie(state.network_id, cookie.value())
+    {
+        // Best-effort: a delete failure shouldn't keep the user
+        // logged in client-side, so we still clear the cookie below.
+        let mut kv = state.kv.clone();
+        let _ = session::delete(&mut kv, &key).await;
     }
     let cleared_session = Cookie::build((COOKIE_NAME, ""))
         .path("/")
@@ -242,12 +242,12 @@ pub async fn require_login(
     jar: &CookieJar,
     headers: &HeaderMap,
 ) -> Result<Session, AuthRouteError> {
-    if let Some(cookie) = jar.get(COOKIE_NAME) {
-        if let Some(key) = session::key_from_cookie(state.network_id, cookie.value()) {
-            let mut kv = state.kv.clone();
-            if let Some(s) = session::fetch(&mut kv, &key).await? {
-                return Ok(s);
-            }
+    if let Some(cookie) = jar.get(COOKIE_NAME)
+        && let Some(key) = session::key_from_cookie(state.network_id, cookie.value())
+    {
+        let mut kv = state.kv.clone();
+        if let Some(s) = session::fetch(&mut kv, &key).await? {
+            return Ok(s);
         }
     }
 

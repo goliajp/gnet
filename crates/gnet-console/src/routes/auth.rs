@@ -105,9 +105,9 @@ impl IntoResponse for AuthRouteError {
         }
         let code = match self {
             AuthRouteError::BadEmail | AuthRouteError::WeakPassword => StatusCode::BAD_REQUEST,
-            AuthRouteError::BadCreds
-            | AuthRouteError::NotLoggedIn
-            | AuthRouteError::Unverified => StatusCode::UNAUTHORIZED,
+            AuthRouteError::BadCreds | AuthRouteError::NotLoggedIn | AuthRouteError::Unverified => {
+                StatusCode::UNAUTHORIZED
+            }
             AuthRouteError::AlreadyExists => StatusCode::CONFLICT,
             AuthRouteError::Throttled { .. } => StatusCode::TOO_MANY_REQUESTS,
             AuthRouteError::Hash(_)
@@ -125,7 +125,10 @@ pub fn routes() -> Router<AppState> {
         .route("/api/auth/email/register", post(register))
         .route("/api/auth/email/login", post(login))
         .route("/api/auth/email/verify", post(verify_email))
-        .route("/api/auth/email/resend-verification", post(resend_verification))
+        .route(
+            "/api/auth/email/resend-verification",
+            post(resend_verification),
+        )
         .route("/api/auth/email/forgot-password", post(forgot_password))
         .route("/api/auth/email/reset-password", post(reset_password))
         .route("/api/auth/me", get(me))
@@ -147,11 +150,10 @@ async fn register(
 
     let mut tx = state.pool.begin().await?;
 
-    let existing: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM users WHERE email = $1")
-            .bind(&email)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let existing: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM users WHERE email = $1")
+        .bind(&email)
+        .fetch_optional(&mut *tx)
+        .await?;
     if existing.is_some() {
         return Err(AuthRouteError::AlreadyExists);
     }
@@ -164,7 +166,11 @@ async fn register(
         .await?;
 
     let hash = hash_password(&req.password)?;
-    let verified_at_sql = if state.auto_verify_email { "now()" } else { "NULL" };
+    let verified_at_sql = if state.auto_verify_email {
+        "now()"
+    } else {
+        "NULL"
+    };
     let q = format!(
         "INSERT INTO email_credentials (user_id, password_hash, verified_at) \
          VALUES ($1, $2, {verified_at_sql})"
@@ -184,13 +190,11 @@ async fn register(
         let mut raw = [0u8; 32];
         gnet_rand::fill(&mut raw);
         let token = gnet_hex::encode(&raw);
-        sqlx::query(
-            "INSERT INTO email_verification_tokens (token, user_id) VALUES ($1, $2)",
-        )
-        .bind(&token)
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("INSERT INTO email_verification_tokens (token, user_id) VALUES ($1, $2)")
+            .bind(&token)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
         Some(token)
     };
 
@@ -399,12 +403,7 @@ async fn forgot_password(
         "<p>Someone asked to reset the password on your gnet account.</p><p>If that was you, follow this link within one hour:</p><p><a href=\"{link}\">{link}</a></p><p>If it wasn't, ignore this mail — your password is unchanged.</p><p>— gnet.golia.jp</p>"
     );
     if let Err(e) = mail
-        .send(
-            &email,
-            "Reset your gnet password",
-            &body,
-            Some(&html_body),
-        )
+        .send(&email, "Reset your gnet password", &body, Some(&html_body))
         .await
     {
         tracing::error!(error = ?e, user_id = %user_id, "password-reset mail failed");
@@ -471,10 +470,7 @@ async fn reset_password(
 /// Walk the console session prefix in Valkey and drop every row that
 /// belongs to `user_id`. Best-effort: returns Ok even on a partial
 /// scan — caller logs the count via `?` propagation if needed.
-async fn invalidate_user_sessions(
-    state: &AppState,
-    user_id: Uuid,
-) -> Result<(), AuthRouteError> {
+async fn invalidate_user_sessions(state: &AppState, user_id: Uuid) -> Result<(), AuthRouteError> {
     use redis::AsyncCommands;
     let mut kv = state.kv.clone();
     let mut cursor: u64 = 0;
@@ -589,11 +585,11 @@ async fn me(
 }
 
 async fn logout(State(state): State<AppState>, jar: CookieJar) -> (CookieJar, StatusCode) {
-    if let Some(cookie) = jar.get(SESSION_COOKIE) {
-        if let Some(key) = session::key_from_cookie(cookie.value()) {
-            let mut kv = state.kv.clone();
-            let _ = session::delete(&mut kv, &key).await;
-        }
+    if let Some(cookie) = jar.get(SESSION_COOKIE)
+        && let Some(key) = session::key_from_cookie(cookie.value())
+    {
+        let mut kv = state.kv.clone();
+        let _ = session::delete(&mut kv, &key).await;
     }
     let cleared_sess = Cookie::build((SESSION_COOKIE, ""))
         .path("/")
@@ -661,10 +657,7 @@ pub async fn open_session_cookies(
     Ok(jar.add(session_cookie).add(csrf_cookie))
 }
 
-pub async fn require_login(
-    state: &AppState,
-    jar: &CookieJar,
-) -> Result<Session, AuthRouteError> {
+pub async fn require_login(state: &AppState, jar: &CookieJar) -> Result<Session, AuthRouteError> {
     let cookie = jar.get(SESSION_COOKIE).ok_or(AuthRouteError::NotLoggedIn)?;
     let key = session::key_from_cookie(cookie.value()).ok_or(AuthRouteError::NotLoggedIn)?;
     let mut kv = state.kv.clone();

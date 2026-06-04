@@ -92,9 +92,9 @@ impl IntoResponse for FederationError {
             FederationError::BadToken | FederationError::BadOrigin => StatusCode::BAD_REQUEST,
             FederationError::Duplicate => StatusCode::CONFLICT,
             FederationError::NotFound => StatusCode::NOT_FOUND,
-            FederationError::Session(_)
-            | FederationError::Db(_)
-            | FederationError::Cache(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            FederationError::Session(_) | FederationError::Db(_) | FederationError::Cache(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
         (code, self.to_string()).into_response()
     }
@@ -180,7 +180,10 @@ async fn register(
 
     tx.commit().await?;
 
-    Ok((StatusCode::CREATED, Json(RegisterResponse { federation_id })))
+    Ok((
+        StatusCode::CREATED,
+        Json(RegisterResponse { federation_id }),
+    ))
 }
 
 /// Operator-side revocation. Sets `revoked_at = now()` on a single

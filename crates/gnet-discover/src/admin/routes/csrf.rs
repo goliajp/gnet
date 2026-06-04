@@ -74,10 +74,7 @@ pub async fn guard(req: Request, next: Next) -> Result<Response, Response> {
     let Some(cookie_value) = parse_cookie(headers, CSRF_COOKIE_NAME) else {
         return Err(forbidden("missing csrf cookie"));
     };
-    let Some(header_value) = headers
-        .get(CSRF_HEADER_NAME)
-        .and_then(|v| v.to_str().ok())
-    else {
+    let Some(header_value) = headers.get(CSRF_HEADER_NAME).and_then(|v| v.to_str().ok()) else {
         return Err(forbidden("missing csrf header"));
     };
 
@@ -99,10 +96,10 @@ fn parse_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
     let raw = headers.get(header::COOKIE)?.to_str().ok()?;
     for piece in raw.split(';') {
         let piece = piece.trim();
-        if let Some((k, v)) = piece.split_once('=') {
-            if k.trim() == name {
-                return Some(v.trim().to_string());
-            }
+        if let Some((k, v)) = piece.split_once('=')
+            && k.trim() == name
+        {
+            return Some(v.trim().to_string());
         }
     }
     None

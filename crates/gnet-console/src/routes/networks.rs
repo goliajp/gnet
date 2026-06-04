@@ -111,9 +111,7 @@ fn valid_label(s: &str) -> bool {
 }
 
 fn valid_endpoint(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 1024
-        && (s.starts_with("http://") || s.starts_with("https://"))
+    !s.is_empty() && s.len() <= 1024 && (s.starts_with("http://") || s.starts_with("https://"))
 }
 
 async fn list(
@@ -140,7 +138,11 @@ async fn register(
 ) -> Result<(StatusCode, Json<RegisterResponse>), NetworkError> {
     let session = require_login(&state, &jar).await?;
     let label = req.network_label.trim().to_string();
-    let endpoint = req.dispatcher_endpoint.trim().trim_end_matches('/').to_string();
+    let endpoint = req
+        .dispatcher_endpoint
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
     if !valid_label(&label) {
         return Err(NetworkError::BadLabel);
     }
@@ -149,12 +151,7 @@ async fn register(
     }
 
     let id = Uuid::new_v4();
-    let token = derive_token(
-        &state.federation_secret,
-        session.user_id,
-        &label,
-        &endpoint,
-    );
+    let token = derive_token(&state.federation_secret, session.user_id, &label, &endpoint);
 
     let insert = sqlx::query(
         "INSERT INTO user_networks \

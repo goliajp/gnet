@@ -107,8 +107,8 @@ impl Apple {
             .json()
             .await?;
 
-        let header =
-            decode_header(&res.id_token).map_err(|e| OAuthError::Provider(format!("jwt header: {e}")))?;
+        let header = decode_header(&res.id_token)
+            .map_err(|e| OAuthError::Provider(format!("jwt header: {e}")))?;
         let kid = header
             .kid
             .ok_or_else(|| OAuthError::Provider("apple id_token has no `kid`".into()))?;
@@ -179,13 +179,13 @@ async fn fetch_jwk(
 ) -> Result<Jwk, OAuthError> {
     let cache_key = format!("gnet:console:oauth:apple:jwk:{kid}");
     let cached: Option<String> = kv.get(&cache_key).await?;
-    if let Some(s) = cached {
-        if let Ok(jwk) = serde_json::from_str::<Jwk>(&s) {
-            return Ok(jwk);
-        }
-        // Cache hit but couldn't parse — treat as miss; we don't want
-        // a stale-format entry to keep us from refetching.
+    if let Some(s) = cached
+        && let Ok(jwk) = serde_json::from_str::<Jwk>(&s)
+    {
+        return Ok(jwk);
     }
+    // Cache hit but couldn't parse — treat as miss; we don't want
+    // a stale-format entry to keep us from refetching.
 
     #[derive(Deserialize)]
     struct Doc {

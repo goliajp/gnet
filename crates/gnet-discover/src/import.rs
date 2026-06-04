@@ -44,10 +44,7 @@ pub enum ImportError {
     #[error("database: {0}")]
     Db(#[from] sqlx::Error),
     #[error("decode hex for device alias='{alias}', field={field}")]
-    BadHex {
-        alias: String,
-        field: &'static str,
-    },
+    BadHex { alias: String, field: &'static str },
     #[error("dispatcher PG already populated (networks table non-empty); refusing import")]
     AlreadyPopulated,
     #[error("rename {from} -> {to}: {source}")]
@@ -91,10 +88,12 @@ pub async fn import_state(
     input: &ImportInput<'_>,
     pool: &PgPool,
 ) -> Result<ImportSummary, ImportError> {
-    let bytes = tokio::fs::read(input.state_path).await.map_err(|source| ImportError::Read {
-        path: input.state_path.to_path_buf(),
-        source,
-    })?;
+    let bytes = tokio::fs::read(input.state_path)
+        .await
+        .map_err(|source| ImportError::Read {
+            path: input.state_path.to_path_buf(),
+            source,
+        })?;
     let state: State = serde_json::from_slice(&bytes)?;
 
     let mut tx = pool.begin().await?;
@@ -164,11 +163,7 @@ pub async fn import_state(
     })
 }
 
-async fn insert_device<'a, E>(
-    conn: E,
-    network_id: Uuid,
-    dev: &Device,
-) -> Result<(), ImportError>
+async fn insert_device<'a, E>(conn: E, network_id: Uuid, dev: &Device) -> Result<(), ImportError>
 where
     E: sqlx::Executor<'a, Database = Postgres>,
 {
@@ -222,7 +217,10 @@ fn pack_v6_prefix(prefix: &[u16; 4]) -> Vec<u8> {
 fn with_imported_suffix(path: &Path) -> PathBuf {
     // `Path::with_extension` would replace `.json` with `.imported`; we want
     // to *append* so the original extension stays visible (state.json.imported).
-    let mut name = path.file_name().map(|s| s.to_os_string()).unwrap_or_default();
+    let mut name = path
+        .file_name()
+        .map(|s| s.to_os_string())
+        .unwrap_or_default();
     name.push(".imported");
     path.with_file_name(name)
 }
@@ -234,10 +232,7 @@ mod tests {
     #[test]
     fn v6_prefix_packs_big_endian() {
         let packed = pack_v6_prefix(&[0xfd8d, 0xf090, 0x2ebb, 0]);
-        assert_eq!(
-            packed,
-            vec![0xfd, 0x8d, 0xf0, 0x90, 0x2e, 0xbb, 0x00, 0x00]
-        );
+        assert_eq!(packed, vec![0xfd, 0x8d, 0xf0, 0x90, 0x2e, 0xbb, 0x00, 0x00]);
     }
 
     #[test]
@@ -256,10 +251,9 @@ mod tests {
         // known SHA-3-256 vector (NIST FIPS 202 §B.1: empty message).
         let h: [u8; 32] = gnet_crypto::sha3::sha3_256(b"");
         let expected: [u8; 32] = [
-            0xa7, 0xff, 0xc6, 0xf8, 0xbf, 0x1e, 0xd7, 0x66,
-            0x51, 0xc1, 0x47, 0x56, 0xa0, 0x61, 0xd6, 0x62,
-            0xf5, 0x80, 0xff, 0x4d, 0xe4, 0x3b, 0x49, 0xfa,
-            0x82, 0xd8, 0x0a, 0x4b, 0x80, 0xf8, 0x43, 0x4a,
+            0xa7, 0xff, 0xc6, 0xf8, 0xbf, 0x1e, 0xd7, 0x66, 0x51, 0xc1, 0x47, 0x56, 0xa0, 0x61,
+            0xd6, 0x62, 0xf5, 0x80, 0xff, 0x4d, 0xe4, 0x3b, 0x49, 0xfa, 0x82, 0xd8, 0x0a, 0x4b,
+            0x80, 0xf8, 0x43, 0x4a,
         ];
         assert_eq!(h, expected);
     }

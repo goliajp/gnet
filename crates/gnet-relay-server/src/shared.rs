@@ -6,8 +6,8 @@
 //! needs a concurrent view of the same state — so the table moves behind
 //! an `RwLock` and the counters move to `AtomicU64`. Both choices keep
 //! the forwarder's per-datagram cost flat (uncontended write-lock acquire
-//! + relaxed atomic adds) while letting the admin server snapshot without
-//! blocking forwarding.
+//! and relaxed atomic adds) while letting the admin server snapshot
+//! without blocking forwarding.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;

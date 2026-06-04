@@ -101,8 +101,8 @@ impl LocalAdminConfig {
             return Ok(None);
         }
 
-        let bind_s = std::env::var("GNET_LOCAL_ADMIN_BIND")
-            .unwrap_or_else(|_| "127.0.0.1:6019".to_string());
+        let bind_s =
+            std::env::var("GNET_LOCAL_ADMIN_BIND").unwrap_or_else(|_| "127.0.0.1:6019".to_string());
         let bind: SocketAddr = bind_s
             .parse()
             .map_err(|e| format!("GNET_LOCAL_ADMIN_BIND {bind_s:?}: {e}"))?;
@@ -144,12 +144,8 @@ pub fn default_token_path() -> PathBuf {
 ///   `echo > admin_token` would otherwise smuggle a newline into the
 ///   compared bytes).
 pub fn load_token(path: &Path) -> Result<String, String> {
-    let meta = std::fs::metadata(path).map_err(|e| {
-        format!(
-            "GNET_LOCAL_ADMIN_TOKEN_PATH {}: {e}",
-            path.display()
-        )
-    })?;
+    let meta = std::fs::metadata(path)
+        .map_err(|e| format!("GNET_LOCAL_ADMIN_TOKEN_PATH {}: {e}", path.display()))?;
     let mode = meta.permissions().mode() & 0o777;
     if mode != TOKEN_FILE_MODE {
         return Err(format!(
@@ -159,8 +155,7 @@ pub fn load_token(path: &Path) -> Result<String, String> {
             TOKEN_FILE_MODE
         ));
     }
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let raw = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let token = raw.trim_end_matches(['\n', '\r']).to_string();
     if token.is_empty() {
         return Err(format!("{}: token file is empty", path.display()));
@@ -243,9 +238,10 @@ fn handle(
     };
 
     // Auth: every endpoint requires a valid bearer.
-    let presented_token = req
-        .header_ci("authorization")
-        .and_then(|v| v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")));
+    let presented_token = req.header_ci("authorization").and_then(|v| {
+        v.strip_prefix("Bearer ")
+            .or_else(|| v.strip_prefix("bearer "))
+    });
     let Some(presented_token) = presented_token else {
         return write_response(
             &mut stream,
@@ -329,9 +325,7 @@ fn render_status(node: &Arc<Mutex<Node>>) -> String {
     push_kv_json_str(
         &mut out,
         "reflexive",
-        &g.reflexive
-            .map(|a| a.to_string())
-            .unwrap_or_default(),
+        &g.reflexive.map(|a| a.to_string()).unwrap_or_default(),
     );
     out.push(',');
     out.push_str("\"self_is_nat\":");
@@ -410,9 +404,7 @@ fn render_status(node: &Arc<Mutex<Node>>) -> String {
         push_kv_json_str(
             &mut out,
             "endpoint",
-            &p.endpoint
-                .map(|e| e.to_string())
-                .unwrap_or_default(),
+            &p.endpoint.map(|e| e.to_string()).unwrap_or_default(),
         );
         out.push(',');
         push_kv_json_str(
@@ -439,9 +431,7 @@ fn render_status(node: &Arc<Mutex<Node>>) -> String {
         push_kv_json_str(
             &mut out,
             "relay_endpoint",
-            &p.relay_endpoint
-                .map(|e| e.to_string())
-                .unwrap_or_default(),
+            &p.relay_endpoint.map(|e| e.to_string()).unwrap_or_default(),
         );
         out.push(',');
         push_kv_json_bool(&mut out, "punched", p.punched);
@@ -696,7 +686,8 @@ mod tests {
 
     #[test]
     fn parses_get_with_headers() {
-        let buf = b"GET /local/status HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer abc\r\n\r\n";
+        let buf =
+            b"GET /local/status HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer abc\r\n\r\n";
         let r = parse_request(buf).unwrap();
         assert_eq!(r.method, "GET");
         assert_eq!(r.path, "/local/status");
@@ -706,8 +697,7 @@ mod tests {
 
     #[test]
     fn parses_put_with_body() {
-        let buf =
-            b"PUT /local/alias HTTP/1.1\r\nContent-Length: 17\r\n\r\n{\"alias\":\"hello\"}";
+        let buf = b"PUT /local/alias HTTP/1.1\r\nContent-Length: 17\r\n\r\n{\"alias\":\"hello\"}";
         let r = parse_request(buf).unwrap();
         assert_eq!(r.method, "PUT");
         assert_eq!(r.body, br#"{"alias":"hello"}"#);
@@ -727,15 +717,17 @@ mod tests {
 
     #[test]
     fn content_length_caps_at_max() {
-        let huge = format!("POST / HTTP/1.1\r\nContent-Length: {}\r\n\r\n", MAX_REQUEST_BYTES + 1);
+        let huge = format!(
+            "POST / HTTP/1.1\r\nContent-Length: {}\r\n\r\n",
+            MAX_REQUEST_BYTES + 1
+        );
         let err = parse_content_length(huge.as_bytes()).unwrap_err();
         assert!(err.contains("MAX_REQUEST_BYTES"));
     }
 
     #[test]
     fn content_length_absent_is_zero() {
-        let cl =
-            parse_content_length(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+        let cl = parse_content_length(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
         assert_eq!(cl, 0);
     }
 
@@ -754,7 +746,10 @@ mod tests {
 
     fn tmp_token_file(name: &str, mode: u32, body: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
-        p.push(format!("gnet-local-admin-test-{name}-{:?}", std::thread::current().id()));
+        p.push(format!(
+            "gnet-local-admin-test-{name}-{:?}",
+            std::thread::current().id()
+        ));
         let _ = std::fs::remove_file(&p);
         let mut f = std::fs::File::create(&p).unwrap();
         f.write_all(body.as_bytes()).unwrap();
@@ -843,8 +838,7 @@ mod tests {
             relay: false,
             relay_endpoint: None,
             relay_eligible: false,
-            direct_upgrade_at: Instant::now()
-                + super::super::punch::DIRECT_UPGRADE_BASE,
+            direct_upgrade_at: Instant::now() + super::super::punch::DIRECT_UPGRADE_BASE,
             direct_upgrade_failures: 0,
             last_established_at: established.then(Instant::now),
         }
@@ -879,10 +873,7 @@ mod tests {
         assert!(s.contains("\"alias\":\"alpha\""));
         assert!(s.contains("\"session\":\"established\""));
         // last_established_at -> number, not null.
-        assert!(
-            !s.contains("\"last_established_age_s\":null"),
-            "{s}"
-        );
+        assert!(!s.contains("\"last_established_age_s\":null"), "{s}");
         assert!(s.contains("\"last_established_age_s\":"));
     }
 

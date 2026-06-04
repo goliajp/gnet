@@ -58,8 +58,15 @@ pub async fn account_attempt(
     if count > LOGIN_ATTEMPT_LIMIT as u64 {
         // TTL is bounded by the window — worst case we ask the
         // client to wait the full WINDOW_SECS.
-        let ttl: i64 = kv.ttl(&key).await.unwrap_or(LOGIN_ATTEMPT_WINDOW_SECS as i64);
-        let retry_after_secs = if ttl > 0 { ttl as u64 } else { LOGIN_ATTEMPT_WINDOW_SECS };
+        let ttl: i64 = kv
+            .ttl(&key)
+            .await
+            .unwrap_or(LOGIN_ATTEMPT_WINDOW_SECS as i64);
+        let retry_after_secs = if ttl > 0 {
+            ttl as u64
+        } else {
+            LOGIN_ATTEMPT_WINDOW_SECS
+        };
         Ok(Decision::Throttle { retry_after_secs })
     } else {
         Ok(Decision::Allow)
@@ -69,10 +76,7 @@ pub async fn account_attempt(
 /// Clear the counter on a confirmed-good login. Optional — callers
 /// who don't bother will just have the entry decay naturally at
 /// the next window boundary.
-pub async fn account_clear(
-    kv: &mut ConnectionManager,
-    account_id: &str,
-) -> Result<(), AppError> {
+pub async fn account_clear(kv: &mut ConnectionManager, account_id: &str) -> Result<(), AppError> {
     let key = format!("login_rl:account:{account_id}");
     let _: () = kv.del(&key).await?;
     Ok(())

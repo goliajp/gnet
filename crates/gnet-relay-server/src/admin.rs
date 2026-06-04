@@ -114,7 +114,10 @@ async fn bearer_guard(
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer ").or_else(|| s.strip_prefix("bearer ")))
+        .and_then(|s| {
+            s.strip_prefix("Bearer ")
+                .or_else(|| s.strip_prefix("bearer "))
+        })
     else {
         return Err((StatusCode::UNAUTHORIZED, "missing bearer\n").into_response());
     };
@@ -289,9 +292,8 @@ mod tests {
         let auth = bearer
             .map(|t| format!("Authorization: Bearer {t}\r\n"))
             .unwrap_or_default();
-        let req = format!(
-            "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n{auth}\r\n"
-        );
+        let req =
+            format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n{auth}\r\n");
         s.write_all(req.as_bytes()).await.unwrap();
         let mut buf = Vec::new();
         s.read_to_end(&mut buf).await.unwrap();
@@ -350,8 +352,7 @@ mod tests {
             );
         }
         let addr = boot(st).await;
-        let (status, body) =
-            http_get(addr, "/api/peers", Some("dev-token-please-rotate")).await;
+        let (status, body) = http_get(addr, "/api/peers", Some("dev-token-please-rotate")).await;
         assert_eq!(status, 200);
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["count"], 2);
@@ -368,8 +369,7 @@ mod tests {
         st.stats.bytes_in.fetch_add(1500, Ordering::Relaxed);
         st.stats.bytes_out.fetch_add(1500, Ordering::Relaxed);
         let addr = boot(st).await;
-        let (status, body) =
-            http_get(addr, "/api/traffic", Some("dev-token-please-rotate")).await;
+        let (status, body) = http_get(addr, "/api/traffic", Some("dev-token-please-rotate")).await;
         assert_eq!(status, 200);
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["forwarded"], 7);
