@@ -204,17 +204,13 @@ pub(super) fn spawn(
             // device_token (auth) and an admin_endpoint (target) are
             // configured. Reuses the same curl shell-out the daemon
             // already uses for /endpoint-report — no new HTTP dep.
-            if let (Some(tok), Some(admin)) =
-                (device_token.as_deref(), admin_endpoint.as_deref())
-            {
+            if let (Some(tok), Some(admin)) = (device_token.as_deref(), admin_endpoint.as_deref()) {
                 let (reflexive, peer_count) = {
                     let g = node.lock().expect("node mutex");
                     (g.reflexive, g.peers.len())
                 };
                 match push_snapshot(admin, tok, &our_pk_hex, reflexive, peer_count) {
-                    Ok(()) => eprintln!(
-                        "event=snapshot_pushed admin={admin} peers={peer_count}"
-                    ),
+                    Ok(()) => eprintln!("event=snapshot_pushed admin={admin} peers={peer_count}"),
                     Err(e) => eprintln!("event=snapshot_push_failed error=\"{e}\""),
                 }
             }

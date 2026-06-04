@@ -68,10 +68,10 @@ pub fn looks_like_email(s: &str) -> bool {
         return false;
     }
     // local part has no second @; domain part has a dot.
-    if bytes[at + 1..].iter().any(|&b| b == b'@') {
+    if bytes[at + 1..].contains(&b'@') {
         return false;
     }
-    if !bytes[at + 1..].iter().any(|&b| b == b'.') {
+    if !bytes[at + 1..].contains(&b'.') {
         return false;
     }
     true

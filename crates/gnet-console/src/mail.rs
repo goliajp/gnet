@@ -80,10 +80,18 @@ impl MailClient {
     /// Build a client when all three env vars are present, otherwise
     /// `None` — the caller flips `auto_verify_email` on accordingly.
     pub fn from_env(http: reqwest::Client) -> Option<Self> {
-        let base = std::env::var("MAILRS_API_BASE").ok().filter(|s| !s.is_empty())?;
-        let login_address = std::env::var("MAILRS_LOGIN_ADDRESS").ok().filter(|s| !s.is_empty())?;
-        let login_password = std::env::var("MAILRS_LOGIN_PASSWORD").ok().filter(|s| !s.is_empty())?;
-        let from_address = std::env::var("MAILRS_FROM_ADDRESS").ok().filter(|s| !s.is_empty())?;
+        let base = std::env::var("MAILRS_API_BASE")
+            .ok()
+            .filter(|s| !s.is_empty())?;
+        let login_address = std::env::var("MAILRS_LOGIN_ADDRESS")
+            .ok()
+            .filter(|s| !s.is_empty())?;
+        let login_password = std::env::var("MAILRS_LOGIN_PASSWORD")
+            .ok()
+            .filter(|s| !s.is_empty())?;
+        let from_address = std::env::var("MAILRS_FROM_ADDRESS")
+            .ok()
+            .filter(|s| !s.is_empty())?;
         let base = base.trim_end_matches('/').to_string();
         Some(MailClient {
             inner: Arc::new(MailInner {

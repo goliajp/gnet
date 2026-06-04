@@ -101,11 +101,7 @@ async fn start(
         .await
         .map_err(OAuthError::Redis)?;
 
-    let redirect_uri = format!(
-        "{}/api/auth/oauth/{}/callback",
-        state.public_url,
-        p.name()
-    );
+    let redirect_uri = format!("{}/api/auth/oauth/{}/callback", state.public_url, p.name());
     let url = p.authorize_url(&nonce, &redirect_uri);
 
     let cookie = Cookie::build((STATE_COOKIE, nonce))
@@ -152,11 +148,7 @@ async fn callback(
         .oauth
         .get(provider.as_str())
         .ok_or_else(|| OAuthError::NotConfigured(provider.clone()))?;
-    let redirect_uri = format!(
-        "{}/api/auth/oauth/{}/callback",
-        state.public_url,
-        p.name()
-    );
+    let redirect_uri = format!("{}/api/auth/oauth/{}/callback", state.public_url, p.name());
     let mut kv = state.kv.clone();
     let ext = p
         .identify(&state.http, &mut kv, &code, &redirect_uri)
@@ -184,12 +176,11 @@ async fn callback(
             let new_id = Uuid::new_v4();
             let email = match ext.email.clone() {
                 Some(e) => {
-                    let dup: Option<(Uuid,)> = sqlx::query_as(
-                        "SELECT id FROM users WHERE email = $1",
-                    )
-                    .bind(&e)
-                    .fetch_optional(&mut *tx)
-                    .await?;
+                    let dup: Option<(Uuid,)> =
+                        sqlx::query_as("SELECT id FROM users WHERE email = $1")
+                            .bind(&e)
+                            .fetch_optional(&mut *tx)
+                            .await?;
                     if dup.is_some() { None } else { Some(e) }
                 }
                 None => None,

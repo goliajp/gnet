@@ -45,8 +45,12 @@ async fn main() -> ExitCode {
             eprintln!("env (--import-state):");
             eprintln!("  GNET_DISCOVER_STATE_PATH               path to state.json");
             eprintln!("  GNET_DISCOVER_DATABASE_URL             postgres://user:pass@host/db");
-            eprintln!("  GNET_DISCOVER_RELAYS                   comma-separated host:port (optional)");
-            eprintln!("  GNET_DISPATCHER_IMPORT_NETWORK_NAME    network name (default: imported-from-v1.0)");
+            eprintln!(
+                "  GNET_DISCOVER_RELAYS                   comma-separated host:port (optional)"
+            );
+            eprintln!(
+                "  GNET_DISPATCHER_IMPORT_NETWORK_NAME    network name (default: imported-from-v1.0)"
+            );
             ExitCode::SUCCESS
         }
         _ => match run().await {
@@ -79,9 +83,9 @@ async fn import_cmd() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let state_path: PathBuf = std::env::var("GNET_DISCOVER_STATE_PATH")
         .unwrap_or_else(|_| "/var/lib/gnet-discover/state.json".to_string())
         .into();
-    let db_url = std::env::var("GNET_DISCOVER_DATABASE_URL").map_err(|_| {
-        "GNET_DISCOVER_DATABASE_URL not set (e.g. postgres://user:pass@127.0.0.1/gnet)"
-    })?;
+    let db_url = std::env::var("GNET_DISCOVER_DATABASE_URL").map_err(
+        |_| "GNET_DISCOVER_DATABASE_URL not set (e.g. postgres://user:pass@127.0.0.1/gnet)",
+    )?;
     let network_name = std::env::var("GNET_DISPATCHER_IMPORT_NETWORK_NAME")
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -112,10 +116,7 @@ async fn import_cmd() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     println!("  devices:           {}", summary.devices_imported);
     println!("  relays:            {}", summary.relays_imported);
-    println!(
-        "  state.json -> {}",
-        summary.imported_marker.display()
-    );
+    println!("  state.json -> {}", summary.imported_marker.display());
     Ok(())
 }
 
@@ -127,9 +128,10 @@ fn parse_relays_env() -> Result<Vec<SocketAddr>, Box<dyn std::error::Error + Sen
             .split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map(|s| s.parse::<SocketAddr>().map_err(|e| {
-                format!("GNET_DISCOVER_RELAYS: {s:?} -> {e}").into()
-            }))
+            .map(|s| {
+                s.parse::<SocketAddr>()
+                    .map_err(|e| format!("GNET_DISCOVER_RELAYS: {s:?} -> {e}").into())
+            })
             .collect(),
         Err(_) => Ok(Vec::new()),
     }

@@ -33,12 +33,11 @@ pub async fn ensure_first_admin_setup(
     network_name: &str,
     admin_bind: SocketAddr,
 ) -> Result<(), AdminServeError> {
-    let (admin_count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*)::bigint FROM admin_users WHERE network_id = $1",
-    )
-    .bind(network_id)
-    .fetch_one(pool)
-    .await?;
+    let (admin_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*)::bigint FROM admin_users WHERE network_id = $1")
+            .bind(network_id)
+            .fetch_one(pool)
+            .await?;
     if admin_count > 0 {
         return Ok(());
     }
@@ -87,9 +86,7 @@ pub async fn ensure_first_admin_setup(
     eprintln!("    http://{admin_bind}/setup?token={token_hex}");
     eprintln!();
     eprintln!("  Or POST JSON to /api/auth/setup :");
-    eprintln!(
-        r#"    {{"token":"{token_hex}", "username":"...", "password":"..."}}"#
-    );
+    eprintln!(r#"    {{"token":"{token_hex}", "username":"...", "password":"..."}}"#);
     eprintln!();
     eprintln!("  Token expires at {expires_at}");
     eprintln!("{banner}");

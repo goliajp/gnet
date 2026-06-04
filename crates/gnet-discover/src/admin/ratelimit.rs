@@ -33,8 +33,15 @@ pub async fn account_attempt(
         .query_async(kv)
         .await?;
     if count > LOGIN_ATTEMPT_LIMIT as u64 {
-        let ttl: i64 = kv.ttl(&key).await.unwrap_or(LOGIN_ATTEMPT_WINDOW_SECS as i64);
-        let retry_after_secs = if ttl > 0 { ttl as u64 } else { LOGIN_ATTEMPT_WINDOW_SECS };
+        let ttl: i64 = kv
+            .ttl(&key)
+            .await
+            .unwrap_or(LOGIN_ATTEMPT_WINDOW_SECS as i64);
+        let retry_after_secs = if ttl > 0 {
+            ttl as u64
+        } else {
+            LOGIN_ATTEMPT_WINDOW_SECS
+        };
         Ok(Decision::Throttle { retry_after_secs })
     } else {
         Ok(Decision::Allow)

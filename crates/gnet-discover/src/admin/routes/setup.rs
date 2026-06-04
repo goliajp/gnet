@@ -78,12 +78,11 @@ async fn setup(
     // Re-check the bootstrap precondition under the transaction. Bootstrap
     // and setup race in principle (operator double-submits); the
     // FOR UPDATE on the token row serializes them.
-    let (admin_count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*)::bigint FROM admin_users WHERE network_id = $1",
-    )
-    .bind(state.network_id)
-    .fetch_one(&mut *tx)
-    .await?;
+    let (admin_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*)::bigint FROM admin_users WHERE network_id = $1")
+            .bind(state.network_id)
+            .fetch_one(&mut *tx)
+            .await?;
     if admin_count > 0 {
         return Err(SetupError::AlreadyDone);
     }

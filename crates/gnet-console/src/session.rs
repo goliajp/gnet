@@ -71,10 +71,7 @@ pub async fn store(
     Ok(())
 }
 
-pub async fn fetch(
-    kv: &mut ConnectionManager,
-    key: &str,
-) -> Result<Option<Session>, SessionError> {
+pub async fn fetch(kv: &mut ConnectionManager, key: &str) -> Result<Option<Session>, SessionError> {
     let raw: Option<String> = kv.get(key).await?;
     match raw {
         Some(v) => Ok(Some(serde_json::from_str(&v)?)),

@@ -12,7 +12,6 @@
 //! The plaintext token never sits at rest in the console.
 
 use axum::Router;
-use axum::body::Bytes;
 use axum::extract::{Path, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -112,14 +111,14 @@ async fn proxy(
         .http
         .request(rq_method, &target)
         .bearer_auth(&token)
-        .body(Bytes::from(body));
+        .body(body);
     if let Some(ct) = req_content_type {
         upstream_req = upstream_req.header(reqwest::header::CONTENT_TYPE, ct);
     }
     let upstream = upstream_req.send().await?;
 
-    let status = StatusCode::from_u16(upstream.status().as_u16())
-        .unwrap_or(StatusCode::BAD_GATEWAY);
+    let status =
+        StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let resp_ct = upstream
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -128,10 +127,11 @@ async fn proxy(
     let resp_body = upstream.bytes().await?;
 
     let mut resp = (status, resp_body).into_response();
-    if let Some(ct) = resp_ct {
-        if let Ok(v) = axum::http::HeaderValue::from_str(&ct) {
-            resp.headers_mut().insert(axum::http::header::CONTENT_TYPE, v);
-        }
+    if let Some(ct) = resp_ct
+        && let Ok(v) = axum::http::HeaderValue::from_str(&ct)
+    {
+        resp.headers_mut()
+            .insert(axum::http::header::CONTENT_TYPE, v);
     }
     Ok(resp)
 }

@@ -76,10 +76,7 @@ fn file_response(uri: &Uri, body: &'static [u8]) -> Response {
         // (a new SPA build changes the asset hashes referenced inside
         // but keeps the shell URL stable — clients refetch on every
         // load to pick the new hashes).
-        .header(
-            header::CACHE_CONTROL,
-            cache_control_for(uri),
-        )
+        .header(header::CACHE_CONTROL, cache_control_for(uri))
         .body(Body::from(body))
         .expect("static response is always valid")
 }
@@ -139,10 +136,7 @@ mod tests {
         ] {
             let u: Uri = path.parse().unwrap();
             let mime = guess_mime(&u);
-            assert!(
-                mime.starts_with(expected_starts_with),
-                "{path} -> {mime}"
-            );
+            assert!(mime.starts_with(expected_starts_with), "{path} -> {mime}");
         }
     }
 

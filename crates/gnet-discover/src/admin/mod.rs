@@ -63,13 +63,14 @@ pub async fn serve(config: AdminConfig) -> Result<(), AdminServeError> {
     gnet_discover_schema::MIGRATOR.run(&pool).await?;
 
     let (network_id, network_name) = resolve_network(&pool, &config).await?;
-    eprintln!(
-        "gnet-discover admin: network = {network_name} ({network_id})"
-    );
+    eprintln!("gnet-discover admin: network = {network_name} ({network_id})");
 
     let redis_client = redis::Client::open(config.valkey_url.as_str())?;
     let kv = redis::aio::ConnectionManager::new(redis_client).await?;
-    eprintln!("gnet-discover admin: valkey connected ({})", config.valkey_url);
+    eprintln!(
+        "gnet-discover admin: valkey connected ({})",
+        config.valkey_url
+    );
 
     bootstrap::ensure_first_admin_setup(&pool, network_id, &network_name, config.admin_bind)
         .await?;
@@ -104,7 +105,9 @@ pub async fn serve(config: AdminConfig) -> Result<(), AdminServeError> {
         );
     }
 
-    axum::serve(listener, app).await.map_err(AdminServeError::Serve)?;
+    axum::serve(listener, app)
+        .await
+        .map_err(AdminServeError::Serve)?;
     Ok(())
 }
 
@@ -128,13 +131,9 @@ async fn resolve_network(
             .bind(hint)
             .fetch_optional(pool)
             .await?;
-        return row
-            .map(|(name,)| (hint, name))
-            .ok_or_else(|| {
-                AdminServeError::Init(format!(
-                    "GNET_DISCOVER_NETWORK_ID {hint} not found in PG"
-                ))
-            });
+        return row.map(|(name,)| (hint, name)).ok_or_else(|| {
+            AdminServeError::Init(format!("GNET_DISCOVER_NETWORK_ID {hint} not found in PG"))
+        });
     }
 
     let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*)::bigint FROM networks")
@@ -143,11 +142,11 @@ async fn resolve_network(
 
     match count {
         0 => create_default_network(pool, config).await,
-        1 => Ok(sqlx::query_as::<_, (Uuid, String)>(
-            "SELECT id, name FROM networks LIMIT 1",
-        )
-        .fetch_one(pool)
-        .await?),
+        1 => Ok(
+            sqlx::query_as::<_, (Uuid, String)>("SELECT id, name FROM networks LIMIT 1")
+                .fetch_one(pool)
+                .await?,
+        ),
         _ => Err(AdminServeError::Init(format!(
             "{count} networks present; set GNET_DISCOVER_NETWORK_ID to disambiguate"
         ))),
@@ -180,8 +179,6 @@ async fn create_default_network(
     .execute(pool)
     .await?;
 
-    eprintln!(
-        "gnet-discover admin: created default network {name} ({id}) on empty PG"
-    );
+    eprintln!("gnet-discover admin: created default network {name} ({id}) on empty PG");
     Ok((id, name))
 }

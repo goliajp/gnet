@@ -51,9 +51,9 @@ pub enum InternalError {
 impl IntoResponse for InternalError {
     fn into_response(self) -> Response {
         let code = match self {
-            InternalError::NoBearer
-            | InternalError::Unauthorized
-            | InternalError::BadPubkey => StatusCode::UNAUTHORIZED,
+            InternalError::NoBearer | InternalError::Unauthorized | InternalError::BadPubkey => {
+                StatusCode::UNAUTHORIZED
+            }
             InternalError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (code, self.to_string()).into_response()
@@ -76,8 +76,7 @@ async fn snapshot(
     // at import time). No hex-decode dance.
     let token_hash = gnet_crypto::sha3::sha3_256(token.as_bytes());
 
-    let pubkey_raw =
-        gnet_hex::decode_32(&req.device_pubkey_hex).ok_or(InternalError::BadPubkey)?;
+    let pubkey_raw = gnet_hex::decode_32(&req.device_pubkey_hex).ok_or(InternalError::BadPubkey)?;
 
     // Two-factor lookup: a stolen token alone is not enough; the row's
     // x25519_pubkey must match too. (And we scope by network_id, since
@@ -119,7 +118,9 @@ async fn snapshot(
 
 fn bearer(headers: &HeaderMap) -> Option<&str> {
     let v = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let rest = v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer "))?;
+    let rest = v
+        .strip_prefix("Bearer ")
+        .or_else(|| v.strip_prefix("bearer "))?;
     let rest = rest.trim();
     if rest.is_empty() { None } else { Some(rest) }
 }

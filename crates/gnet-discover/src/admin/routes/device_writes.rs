@@ -102,9 +102,9 @@ impl IntoResponse for DeviceWriteError {
             DeviceWriteError::NotFound => StatusCode::NOT_FOUND,
             DeviceWriteError::BadAlias => StatusCode::BAD_REQUEST,
             DeviceWriteError::AliasConflict => StatusCode::CONFLICT,
-            DeviceWriteError::Session(_)
-            | DeviceWriteError::Db(_)
-            | DeviceWriteError::Cache(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            DeviceWriteError::Session(_) | DeviceWriteError::Db(_) | DeviceWriteError::Cache(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
         (code, self.to_string()).into_response()
     }

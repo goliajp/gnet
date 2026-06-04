@@ -224,12 +224,7 @@ fn run(cfg: Config, admin_cfg: Option<AdminConfig>) -> io::Result<()> {
             let peer_count = peers.read().map(|t| t.len()).unwrap_or(0);
             eprintln!(
                 "gnet-relay-server: peers={peer_count} forwarded={} in={}B out={}B unknown_dst={} non_relay={} self_addr={}",
-                d.forwarded,
-                d.bytes_in,
-                d.bytes_out,
-                d.unknown_dst,
-                d.non_relay,
-                d.self_addressed,
+                d.forwarded, d.bytes_in, d.bytes_out, d.unknown_dst, d.non_relay, d.self_addressed,
             );
             prev_log_snapshot = cur;
             last_log = now;
@@ -437,5 +432,4 @@ mod tests {
     fn cli_rejects_unknown_arg() {
         assert!(Config::from_argv(vec!["--no-such".into()]).is_err());
     }
-
 }

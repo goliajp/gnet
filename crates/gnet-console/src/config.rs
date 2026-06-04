@@ -59,10 +59,18 @@ impl Config {
         // ends up `Some` is the source of truth for the flag — but
         // re-deriving the same conditional here keeps the config
         // decision out of lib.rs's boot path.
-        let mail_configured = ["MAILRS_API_BASE", "MAILRS_LOGIN_ADDRESS",
-            "MAILRS_LOGIN_PASSWORD", "MAILRS_FROM_ADDRESS"]
-            .iter()
-            .all(|v| std::env::var(v).map(|s| !s.trim().is_empty()).unwrap_or(false));
+        let mail_configured = [
+            "MAILRS_API_BASE",
+            "MAILRS_LOGIN_ADDRESS",
+            "MAILRS_LOGIN_PASSWORD",
+            "MAILRS_FROM_ADDRESS",
+        ]
+        .iter()
+        .all(|v| {
+            std::env::var(v)
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false)
+        });
         let auto_verify_email = !mail_configured;
 
         let public_url = std::env::var("GNET_CONSOLE_PUBLIC_URL")
