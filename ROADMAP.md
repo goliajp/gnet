@@ -7,23 +7,27 @@
 
 ## Where we are
 
-- **Tag line:** `v1.0.0`, released 2026-06-03. Workspace version
-  unified at `1.0.0` (semver from here; see CHANGELOG.md "Versioning"
-  for the carryover history).
+- **Tag line:** `v1.1.0`, released 2026-06-04. Workspace version
+  unified at `1.1.0`. v1.0 cuts (`v1.0.0` 2026-06-03 → `v1.0.2`
+  2026-06-03) covered the data-plane / coord baseline; v1.1.0 is
+  the control-plane release on top.
 - Internal fleet (macOS arm64 + Linux x86_64 + AWS Graviton aarch64)
-  running the v1.0.0 stack, observable via `gnet status` / `gnet metrics`
-  / structured event log.
+  running v1.1.0; data plane wire-stable with v1.0 (a v1.0 daemon on
+  a v1.1 fleet keeps running unaware of the new admin surface).
 - Data plane: zero-deps, post-quantum hybrid Noise_IK + ML-KEM-768,
   KAT-validated against RFC/NIST/ACVP vectors, CT-audited
   (see [CT-REVIEW.md](crates/gnet-crypto/CT-REVIEW.md)),
   fuzz-harnessed (see [fuzzing.md](docs/fuzzing.md)).
-- Control plane (`gnet-discover`) + standalone `gnet-relay-server` both
-  wired into the active path; coordinator supports warm-standby with a
-  read-only fence; relays have health-probed failover.
-- CI green on `develop`
-  ([latest run](https://github.com/goliajp/gnet/actions/runs/26854620641));
-  toolchain policy is **always latest stable** (`rust-toolchain.toml`
-  channel = "stable"; CI `dtolnay/rust-toolchain@stable`).
+- Control plane: PG-backed dispatcher with an admin API + embedded
+  SPA, SaaS console at `gnet.golia.jp` federating to user
+  dispatchers via deterministic-token federation, lite admin
+  surfaces on the relay and (opt-in) the daemon. Container layout
+  collapsed to one image — `goliakk/gnet` (also on ghcr) — that
+  dispatches by `GNET_ROLE` to daemon / dispatcher / relay / console.
+- CI green on `develop`; toolchain policy is **always latest stable**
+  (`rust-toolchain.toml` channel = "stable"; CI
+  `dtolnay/rust-toolchain@stable`). GH Actions runtime is Node 24
+  (`actions/{checkout,upload-artifact,download-artifact}@v5`).
 
 ## Versioning
 
@@ -50,16 +54,35 @@ arc.
 
 ## Forward plan
 
-### 1.0.x — patch lane
+### 1.1.x — patch lane (current)
 
-Bug-fixes, doc, CI hardening. Specifically expected to land here:
+Bug-fixes, doc, CI hardening, plus the v1.1 backlog items that
+are independent slices and don't need v1.2's release boundary:
 
-- `on: push` CI auto-trigger if a repo-Settings investigation surfaces
-  a fix (currently only `workflow_dispatch` fires).
-- Fleet-surfaced bugs caught by `journalctl | grep event=` during the
-  v1.0 observation window.
+- **OAuth provider creds wired through** — Google / GitHub / Apple
+  OAuth clients registered, `OAUTH_*` env added to t01 `.env`, SPA
+  Login / Signup gains real provider buttons. Code surface is
+  already shipped in v1.1 (`§17.5b/c/d`); only the secrets are
+  outstanding.
+- **Wildcard `*.gnet.golia.jp`** when multi-tenant per-network UX
+  ships against Mode A. Needs Caddy DNS-01 challenge + zone PUT
+  to devops DNS API.
+- **Dedicated mailrs service account** in place of the superadmin
+  login the v1.1 console currently uses.
+- Fleet-surfaced bugs caught by `journalctl | grep event=` during
+  the v1.1 observation window.
 
-### 1.1.0 — SaaS control plane + console at gnet.golia.jp
+### 1.0.x — patch lane (historical, closed)
+
+Closed with `v1.0.2` (2026-06-03). The active patch lane is 1.1.x.
+
+### 1.1.0 — SaaS control plane + console at gnet.golia.jp ✅ shipped 2026-06-04
+
+> Released 2026-06-04 as `v1.1.0`; the engineering plan lived at
+> [docs/v1.1-plan.md](docs/v1.1-plan.md) and the slice-level changes
+> are in the [CHANGELOG `[1.1.0]`](CHANGELOG.md#110---2026-06-04)
+> entry. Below is the original phase contract for archival
+> reference.
 
 The Tailscale-style account-and-network surface for `gnet`. Built **in
 this repo, not a separate one** (the original roadmap revision called
@@ -134,6 +157,29 @@ shape as `gnet-discover`).
 | **1.1-G** | `gnet.golia.jp` marketing site integration. Landing page + docs + sign-up handing off to the console. | console feature-frozen |
 | **1.1-H** | Self-host packaging. Docker Compose for the axum + PG + Valkey stack; documented overrides so an operator can run the same stack on their own box. | hosted version stable |
 
+### 1.2.0 — control channel + native app + members + ASVS L1 finish
+
+The three loops v1.1 deliberately left open, closed in one
+release. Detailed engineering plan lives at
+[docs/v1.2-plan.md](docs/v1.2-plan.md); summary phase table:
+
+| Phase | Content | Trigger |
+|---|---|---|
+| **1.2-A1** | `device_pending_ops` schema + snapshot-reply control channel; daemon JSON parse + ack endpoint | v1.1 dogfood passed |
+| **1.2-A2** | Dispatcher write paths `rotate-key` + `restart` flip from `501` to enqueueing real ops on 1.2-A1 | 1.2-A1 stable |
+| **1.2-A3** | Daemon `/local/{alias,join,quit,restart,upgrade}` real implementations + supervisor (launchd / systemd) integration | 1.2-A1 stable |
+| **1.2-A4** | `mac/` SwiftUI menubar app — read-only first cut against `/local/status` | 1.2-A3 GET surface stable |
+| **1.2-A5** | macOS menubar app writes + signed/notarised `.dmg` + install script + `release.yml` matrix entry | 1.2-A3/A4 stable |
+| **1.2-B1** | `network_members` + `network_invitations` schema + member-aware `require_login` | independent |
+| **1.2-B2** | Member invite + accept flow + mailrs email + SPA invite UI | 1.2-B1 + mailrs (v1.1) |
+| **1.2-B3** | Role enforcement on every write handler; `audit_log.actor_role` recorded | 1.2-B1 |
+| **1.2-C1** | CSP + Permissions-Policy + per-route body limits | independent |
+| **1.2-C2** | Per-IP login throttle + signup CAPTCHA | independent |
+| **1.2-C3** | `audit_log` hash chain + `GET /api/audit/verify` | independent |
+
+Tracks A / B / C are loosely coupled. Cut-over to v1.2 needs all
+three green on the internal fleet.
+
 ### 2.x — wire-breaking changes (deferred)
 
 Out-of-scope for the 1.x line; these are sized as their own major:
@@ -141,9 +187,15 @@ Out-of-scope for the 1.x line; these are sized as their own major:
 - **ACL / policy rules.** gnet is currently full-mesh by design;
   ACLs are a wire+coordinator change.
 - **Subnet routes / exit nodes.** New wire feature, not just UI.
-- **Team / Member permissions.** 1.1.0 ships single-owner networks;
-  team permissions land in 1.2.0.
-- **Mobile clients.** Cross-platform TUN is not on the gnet path.
+- ~~**Team / Member permissions.**~~ Moved into 1.2.0 (B-track).
+- **Cross-platform native clients (Linux GUI / Windows).** The
+  daemon's `/local/*` admin surface is portable, so a third-party
+  client on any OS is unblocked once they implement against it.
+  We ship macOS in 1.2.0; Linux / Windows official clients are
+  2.x candidates.
+- **Mobile clients.** Cross-platform TUN remains off the gnet
+  path; mobile is 2.x unless a target-OS-side surface lands that
+  changes the calculation.
 
 ## Out of scope for 1.x (deferred indefinitely)
 
