@@ -41,6 +41,7 @@ use uuid::Uuid;
 use crate::admin::AdminState;
 use crate::admin::routes::auth::{AuthRouteError, require_login};
 use crate::admin::routes::devices::DeviceResponse;
+use crate::admin::routes::internal::enqueue_op;
 
 #[derive(Deserialize)]
 pub struct UpdateAliasRequest {
@@ -237,40 +238,93 @@ async fn kick(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// 501 wire contract. The dispatcher decision is just a row edit, but
-/// the daemon needs to acknowledge the new key before we can flip the
-/// active row — that needs a dispatcher→daemon control channel that
-/// v1.1 doesn't ship.
+/// Enqueue a `rotate_key` op for the daemon to pick up on its next
+/// snapshot push (v1.2-plan §18.A2). The daemon-side new-keypair
+/// generation + submit-new-pubkey path lands in §18.A3; A2 only flips
+/// the dispatcher from 501 to a real enqueue + audit row. Empty args:
+/// the daemon synthesises the new key itself.
 async fn rotate_key(
     State(state): State<AdminState>,
     jar: CookieJar,
     headers: HeaderMap,
     Path(device_id): Path<Uuid>,
 ) -> Result<Response, DeviceWriteError> {
-    let _ = (require_login(&state, &jar, &headers).await?, device_id);
-    Ok(not_implemented_v1_2("rotate_key"))
+    enqueue_device_op(state, jar, headers, device_id, "rotate_key", "device.rotate_key").await
 }
 
-/// 501 wire contract. Restart needs the dispatcher→daemon control
-/// channel (plan §5.2: "forwarded to the daemon via the relay or via
-/// a future control channel"); v1.1 only carries the URL.
+/// Enqueue a `restart` op (v1.2-plan §18.A2). Daemon side reacts by
+/// graceful re-exec in §18.A3; A2 only commits to the URL contract.
 async fn restart(
     State(state): State<AdminState>,
     jar: CookieJar,
     headers: HeaderMap,
     Path(device_id): Path<Uuid>,
 ) -> Result<Response, DeviceWriteError> {
-    let _ = (require_login(&state, &jar, &headers).await?, device_id);
-    Ok(not_implemented_v1_2("restart"))
+    enqueue_device_op(state, jar, headers, device_id, "restart", "device.restart").await
 }
 
-fn not_implemented_v1_2(op: &'static str) -> Response {
-    let body = serde_json::json!({
-        "not_implemented": op,
-        "ships_in": "v1.2",
-        "reason": "needs dispatcher→daemon control channel",
+/// Shared body for the v1.2-plan §18.A2 control-channel writes — both
+/// rotate-key and restart land here. Single transaction so the
+/// `device_pending_ops` row and its `audit_log` entry commit atomically
+/// (the audit invariant: no state change without its audit row).
+///
+/// Returns 202 Accepted because the op is queued, not executed —
+/// `op_id` lets the SPA optionally poll the audit log or future
+/// per-op status endpoint.
+async fn enqueue_device_op(
+    state: AdminState,
+    jar: CookieJar,
+    headers: HeaderMap,
+    device_id: Uuid,
+    op: &'static str,
+    audit_action: &'static str,
+) -> Result<Response, DeviceWriteError> {
+    let session = require_login(&state, &jar, &headers).await?;
+
+    let mut tx = state.pool.begin().await?;
+
+    let existing: Option<KickRow> = sqlx::query_as(
+        "SELECT id, alias, encode(x25519_pubkey, 'hex') AS x25519_pubkey_hex \
+         FROM devices \
+         WHERE network_id = $1 AND id = $2 AND removed_at IS NULL \
+         FOR UPDATE",
+    )
+    .bind(state.network_id)
+    .bind(device_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let prev = existing.ok_or(DeviceWriteError::NotFound)?;
+
+    let op_id = enqueue_op(
+        &mut *tx,
+        state.network_id,
+        device_id,
+        op,
+        serde_json::json!({}),
+    )
+    .await?;
+
+    let detail = serde_json::json!({
+        "op_id": op_id,
+        "alias": prev.alias,
+        "x25519_pubkey_hex": prev.x25519_pubkey_hex,
     });
-    (StatusCode::NOT_IMPLEMENTED, Json(body)).into_response()
+    sqlx::query(
+        "INSERT INTO audit_log (network_id, actor_kind, actor_id, action, target, detail) \
+         VALUES ($1, 'local_admin', $2, $3, $4, $5)",
+    )
+    .bind(state.network_id)
+    .bind(session.user_id.to_string())
+    .bind(audit_action)
+    .bind(device_id.to_string())
+    .bind(&detail)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    let body = serde_json::json!({ "op_id": op_id, "status": "queued" });
+    Ok((StatusCode::ACCEPTED, Json(body)).into_response())
 }
 
 fn valid_alias(s: &str) -> bool {

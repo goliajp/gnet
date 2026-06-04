@@ -79,6 +79,22 @@ function DeviceRow({ device }: { device: DeviceResponse }) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["devices"] }),
   });
 
+  const rotateKey = useMutation({
+    mutationFn: () =>
+      api<{ op_id: string; status: string }>(
+        "/api/devices/" + device.id + "/rotate-key",
+        { method: "POST" },
+      ),
+  });
+
+  const restart = useMutation({
+    mutationFn: () =>
+      api<{ op_id: string; status: string }>(
+        "/api/devices/" + device.id + "/restart",
+        { method: "POST" },
+      ),
+  });
+
   const onRename = () => {
     const next = window.prompt(`rename "${device.alias}" to:`, device.alias);
     if (next && next !== device.alias) rename.mutate(next);
@@ -94,6 +110,26 @@ function DeviceRow({ device }: { device: DeviceResponse }) {
     }
   };
 
+  const onRotateKey = () => {
+    if (
+      window.confirm(
+        `Rotate "${device.alias}"'s key? Every peer needs to re-handshake on the new key; the daemon picks the op up on its next snapshot push.`,
+      )
+    ) {
+      rotateKey.mutate();
+    }
+  };
+
+  const onRestart = () => {
+    if (
+      window.confirm(
+        `Restart the daemon on "${device.alias}"? It will re-exec on its next snapshot push.`,
+      )
+    ) {
+      restart.mutate();
+    }
+  };
+
   const errMsg =
     rename.error instanceof ApiError
       ? rename.error.body || rename.error.message
@@ -102,6 +138,10 @@ function DeviceRow({ device }: { device: DeviceResponse }) {
     kick.error instanceof ApiError
       ? kick.error.body || kick.error.message
       : (kick.error as Error | undefined)?.message;
+  const mutationErr = (m: typeof rotateKey) =>
+    m.error instanceof ApiError
+      ? m.error.body || m.error.message
+      : (m.error as Error | undefined)?.message;
 
   return (
     <tr className="text-zinc-300">
@@ -139,16 +179,50 @@ function DeviceRow({ device }: { device: DeviceResponse }) {
         {new Date(device.created_at).toISOString().slice(0, 10)}
       </td>
       <td className="px-4 py-2 text-right">
-        <button
-          onClick={onKick}
-          disabled={kick.isPending}
-          title="kick"
-          className="rounded border border-zinc-800 px-2 py-1 text-xs text-zinc-400 transition hover:border-rose-800 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          kick
-        </button>
+        <div className="flex items-center justify-end gap-1">
+          <button
+            onClick={onRestart}
+            disabled={restart.isPending}
+            title="restart"
+            className="rounded border border-zinc-800 px-2 py-1 text-xs text-zinc-400 transition hover:border-zinc-600 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            restart
+          </button>
+          <button
+            onClick={onRotateKey}
+            disabled={rotateKey.isPending}
+            title="rotate-key"
+            className="rounded border border-zinc-800 px-2 py-1 text-xs text-zinc-400 transition hover:border-amber-800 hover:text-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            rotate-key
+          </button>
+          <button
+            onClick={onKick}
+            disabled={kick.isPending}
+            title="kick"
+            className="rounded border border-zinc-800 px-2 py-1 text-xs text-zinc-400 transition hover:border-rose-800 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            kick
+          </button>
+        </div>
+        {(rotateKey.isSuccess || restart.isSuccess) && (
+          <div className="mt-1 text-right text-xs text-zinc-500">
+            queued op{" "}
+            {(rotateKey.data?.op_id || restart.data?.op_id || "").slice(0, 8)}
+          </div>
+        )}
         {kick.isError && (
           <span className="ml-2 text-xs text-red-300">{kickErr}</span>
+        )}
+        {rotateKey.isError && (
+          <div className="mt-1 text-right text-xs text-red-300">
+            rotate-key: {mutationErr(rotateKey)}
+          </div>
+        )}
+        {restart.isError && (
+          <div className="mt-1 text-right text-xs text-red-300">
+            restart: {mutationErr(restart)}
+          </div>
         )}
       </td>
     </tr>
