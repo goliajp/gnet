@@ -442,12 +442,55 @@ fn dispatch_pending_op(op: &PendingOp, ctx: &DispatchCtx<'_>) -> DispatchOutcome
             Ok(()) => DispatchOutcome::Skip,
             Err(detail) => DispatchOutcome::Ack(Err(detail)),
         },
+        "rename" => match handle_rename_op(ctx, &op.args_raw, &op.op_id) {
+            Ok(()) => DispatchOutcome::Ack(Ok(())),
+            Err(detail) => DispatchOutcome::Ack(Err(detail)),
+        },
         // upgrade / kick fall through until §18.A3.5 wires them.
         // (kick is canonically driven by `removed_at` → snapshot push
         // 401, not by this queue, but is in the schema enum for
         // completeness.)
         _ => DispatchOutcome::Ack(Err("not_implemented_in_a1".to_string())),
     }
+}
+
+/// Execute one queued `rename` op (v1.2-plan §18.A3.3). The
+/// dispatcher (SPA PUT or future federation path) already committed
+/// the new alias to `devices.alias` BEFORE enqueueing; this handler's
+/// job is just to mirror it into the local conf and restart so the
+/// daemon's hosts splice + status output catch up. The op args carry
+/// the target alias so we don't have to round-trip.
+fn handle_rename_op(ctx: &DispatchCtx<'_>, args_raw: &str, op_id: &str) -> Result<(), String> {
+    use crate::conf_io::{swap_alias_directive, write_atomic};
+
+    let Some(new_alias) = extract_string(args_raw, "new_alias") else {
+        return Err("rename: missing args.new_alias".to_string());
+    };
+    eprintln!("event=rename_start op_id={op_id} new_alias={new_alias}");
+
+    let text = match std::fs::read_to_string(ctx.conf_path) {
+        Ok(t) => t,
+        Err(e) => {
+            return Err(format!(
+                "rename: read {} failed: {e}",
+                ctx.conf_path.display()
+            ));
+        }
+    };
+    let new_text = swap_alias_directive(&text, &new_alias);
+    if let Err(e) = write_atomic(ctx.conf_path, &new_text) {
+        return Err(format!(
+            "rename: write {} failed: {e}",
+            ctx.conf_path.display()
+        ));
+    }
+
+    eprintln!(
+        "event=rename_complete op_id={op_id} conf={}",
+        ctx.conf_path.display()
+    );
+    super::supervisor::request_restart();
+    Ok(())
 }
 
 /// Execute one queued `rotate_key` op (v1.2-plan §18.A3.2b).

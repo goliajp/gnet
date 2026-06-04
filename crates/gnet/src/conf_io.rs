@@ -35,6 +35,36 @@ pub fn swap_private_directive(text: &str, new_hex: &str) -> String {
     out
 }
 
+/// Replace (or insert) the `alias <name>` directive (v1.2-plan §18.A3.3).
+/// If the conf already has an `alias` directive, swap its value; otherwise
+/// append a fresh `alias <new_name>` line so a node that was created
+/// without one (older `gnet join`) still picks up the new value after a
+/// dispatcher-driven rename. Other lines preserved byte-for-byte.
+pub fn swap_alias_directive(text: &str, new_alias: &str) -> String {
+    let mut out = String::with_capacity(text.len() + new_alias.len());
+    let mut replaced = false;
+    let lines: Vec<&str> = text.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        if !replaced && line.trim_start().starts_with("alias ") {
+            out.push_str(&format!("alias {new_alias}"));
+            replaced = true;
+        } else {
+            out.push_str(line);
+        }
+        if i + 1 < lines.len() || text.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    if !replaced {
+        // Append on its own line. Make sure we land on a newline first.
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&format!("alias {new_alias}\n"));
+    }
+    out
+}
+
 /// Atomic write: stage to a `.{name}.rotate.tmp` sibling, fsync, rename
 /// over the target. Preserves the target's permission mode (the file
 /// carries the private key — 0600 must survive the swap).
@@ -121,6 +151,36 @@ peer abc def 10.42.42.2 1.2.3.4:65432
         assert_eq!(swap_private_directive(with_nl, "ff"), "private ff\n");
         let no_nl = "private 01";
         assert_eq!(swap_private_directive(no_nl, "ff"), "private ff");
+    }
+
+    #[test]
+    fn swap_alias_replaces_existing() {
+        let before = "\
+private 01
+alias old-name
+address 10.0.0.1
+peer abc def 10.0.0.2 1.2.3.4:65432
+";
+        let after = swap_alias_directive(before, "new-name");
+        assert!(after.contains("\nalias new-name\n") || after.starts_with("alias new-name\n"));
+        assert!(!after.contains("old-name"));
+        assert!(after.contains("private 01"));
+        assert!(after.contains("peer abc def"));
+    }
+
+    #[test]
+    fn swap_alias_appends_when_absent() {
+        let before = "private 01\naddress 10.0.0.1\n";
+        let after = swap_alias_directive(before, "fresh");
+        assert!(after.ends_with("alias fresh\n"));
+        assert!(after.contains("private 01\n"));
+    }
+
+    #[test]
+    fn swap_alias_appends_when_no_trailing_newline() {
+        let before = "private 01";
+        let after = swap_alias_directive(before, "fresh");
+        assert_eq!(after, "private 01\nalias fresh\n");
     }
 
     #[test]

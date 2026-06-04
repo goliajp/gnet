@@ -158,7 +158,24 @@ async fn rename(
         Err(other) => return Err(other.into()),
     }
 
-    let detail = serde_json::json!({ "from": prev.alias, "to": req.alias });
+    // Enqueue a `rename` op (v1.2-plan §18.A3.3) so the daemon picks
+    // up the new alias on its next snapshot push, swaps it into its
+    // local conf, and restarts — keeping the daemon's hosts splice +
+    // `/local/status` in sync with the dispatcher (source of truth).
+    let op_id = enqueue_op(
+        &mut *tx,
+        state.network_id,
+        device_id,
+        "rename",
+        serde_json::json!({ "new_alias": &req.alias }),
+    )
+    .await?;
+
+    let detail = serde_json::json!({
+        "from": prev.alias,
+        "to": req.alias,
+        "op_id": op_id,
+    });
     sqlx::query(
         "INSERT INTO audit_log (network_id, actor_kind, actor_id, action, target, detail) \
          VALUES ($1, 'local_admin', $2, 'device.rename', $3, $4)",
