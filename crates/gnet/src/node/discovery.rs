@@ -243,12 +243,23 @@ fn try_in_order<T>(
 }
 
 /// POST a small admin snapshot to `<admin_endpoint>/api/internal/snapshot`
-/// (plan §17.4). Body shape is the JSON the dispatcher's
+/// (plan §17.4 push; v1.2-plan §18.A1 / §5.2 reply.)
+///
+/// Body shape is the JSON the dispatcher's
 /// `admin/routes/internal.rs::SnapshotRequest` expects. We hand-roll the
 /// body string because the daemon is zero-deps — no serde_json — and the
 /// payload is small + escape-free (the only string fields are the hex
 /// pubkey and a SocketAddr's Display, neither of which contains a quote
 /// or backslash).
+///
+/// Reply (v1.2 wire):
+/// - `204 No Content` when the dispatcher has no pending ops queued for
+///   this device — fast path, identical to the v1.1 wire.
+/// - `200 OK` with body `{"ops":[{"op_id":..,"op":..,"args":..}]}` when
+///   one or more ops are queued. The daemon parses them, dispatches each
+///   through [`dispatch_pending_op`] (stubbed in A1 — every op acks
+///   `error: not_implemented_in_a1`; A3 wires the real `/local/*`
+///   handlers), then POSTs to `/api/internal/snapshot/ack` per op.
 fn push_snapshot(
     admin_endpoint: &str,
     device_token: &str,
@@ -265,6 +276,130 @@ fn push_snapshot(
         r#"{{"device_pubkey_hex":"{pubkey_hex}","snapshot":{{"version":"{}","reflexive":{reflexive_json},"peer_count":{peer_count}}}}}"#,
         env!("CARGO_PKG_VERSION")
     );
+    // `-w '\n%{http_code}'` appends the status code to stdout after the
+    // body so we can distinguish 200 (drain ops) from 204 (no work)
+    // without a header round-trip.
+    let out = Command::new("curl")
+        .arg("--silent")
+        .arg("--show-error")
+        .arg("--fail-with-body")
+        .arg("--connect-timeout")
+        .arg("10")
+        .arg("--max-time")
+        .arg("30")
+        .arg("-X")
+        .arg("POST")
+        .arg("-H")
+        .arg(format!("Authorization: Bearer {device_token}"))
+        .arg("-H")
+        .arg("Content-Type: application/json")
+        .arg("--data-binary")
+        .arg(&body)
+        .arg("-w")
+        .arg("\n%{http_code}")
+        .arg(&url)
+        .output()?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let (resp_body, status_code) = split_status_tail(&stdout);
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(io::Error::other(format!(
+            "curl POST {url} exit={:?} status={status_code} stderr={stderr} body={resp_body}",
+            out.status.code()
+        )));
+    }
+    match status_code {
+        "204" | "" => Ok(()),
+        "200" => {
+            for op in parse_pending_ops(resp_body) {
+                let result = dispatch_pending_op(&op);
+                if let Err(e) =
+                    ack_pending_op(admin_endpoint, device_token, pubkey_hex, &op.op_id, &result)
+                {
+                    eprintln!(
+                        "event=snapshot_ack_failed op_id={} op={} error=\"{e}\"",
+                        op.op_id, op.op
+                    );
+                }
+            }
+            Ok(())
+        }
+        other => Err(io::Error::other(format!(
+            "snapshot push got unexpected HTTP {other} from {url}: body={resp_body}"
+        ))),
+    }
+}
+
+/// Dispatcher → daemon pending op (subset of fields A1 acts on). `args`
+/// is intentionally left as the raw JSON substring rather than parsed:
+/// the per-op handlers in §18.A3 own knowing which keys their op uses,
+/// and A1 doesn't execute any of them — every op acks
+/// `error: not_implemented_in_a1` for now.
+#[derive(Debug)]
+struct PendingOp {
+    op_id: String,
+    op: String,
+    #[allow(dead_code)] // consumed by per-op handlers in §18.A3
+    args_raw: String,
+}
+
+fn parse_pending_ops(body: &str) -> Vec<PendingOp> {
+    let Some(arr) = extract_array_after(body, "ops") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for obj in split_objects(arr) {
+        let Some(op_id) = extract_string(obj, "op_id") else {
+            eprintln!("event=snapshot_op_malformed missing=op_id raw=\"{obj}\"");
+            continue;
+        };
+        let Some(op) = extract_string(obj, "op") else {
+            eprintln!("event=snapshot_op_malformed op_id={op_id} missing=op");
+            continue;
+        };
+        out.push(PendingOp {
+            op_id,
+            op,
+            args_raw: obj.to_string(),
+        });
+    }
+    out
+}
+
+/// A1 stub. v1.2-plan §18.A1 explicitly only delivers parse + ack; the
+/// real `/local/{alias,join,quit,restart,upgrade}` handlers and
+/// rotate-key path land in §18.A3, at which point this function dispatches
+/// on `op.op` into the corresponding executor. Until then any op the
+/// dispatcher manages to enqueue (none, until §18.A2 flips the operator
+/// writes off 501) gets a structured `error: not_implemented_in_a1` ack so
+/// the row at least transitions out of the pending state.
+fn dispatch_pending_op(op: &PendingOp) -> Result<(), String> {
+    eprintln!("event=snapshot_op_received op_id={} op={}", op.op_id, op.op);
+    Err("not_implemented_in_a1".to_string())
+}
+
+/// POST `/api/internal/snapshot/ack` with the daemon's per-op verdict.
+/// Same auth pair as the snapshot push (token + pubkey hex). On `Ok(())`
+/// status=ok; on `Err(detail)` status=error and detail is recorded as
+/// `last_error`. `detail` is assumed to be short, ASCII-ish, and free
+/// of `"` / `\` (callers in A1 produce only fixed-string literals; A3
+/// callers must keep that contract or upgrade this to a real escaper).
+fn ack_pending_op(
+    admin_endpoint: &str,
+    device_token: &str,
+    pubkey_hex: &str,
+    op_id: &str,
+    result: &Result<(), String>,
+) -> io::Result<()> {
+    let url = format!("{admin_endpoint}/api/internal/snapshot/ack");
+    let body = match result {
+        Ok(()) => format!(
+            r#"{{"device_pubkey_hex":"{pubkey_hex}","op_id":"{op_id}","status":"ok"}}"#
+        ),
+        Err(detail) => format!(
+            r#"{{"device_pubkey_hex":"{pubkey_hex}","op_id":"{op_id}","status":"error","detail":"{detail}"}}"#
+        ),
+    };
     let out = Command::new("curl")
         .arg("--silent")
         .arg("--show-error")
@@ -292,6 +427,18 @@ fn push_snapshot(
         )));
     }
     Ok(())
+}
+
+/// Split curl `-w '\n%{http_code}'` output into (body, status). Tolerates
+/// a missing trailing newline (returns `("",  whole)` only when nothing
+/// got emitted, which `--silent --fail-with-body` shouldn't produce for
+/// any reachable server, but we'd rather degrade to "treat as no-body" than
+/// panic).
+fn split_status_tail(stdout: &str) -> (&str, &str) {
+    match stdout.rsplit_once('\n') {
+        Some((body, code)) => (body, code.trim()),
+        None => ("", stdout.trim()),
+    }
 }
 
 /// POST our reflexive endpoint to `<coordinator>/endpoint-report` with the
@@ -1429,5 +1576,65 @@ mod tests {
         // our own address is absent — no alias means no self entry
         assert!(!out.contains("10.42.42.9"), "no self entry without alias");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── §18.A1 — dispatcher → daemon control-channel wire ──
+
+    #[test]
+    fn split_status_tail_splits_body_and_code() {
+        let (body, code) = split_status_tail(r#"{"ops":[{"op_id":"abc"}]}\n200"#);
+        // rsplit_once on the *literal* \n above doesn't apply — but with a
+        // real newline it should. Cover both shapes:
+        let _ = (body, code);
+        let (body, code) = split_status_tail("{\"ops\":[{\"op_id\":\"abc\"}]}\n200");
+        assert_eq!(code, "200");
+        assert!(body.contains("op_id"));
+
+        let (body, code) = split_status_tail("\n204");
+        assert_eq!(code, "204");
+        assert_eq!(body, "");
+
+        // No trailing newline at all: degrade gracefully — whole stdout
+        // becomes the status guess; caller's match arm rejects the
+        // shape with "unexpected HTTP".
+        let (body, code) = split_status_tail("200");
+        assert_eq!(body, "");
+        assert_eq!(code, "200");
+    }
+
+    #[test]
+    fn parse_pending_ops_extracts_op_id_and_op() {
+        let body = r#"{"ops":[
+            {"op_id":"11111111-1111-1111-1111-111111111111","op":"rotate_key","args":{"new_pubkey_hex":"deadbeef"}},
+            {"op_id":"22222222-2222-2222-2222-222222222222","op":"restart","args":{}}
+        ]}"#;
+        let ops = parse_pending_ops(body);
+        assert_eq!(ops.len(), 2);
+        assert_eq!(ops[0].op_id, "11111111-1111-1111-1111-111111111111");
+        assert_eq!(ops[0].op, "rotate_key");
+        assert_eq!(ops[1].op, "restart");
+    }
+
+    #[test]
+    fn parse_pending_ops_returns_empty_when_ops_missing() {
+        // 204-equivalent (we shouldn't get here for 204, but be robust).
+        assert!(parse_pending_ops("").is_empty());
+        assert!(parse_pending_ops("{}").is_empty());
+        // Malformed object — drop the bad entry, keep the good one.
+        let body = r#"{"ops":[{"missing":"op_id"},{"op_id":"33333333-3333-3333-3333-333333333333","op":"restart"}]}"#;
+        let ops = parse_pending_ops(body);
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].op_id, "33333333-3333-3333-3333-333333333333");
+    }
+
+    #[test]
+    fn dispatch_pending_op_returns_not_implemented_in_a1() {
+        // A1 contract: every op gets a structured error ack until §18.A3.
+        let op = PendingOp {
+            op_id: "0".to_string(),
+            op: "restart".to_string(),
+            args_raw: "{}".to_string(),
+        };
+        assert_eq!(dispatch_pending_op(&op), Err("not_implemented_in_a1".to_string()));
     }
 }
