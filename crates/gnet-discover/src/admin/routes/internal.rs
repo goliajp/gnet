@@ -134,25 +134,35 @@ async fn snapshot(
         .execute(&state.pool)
         .await?;
 
-    // Drain pending ops for this device. The UPDATE … RETURNING runs in a
-    // single round-trip and stamps `delivered_at` so the next push sees
-    // the same rows again only if they have not been acked yet (kept
-    // until ack so an in-flight delivery that crashes the daemon mid-run
-    // does get redelivered). LIMIT 32 caps a single push's payload — far
-    // more than any real device will accumulate, but stops a malformed
-    // backlog from producing a huge 200 reply.
+    // Drain pending ops for this device. CTE picks the oldest 32 pending
+    // rows, the UPDATE stamps `delivered_at`, the outer SELECT re-orders
+    // by `created_at` because Postgres does NOT guarantee that
+    // `UPDATE … RETURNING` emits rows in the inner subquery's ORDER BY
+    // — and v1.2-plan §5.2 says "the daemon executes them in order", so
+    // wire order must match queue order.
+    //
+    // `delivered_at` is stamped before ack so an in-flight delivery that
+    // crashes the daemon mid-run does NOT get redelivered until the row
+    // is also explicitly failed or completed (intentional — we'd rather
+    // a stuck op be visible than silently looped).
+    //
+    // LIMIT 32 caps one push's payload — well above any real backlog,
+    // but stops a malformed accumulator from producing a huge 200 reply.
     let rows: Vec<PendingOpRow> = sqlx::query_as(
-        "UPDATE device_pending_ops \
-         SET delivered_at = now() \
-         WHERE id IN ( \
-             SELECT id FROM device_pending_ops \
+        "WITH picked AS ( \
+             SELECT id, created_at FROM device_pending_ops \
              WHERE device_id = $1 \
                AND completed_at IS NULL \
                AND failed_at IS NULL \
              ORDER BY created_at \
              LIMIT 32 \
+         ), updated AS ( \
+             UPDATE device_pending_ops \
+             SET delivered_at = now() \
+             WHERE id IN (SELECT id FROM picked) \
+             RETURNING id, op, args, created_at \
          ) \
-         RETURNING id, op, args",
+         SELECT id, op, args FROM updated ORDER BY created_at",
     )
     .bind(device_id)
     .fetch_all(&state.pool)
@@ -277,19 +287,24 @@ async fn authenticate(
 }
 
 /// Enqueue a pending op against `device_id`. Used by operator-facing
-/// writes (rotate-key / restart / upgrade — wired in §18.A2-A3). `op`
+/// writes (rotate-key / restart in §18.A2, upgrade in §18.A3). `op`
 /// must match the schema's CHECK enum; callers pass a static `&str`.
 ///
-/// Kept public-in-crate so device_writes can call it without poking the
-/// table directly.
-#[allow(dead_code)] // wired in §18.A2; A1 only ships the helper + plumbing
-pub(crate) async fn enqueue_op(
-    pool: &PgPool,
+/// Generic over `sqlx::Executor` so callers can either run it standalone
+/// against `&state.pool` or join it to a transaction together with the
+/// `audit_log` insert. device_writes always uses the tx form — schema
+/// state without its audit row is exactly the half-state the audit
+/// invariant exists to prevent.
+pub(crate) async fn enqueue_op<'e, E>(
+    executor: E,
     network_id: Uuid,
     device_id: Uuid,
     op: &str,
     args: Json_,
-) -> Result<Uuid, sqlx::Error> {
+) -> Result<Uuid, sqlx::Error>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO device_pending_ops (id, network_id, device_id, op, args) \
@@ -300,7 +315,7 @@ pub(crate) async fn enqueue_op(
     .bind(device_id)
     .bind(op)
     .bind(args)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(id)
 }
