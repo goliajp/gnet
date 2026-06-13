@@ -19,10 +19,16 @@
 //! Iterations are kept modest so `cargo test --release` finishes in a few
 //! seconds — this is a CI gate, not a publication.
 
+// Release-only: debug builds run both sides unoptimized, so the ratio is
+// noise (see "debug builds are noise" in CONTRIBUTING.md). Compiling the
+// gates out keeps a plain `cargo test --workspace` green; run them with
+// `cargo test --release -p gnet-bench-compare`.
+#![cfg(not(debug_assertions))]
 #![allow(clippy::cast_precision_loss)]
 
 use rand_core::RngCore;
 use std::hint::black_box;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
 
 const ITERS_X25519: u32 = 1_000;
@@ -45,6 +51,20 @@ const ITERS_HEX: u32 = 200_000;
 /// so the ratio still cancels architecture noise but no longer carries
 /// state-dependent stretching.
 const BEST_OF: usize = 20;
+
+/// Global perf lock: the libtest harness runs `#[test]` fns on parallel
+/// threads by default, so without this the nine timing tests contend with
+/// each other and donate noise margin for free. Each test takes the lock
+/// for its whole body so only one measurement runs at a time. A poisoned
+/// lock (a previous gate's assert fired) doesn't invalidate later
+/// measurements — recover the guard instead of cascading the panic.
+static PERF_LOCK: Mutex<()> = Mutex::new(());
+
+fn perf_lock() -> MutexGuard<'static, ()> {
+    PERF_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 /// Time a closure over `iters` iterations after `iters/4` warm-up calls.
 /// Returns the average ns per iteration of a single sample.
@@ -91,6 +111,7 @@ fn assert_ratio(name: &str, gnet_ns: f64, comp_ns: f64, max_ratio: f64) {
 
 #[test]
 fn x25519_must_not_lose_to_dalek() {
+    let _serial = perf_lock();
     let mut basepoint = [0u8; 32];
     basepoint[0] = 9;
     let sk = gnet_rand::random_32();
@@ -118,6 +139,7 @@ fn x25519_must_not_lose_to_dalek() {
 
 #[test]
 fn aead_seal_must_not_lose_to_rustcrypto() {
+    let _serial = perf_lock();
     use chacha20poly1305::{AeadInPlace, ChaCha20Poly1305, KeyInit, Nonce};
     let key = gnet_rand::random_32();
     let nonce = [0u8; 12];
@@ -152,6 +174,7 @@ fn aead_seal_must_not_lose_to_rustcrypto() {
 
 #[test]
 fn aead_open_must_not_lose_to_rustcrypto() {
+    let _serial = perf_lock();
     use chacha20poly1305::{AeadInPlace, ChaCha20Poly1305, KeyInit, Nonce};
     let key = gnet_rand::random_32();
     let nonce = [0u8; 12];
@@ -199,6 +222,7 @@ fn aead_open_must_not_lose_to_rustcrypto() {
 
 #[test]
 fn mlkem_keygen_hardgate() {
+    let _serial = perf_lock();
     // Pre-fill a pool of (d, z) seed pairs outside the timed loop so that
     // each iteration just rotates an index — no in-loop `getrandom(2)`.
     // macOS `getrandom` is ~22 µs/call and would otherwise dominate the
@@ -262,6 +286,7 @@ fn mlkem_keygen_hardgate() {
 
 #[test]
 fn mlkem_encaps_hardgate() {
+    let _serial = perf_lock();
     let mut bootstrap = TestRng::new();
     let mut d = [0u8; 32];
     let mut z = [0u8; 32];
@@ -331,6 +356,7 @@ fn mlkem_encaps_hardgate() {
 
 #[test]
 fn mlkem_decaps_hardgate() {
+    let _serial = perf_lock();
     let mut bootstrap = TestRng::new();
     let mut d = [0u8; 32];
     let mut z = [0u8; 32];
@@ -400,6 +426,7 @@ fn mlkem_decaps_hardgate() {
 
 #[test]
 fn noise_ik_classic_hardgate() {
+    let _serial = perf_lock();
     use gnet_noise::handshake::{Initiator, Responder};
     use snow::{Builder, params::NoiseParams};
 
@@ -469,6 +496,7 @@ fn noise_ik_classic_hardgate() {
 
 #[test]
 fn hex_encode_32_must_not_lose() {
+    let _serial = perf_lock();
     let key = [0xABu8; 32];
     let gnet_ns = measure_best(ITERS_HEX, || {
         let s = gnet_hex::encode(black_box(&key));
@@ -483,6 +511,7 @@ fn hex_encode_32_must_not_lose() {
 
 #[test]
 fn hex_decode_32_must_not_lose() {
+    let _serial = perf_lock();
     let key = [0xABu8; 32];
     let hex32 = gnet_hex::encode(&key);
     let gnet_ns = measure_best(ITERS_HEX, || {
