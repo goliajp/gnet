@@ -424,7 +424,11 @@ fn handle_alias(body: &[u8], cfg: &LocalAdminConfig) -> (u16, &'static str, Vec<
     if status != 204 {
         // Mirror the dispatcher's failure back. Default to 502 when the
         // status didn't parse.
-        let final_status = if (400..600).contains(&status) { status } else { 502 };
+        let final_status = if (400..600).contains(&status) {
+            status
+        } else {
+            502
+        };
         let body = format!(
             r#"{{"error":"dispatcher rejected alias/set","status":{status},"body":{}}}"#,
             serde_json_str(&resp_body)
@@ -1280,7 +1284,10 @@ mod tests {
     fn parse_alias_body_handles_basic_shapes() {
         assert_eq!(parse_alias_body(br#"{"alias":"foo"}"#), Some("foo"));
         assert_eq!(parse_alias_body(br#"{ "alias" : "bar" }"#), Some("bar"));
-        assert_eq!(parse_alias_body(br#"{"other":"x","alias":"baz"}"#), Some("baz"));
+        assert_eq!(
+            parse_alias_body(br#"{"other":"x","alias":"baz"}"#),
+            Some("baz")
+        );
         assert_eq!(parse_alias_body(br#"{"nope":"x"}"#), None);
         assert_eq!(parse_alias_body(br#"not json"#), None);
     }

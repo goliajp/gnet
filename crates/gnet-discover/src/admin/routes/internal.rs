@@ -150,7 +150,10 @@ pub fn routes() -> Router<AdminState> {
     Router::new()
         .route("/api/internal/snapshot", post(snapshot))
         .route("/api/internal/snapshot/ack", post(snapshot_ack))
-        .route("/api/internal/rotate_key/complete", post(rotate_key_complete))
+        .route(
+            "/api/internal/rotate_key/complete",
+            post(rotate_key_complete),
+        )
         .route("/api/internal/alias/set", post(alias_set))
 }
 
@@ -159,7 +162,13 @@ async fn snapshot(
     headers: HeaderMap,
     Json(req): Json<SnapshotRequest>,
 ) -> Result<Response, InternalError> {
-    let device_id = authenticate(&state.pool, state.network_id, &headers, &req.device_pubkey_hex).await?;
+    let device_id = authenticate(
+        &state.pool,
+        state.network_id,
+        &headers,
+        &req.device_pubkey_hex,
+    )
+    .await?;
 
     sqlx::query(
         "INSERT INTO device_snapshots (device_id, taken_at, snapshot) \
@@ -238,24 +247,28 @@ async fn snapshot_ack(
     headers: HeaderMap,
     Json(req): Json<AckRequest>,
 ) -> Result<StatusCode, InternalError> {
-    let device_id = authenticate(&state.pool, state.network_id, &headers, &req.device_pubkey_hex).await?;
+    let device_id = authenticate(
+        &state.pool,
+        state.network_id,
+        &headers,
+        &req.device_pubkey_hex,
+    )
+    .await?;
 
     let affected = match req.status {
-        AckStatus::Ok => {
-            sqlx::query(
-                "UPDATE device_pending_ops \
+        AckStatus::Ok => sqlx::query(
+            "UPDATE device_pending_ops \
                  SET completed_at = now() \
                  WHERE id = $1 \
                    AND device_id = $2 \
                    AND completed_at IS NULL \
                    AND failed_at IS NULL",
-            )
-            .bind(req.op_id)
-            .bind(device_id)
-            .execute(&state.pool)
-            .await?
-            .rows_affected()
-        }
+        )
+        .bind(req.op_id)
+        .bind(device_id)
+        .execute(&state.pool)
+        .await?
+        .rows_affected(),
         AckStatus::Error => {
             // last_error is operator-visible; truncate so a runaway daemon
             // can't push megabyte strings into the audit row.
@@ -307,7 +320,13 @@ async fn rotate_key_complete(
     headers: HeaderMap,
     Json(req): Json<RotateKeyCompleteRequest>,
 ) -> Result<StatusCode, InternalError> {
-    let device_id = authenticate(&state.pool, state.network_id, &headers, &req.device_pubkey_hex).await?;
+    let device_id = authenticate(
+        &state.pool,
+        state.network_id,
+        &headers,
+        &req.device_pubkey_hex,
+    )
+    .await?;
 
     let new_pubkey_raw =
         gnet_hex::decode_32(&req.new_pubkey_hex).ok_or(InternalError::BadNewPubkey)?;
@@ -387,7 +406,13 @@ async fn alias_set(
     headers: HeaderMap,
     Json(req): Json<AliasSetRequest>,
 ) -> Result<StatusCode, InternalError> {
-    let device_id = authenticate(&state.pool, state.network_id, &headers, &req.device_pubkey_hex).await?;
+    let device_id = authenticate(
+        &state.pool,
+        state.network_id,
+        &headers,
+        &req.device_pubkey_hex,
+    )
+    .await?;
 
     if !is_valid_alias(&req.new_alias) {
         return Err(InternalError::BadAlias);
