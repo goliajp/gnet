@@ -210,14 +210,7 @@ pub(super) fn spawn(
                     let g = node.lock().expect("node mutex");
                     (g.reflexive, g.peers.len())
                 };
-                match push_snapshot(
-                    admin,
-                    tok,
-                    &our_pk_hex,
-                    reflexive,
-                    peer_count,
-                    &conf_path,
-                ) {
+                match push_snapshot(admin, tok, &our_pk_hex, reflexive, peer_count, &conf_path) {
                     Ok(()) => eprintln!("event=snapshot_pushed admin={admin} peers={peer_count}"),
                     Err(e) => eprintln!("event=snapshot_push_failed error=\"{e}\""),
                 }
@@ -519,9 +512,7 @@ fn handle_rotate_key_op(ctx: &DispatchCtx<'_>, op_id: &str) -> Result<(), String
     let (new_sk, new_pk) = keys::generate_static();
     let new_sk_hex = hex::encode(&new_sk);
     let new_pk_hex = hex::encode(&new_pk);
-    eprintln!(
-        "event=rotate_key_start op_id={op_id} new_pubkey={new_pk_hex}"
-    );
+    eprintln!("event=rotate_key_start op_id={op_id} new_pubkey={new_pk_hex}");
 
     let url = format!("{}/api/internal/rotate_key/complete", ctx.admin_endpoint);
     let body = format!(
@@ -607,9 +598,9 @@ fn ack_pending_op(
 ) -> io::Result<()> {
     let url = format!("{admin_endpoint}/api/internal/snapshot/ack");
     let body = match result {
-        Ok(()) => format!(
-            r#"{{"device_pubkey_hex":"{pubkey_hex}","op_id":"{op_id}","status":"ok"}}"#
-        ),
+        Ok(()) => {
+            format!(r#"{{"device_pubkey_hex":"{pubkey_hex}","op_id":"{op_id}","status":"ok"}}"#)
+        }
         Err(detail) => format!(
             r#"{{"device_pubkey_hex":"{pubkey_hex}","op_id":"{op_id}","status":"error","detail":"{detail}"}}"#
         ),

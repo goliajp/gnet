@@ -266,7 +266,15 @@ async fn rotate_key(
     headers: HeaderMap,
     Path(device_id): Path<Uuid>,
 ) -> Result<Response, DeviceWriteError> {
-    enqueue_device_op(state, jar, headers, device_id, "rotate_key", "device.rotate_key").await
+    enqueue_device_op(
+        state,
+        jar,
+        headers,
+        device_id,
+        "rotate_key",
+        "device.rotate_key",
+    )
+    .await
 }
 
 /// Enqueue a `restart` op (v1.2-plan §18.A2). Daemon side reacts by
