@@ -150,6 +150,7 @@ deploy_host() {
         --exclude .git \
         --exclude '**/fuzz/corpus' \
         --exclude '**/fuzz/artifacts' \
+        --exclude-from="$HOME/.config/git/ignore" \
         -e ssh ./ "$host:$REMOTE_BUILD_DIR/"
 
     # 2. build (release) — remote toolchain is "always latest stable"
