@@ -10,7 +10,7 @@
 #
 # t01 runs every project as a docker-compose bundle under
 # `/apps/<project>/` (postgres + valkey + app), per the convention
-# documented in devops/wiki/deploy/docker.md. This file ships the
+# documented in devops/docs/wiki/deploy/docker.md. This file ships the
 # three pieces gnet's SaaS console needs: PG18, Valkey 9, and the
 # gnet-console binary itself.
 #

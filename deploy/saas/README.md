@@ -2,7 +2,7 @@
 
 This directory holds **pre-authored** request bodies for registering the `gnet` project on `devops.golia.jp` and bringing up `gnet.golia.jp` as a docker-compose deploy on t01. The agent does **not** invoke the devops API in autorun mode; the operator pastes these JSONs into curl with their `DEVOPS_API_KEY`.
 
-Plan refs: §10.2 (SaaS topology), §17 step 11, `v1_1-deploy-target` memory. Devops API walkthrough: `~/workspace/goliajp/devops/wiki/deploy/register.md`. **Note** the wiki examples use `x-api-key:`, but the live server only honours `Authorization: Bearer dvps_...` — the docs are drifted; use the form below.
+Plan refs: §10.2 (SaaS topology), §17 step 11, `v1_1-deploy-target` memory. Devops API walkthrough: `~/workspace/goliajp/devops/docs/wiki/deploy/register.md`.
 
 t01 runs every project as a docker-compose bundle under `/apps/<project>/`. The gnet SaaS bundle ships **at the repo root** (`docker-compose.yml` + `.env.example`) so the devops binary-deploy pipeline rsyncs the whole repo to `/apps/gnet/` and runs `docker compose up -d` from there.
 
