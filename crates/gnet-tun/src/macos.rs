@@ -1,5 +1,6 @@
 //! macOS `utun` device via the `PF_SYSTEM` / `SYSPROTO_CONTROL` interface.
 
+use std::ffi::c_void;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
@@ -43,8 +44,8 @@ unsafe extern "C" {
     fn ioctl(fd: i32, request: u64, ...) -> i32;
     fn connect(fd: i32, addr: *const SockaddrCtl, len: u32) -> i32;
     fn getsockopt(fd: i32, level: i32, optname: i32, optval: *mut u8, optlen: *mut u32) -> i32;
-    fn read(fd: i32, buf: *mut u8, count: usize) -> isize;
-    fn write(fd: i32, buf: *const u8, count: usize) -> isize;
+    fn read(fd: i32, buf: *mut c_void, count: usize) -> isize;
+    fn write(fd: i32, buf: *const c_void, count: usize) -> isize;
 }
 
 /// An open macOS `utun` device.
@@ -133,7 +134,7 @@ impl Tun {
     pub fn recv(&self, packet: &mut [u8]) -> io::Result<usize> {
         let mut buf = [0u8; READ_BUF];
         // SAFETY: fd valid; buf is a valid writable region of buf.len() bytes.
-        let n = unsafe { read(self.fd.as_raw_fd(), buf.as_mut_ptr(), buf.len()) };
+        let n = unsafe { read(self.fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
         if n < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -160,7 +161,7 @@ impl Tun {
         framed.extend_from_slice(header);
         framed.extend_from_slice(packet);
         // SAFETY: fd valid; framed is a valid readable region of framed.len() bytes.
-        let n = unsafe { write(self.fd.as_raw_fd(), framed.as_ptr(), framed.len()) };
+        let n = unsafe { write(self.fd.as_raw_fd(), framed.as_ptr().cast(), framed.len()) };
         if n < 0 {
             return Err(io::Error::last_os_error());
         }
