@@ -12,6 +12,8 @@ pub struct AppState {
     pub pool: PgPool,
     pub kv: ConnectionManager,
     pub http: reqwest::Client,
+    /// Client for user-supplied dispatcher endpoints; see [`crate::egress`].
+    pub dispatcher_http: reqwest::Client,
     pub public_url: String,
     pub oauth: Arc<HashMap<&'static str, Provider>>,
     /// Mirrored from [`crate::config::Config::auto_verify_email`].

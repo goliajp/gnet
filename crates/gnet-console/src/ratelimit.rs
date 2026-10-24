@@ -1,18 +1,10 @@
-//! Tiny Valkey-backed counter for login brute-force throttling
-//! (plan §17.12 hardening sweep).
+//! Valkey-backed fixed-limit counters: login brute-force, and the
+//! endpoints that send mail (signup, resend verification, forgot
+//! password) so they cannot be used to mail arbitrary addresses.
 //!
-//! Pattern: `INCR <key>` + `EXPIRE <key> <window_secs> NX`. The
-//! first hit creates the key with value 1 and sets the TTL; every
-//! subsequent hit within the window increments without touching
-//! the TTL (the NX makes EXPIRE a no-op when the key already has
-//! one), so a single key always covers exactly one rolling window.
-//!
-//! No `ip` form here yet — SaaS console runs behind Caddy with
-//! `X-Forwarded-For`, and trusting an arbitrary header for
-//! brute-force-mitigation buckets is its own footgun. The
-//! per-account form (`account_attempt`) is the load-bearing
-//! mitigation; per-IP is a v1.2 follow-up if abuse data justifies
-//! the proxy-header trust model.
+//! Pattern: `INCR <key>` + `EXPIRE <key> <window_secs>` in one atomic
+//! pipeline. Keys are per account, per recipient address, or per
+//! client IP; the client IP comes from [`crate::routes::client_ip`].
 
 use redis::AsyncCommands;
 use redis::aio::ConnectionManager;
@@ -46,28 +38,38 @@ pub async fn account_attempt(
     account_id: &str,
 ) -> Result<Decision, AppError> {
     let key = format!("login_rl:account:{account_id}");
-    // INCR + atomic EXPIRE NX. We collapse them into a single
-    // round-trip with a pipeline; the EXPIRE is no-op after the
-    // first hit because the key already has a TTL.
+    hit(kv, &key, LOGIN_ATTEMPT_LIMIT, LOGIN_ATTEMPT_WINDOW_SECS).await
+}
+
+/// Signups one client IP may start per window.
+pub const REGISTER_PER_IP: (u32, u64) = (5, 3600);
+/// Mail-triggering requests (resend verification, forgot password)
+/// one client IP may make per window.
+pub const MAIL_REQUEST_PER_IP: (u32, u64) = (10, 3600);
+/// Mail-triggering requests naming one recipient address per window,
+/// across signup, resend and reset. Charged before the account lookup,
+/// so it counts whether or not a mail actually goes out.
+pub const MAIL_PER_RECIPIENT: (u32, u64) = (3, 3600);
+
+/// Count one hit on `key` and decide against `limit` per `window_secs`.
+/// Every hit refreshes the TTL, so a client that keeps hammering stays
+/// throttled until it backs off for a full window.
+pub async fn hit(
+    kv: &mut ConnectionManager,
+    key: &str,
+    limit: u32,
+    window_secs: u64,
+) -> Result<Decision, AppError> {
     let (count, _): (u64, i64) = redis::pipe()
         .atomic()
-        .incr(&key, 1u32)
-        .expire(&key, LOGIN_ATTEMPT_WINDOW_SECS as i64)
+        .incr(key, 1u32)
+        .expire(key, window_secs as i64)
         .query_async(kv)
         .await?;
-    if count > LOGIN_ATTEMPT_LIMIT as u64 {
-        // TTL is bounded by the window — worst case we ask the
-        // client to wait the full WINDOW_SECS.
-        let ttl: i64 = kv
-            .ttl(&key)
-            .await
-            .unwrap_or(LOGIN_ATTEMPT_WINDOW_SECS as i64);
-        let retry_after_secs = if ttl > 0 {
-            ttl as u64
-        } else {
-            LOGIN_ATTEMPT_WINDOW_SECS
-        };
-        Ok(Decision::Throttle { retry_after_secs })
+    if count > limit as u64 {
+        Ok(Decision::Throttle {
+            retry_after_secs: window_secs,
+        })
     } else {
         Ok(Decision::Allow)
     }

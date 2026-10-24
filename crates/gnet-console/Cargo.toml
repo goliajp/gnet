@@ -41,6 +41,7 @@ redis.workspace = true
 time.workspace = true
 uuid.workspace = true
 reqwest.workspace = true
+url.workspace = true
 jsonwebtoken.workspace = true
 # Compile-time SPA embed (plan §3.4). The bundle at `console/dist/` is
 # baked into the binary by `build.rs`; the fallback route in
