@@ -72,8 +72,8 @@ pub unsafe fn keystream8(key: &[u8; 32], counter: u32, nonce: &[u8; 12]) -> [u8;
         }
 
         let mut out = [0u8; 512];
-        for (b, chunk) in out.chunks_exact_mut(64).enumerate() {
-            for (w, word) in chunk.chunks_exact_mut(4).enumerate() {
+        for (b, chunk) in out.as_chunks_mut::<64>().0.iter_mut().enumerate() {
+            for (w, word) in chunk.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 word.copy_from_slice(&cols[w][b].to_le_bytes());
             }
         }
@@ -99,7 +99,7 @@ mod tests {
             // SAFETY: guarded by the is_x86_feature_detected check above.
             let ks8 = unsafe { keystream8(&key, c, &nonce) };
             let mut expected = [0u8; 512];
-            for (k, chunk) in expected.chunks_exact_mut(64).enumerate() {
+            for (k, chunk) in expected.as_chunks_mut::<64>().0.iter_mut().enumerate() {
                 chunk.copy_from_slice(&block(&key, c.wrapping_add(k as u32), &nonce));
             }
             assert_eq!(ks8, expected);
