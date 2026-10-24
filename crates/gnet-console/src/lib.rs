@@ -7,6 +7,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod egress;
 pub mod error;
 pub mod federation;
 pub mod mail;
@@ -75,6 +76,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         pool,
         kv,
         http,
+        dispatcher_http: egress::dispatcher_client()?,
         public_url: config.public_url.clone(),
         oauth: Arc::new(oauth),
         auto_verify_email: config.auto_verify_email,
@@ -85,6 +87,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     tracing::info!(addr = %listener.local_addr()?, "listening");
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }

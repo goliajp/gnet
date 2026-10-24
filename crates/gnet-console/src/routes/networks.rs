@@ -56,6 +56,8 @@ pub enum NetworkError {
     BadLabel,
     #[error("dispatcher_endpoint must be http(s)://… 1024 chars max")]
     BadEndpoint,
+    #[error("{0}")]
+    Egress(#[from] crate::egress::EgressError),
     #[error("network_label already in use")]
     LabelConflict,
     /// DELETE asked for a network that either doesn't belong to this
@@ -88,7 +90,9 @@ impl IntoResponse for NetworkError {
     fn into_response(self) -> Response {
         let code = match self {
             NetworkError::NotLoggedIn => StatusCode::UNAUTHORIZED,
-            NetworkError::BadLabel | NetworkError::BadEndpoint => StatusCode::BAD_REQUEST,
+            NetworkError::BadLabel | NetworkError::BadEndpoint | NetworkError::Egress(_) => {
+                StatusCode::BAD_REQUEST
+            }
             NetworkError::LabelConflict => StatusCode::CONFLICT,
             NetworkError::NotFound => StatusCode::NOT_FOUND,
             NetworkError::Session(_) | NetworkError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -149,6 +153,7 @@ async fn register(
     if !valid_endpoint(&endpoint) {
         return Err(NetworkError::BadEndpoint);
     }
+    crate::egress::check_url(&endpoint).await?;
 
     let id = Uuid::new_v4();
     let token = derive_token(&state.federation_secret, session.user_id, &label, &endpoint);

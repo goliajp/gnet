@@ -24,7 +24,7 @@ const EXEMPT_PATHS: &[&str] = &[
     // tab; the user may not be signed in yet, so no session cookie
     // → no CSRF cookie → no double-submit token. The token in the
     // body IS the auth factor (single-use, one-hour TTL — see
-    // routes/auth.rs::verify_email).
+    // routes/auth_email.rs::verify_email).
     "/api/auth/email/verify",
     // Same reasoning as verify: forgot-password / reset-password /
     // resend-verification all come in BEFORE a session exists — the
