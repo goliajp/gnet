@@ -51,6 +51,10 @@ public releases, have been removed — their content is rolled into the
   per client IP and per recipient address. Over a limit, resend and
   forgot still answer success but send nothing; signup answers 429.
 - **Forgot-password only mails confirmed addresses.**
+- **An unconfirmed signup gets no session.** With mail verification on,
+  `POST /api/auth/email/register` no longer signs the new account in;
+  nothing behind login (networks, the dispatcher proxy) is reachable
+  until the confirmation link is followed and the user signs in.
 - **Proof-of-work human check on the three mail-sending forms**
   (self-hosted ALTCHA, nothing leaves the console). The browser solves
   a challenge in the background while the form is open; answers are

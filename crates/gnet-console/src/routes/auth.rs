@@ -221,7 +221,16 @@ async fn register(
         super::auth_email::send_verification(&state, &email, token, false).await;
     }
 
-    let (jar, _resp_session) = open_session(jar, &state, user_id, Some(email.clone())).await?;
+    // an unconfirmed address gets no session: everything behind login
+    // (networks, the dispatcher proxy) requires a proven mailbox, and
+    // login refuses the account until the link is followed
+    let jar = if state.auto_verify_email {
+        open_session(jar, &state, user_id, Some(email.clone()))
+            .await?
+            .0
+    } else {
+        jar
+    };
 
     Ok((
         jar,

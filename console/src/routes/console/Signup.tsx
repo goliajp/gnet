@@ -25,13 +25,11 @@ export default function ConsoleSignup() {
         body: JSON.stringify({ ...creds, altcha: await humanCheck() }),
       }),
     onSuccess: (me) => {
-      qc.setQueryData(["console", "me"], me);
-      // When the mail loop is on, the user has to click the link in
-      // their inbox before they can sign in — keep them on this page
-      // with a "check your mail" prompt instead of dropping them in
-      // a dashboard they can't use yet (login below will refuse with
-      // 401 unverified).
+      // An unconfirmed signup gets no session; marking it signed in
+      // here would bounce it to a dashboard it cannot use. It stays on
+      // a "check your mail" prompt until the link is followed.
       if (me.verified) {
+        qc.setQueryData(["console", "me"], me);
         nav("/dashboard", { replace: true });
       } else {
         setPendingMailFor(me.email ?? "");
