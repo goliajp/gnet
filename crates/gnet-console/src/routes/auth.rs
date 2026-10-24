@@ -22,6 +22,7 @@ use time::Duration;
 use uuid::Uuid;
 
 use crate::auth::{AuthError, hash_password, looks_like_email, verify_password};
+use crate::human_check::Scope;
 use crate::routes::client_ip::ClientIp;
 use crate::routes::csrf::CSRF_COOKIE_NAME;
 use crate::session::{self, SESSION_TTL_SECS, Session};
@@ -46,6 +47,8 @@ pub(super) fn secure_cookies() -> bool {
 pub struct RegisterRequest {
     pub email: String,
     pub password: String,
+    #[serde(default)]
+    pub altcha: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -79,6 +82,9 @@ pub enum AuthRouteError {
     /// the `Retry-After` header on the 429 response (plan §17.12).
     #[error("too many attempts; retry in {retry_after_secs}s")]
     Throttled { retry_after_secs: u64 },
+    /// Missing, invalid, wrong-scope or replayed proof-of-work payload.
+    #[error("human check failed; reload the form and try again")]
+    HumanCheckFailed,
     #[error("password hash: {0}")]
     Hash(#[from] AuthError),
     #[error("session: {0}")]
@@ -112,6 +118,7 @@ impl IntoResponse for AuthRouteError {
                 StatusCode::UNAUTHORIZED
             }
             AuthRouteError::AlreadyExists => StatusCode::CONFLICT,
+            AuthRouteError::HumanCheckFailed => StatusCode::FORBIDDEN,
             AuthRouteError::Throttled { .. } => StatusCode::TOO_MANY_REQUESTS,
             AuthRouteError::Hash(_)
             | AuthRouteError::Session(_)
@@ -127,6 +134,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/auth/email/register", post(register))
         .route("/api/auth/email/login", post(login))
+        .route("/api/auth/challenge", get(crate::human_check::challenge))
         .route("/api/auth/me", get(me))
         .route("/api/auth/logout", post(logout))
 }
@@ -137,6 +145,7 @@ async fn register(
     jar: CookieJar,
     Json(req): Json<RegisterRequest>,
 ) -> Result<(CookieJar, (StatusCode, Json<MeResponse>)), AuthRouteError> {
+    crate::human_check::require(&state, Scope::Register, req.altcha.as_deref()).await?;
     let mut kv = state.kv.clone();
     let (limit, window) = crate::ratelimit::REGISTER_PER_IP;
     if let crate::ratelimit::Decision::Throttle { retry_after_secs } =

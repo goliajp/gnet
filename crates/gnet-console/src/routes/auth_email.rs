@@ -3,7 +3,7 @@
 //!
 //! Every endpoint here that sends mail is rate-limited per client IP
 //! and per recipient address. Over a limit the request still gets the
-//! same 200 as a real send, so neither the limit nor account existence
+//! same 204 as a real send, so neither the limit nor account existence
 //! is observable, and the console cannot be used to mail arbitrary
 //! addresses.
 
@@ -17,6 +17,7 @@ use uuid::Uuid;
 use super::auth::{AuthRouteError, MIN_PASSWORD_LEN};
 use super::client_ip::ClientIp;
 use crate::auth::{hash_password, looks_like_email};
+use crate::human_check::{self, Scope};
 use crate::ratelimit::{self, Decision};
 use crate::state::AppState;
 
@@ -146,31 +147,34 @@ pub(super) async fn send_verification(state: &AppState, email: &str, token: &str
 #[derive(Deserialize)]
 pub struct ResendVerificationRequest {
     pub email: String,
+    #[serde(default)]
+    pub altcha: Option<String>,
 }
 
 /// Issue a fresh verification token for an unverified account, mail
-/// it out, and ALWAYS return 200. We deliberately don't differentiate
+/// it out, and ALWAYS return 204. We deliberately don't differentiate
 /// "no such account" from "account already verified" from "fresh
 /// token issued" — the response shape is identical so a probe can't
 /// enumerate which addresses are real.
 ///
 /// Auto-verify mode is a no-op success too (the binary has no mail
 /// loop at all; signups already land verified). The frontend treats
-/// 200 as "if your address is on file and still needs verification,
+/// 204 as "if your address is on file and still needs verification,
 /// a new link is on the way."
 async fn resend_verification(
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     Json(req): Json<ResendVerificationRequest>,
 ) -> Result<StatusCode, AuthRouteError> {
+    human_check::require(&state, Scope::Resend, req.altcha.as_deref()).await?;
     let email = req.email.trim().to_lowercase();
-    // No validation 400s — even a bad email shape returns 200 so the
+    // No validation 400s — even a bad email shape returns 204 so the
     // enumeration surface stays flat.
     if !looks_like_email(&email) || state.mail.is_none() {
-        return Ok(StatusCode::OK);
+        return Ok(StatusCode::NO_CONTENT);
     }
     if !may_send(&state, Some(ip), &email).await? {
-        return Ok(StatusCode::OK);
+        return Ok(StatusCode::NO_CONTENT);
     }
 
     let row: Option<(Uuid,)> = sqlx::query_as(
@@ -181,7 +185,7 @@ async fn resend_verification(
     .fetch_optional(&state.pool)
     .await?;
     let Some((user_id,)) = row else {
-        return Ok(StatusCode::OK);
+        return Ok(StatusCode::NO_CONTENT);
     };
 
     let token = new_token();
@@ -191,16 +195,18 @@ async fn resend_verification(
         .execute(&state.pool)
         .await?;
     send_verification(&state, &email, &token, true).await;
-    Ok(StatusCode::OK)
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
 pub struct ForgotPasswordRequest {
     pub email: String,
+    #[serde(default)]
+    pub altcha: Option<String>,
 }
 
 /// Issue a password-reset token for a confirmed account, mail it out,
-/// and ALWAYS return 200 — same enumeration-flat behaviour as
+/// and ALWAYS return 204 — same enumeration-flat behaviour as
 /// resend-verification. Unconfirmed accounts get no mail: their
 /// address was never proven to belong to whoever signed up. The
 /// mail's link points at `/reset-password?token=…` which the SPA hosts.
@@ -209,15 +215,16 @@ async fn forgot_password(
     ClientIp(ip): ClientIp,
     Json(req): Json<ForgotPasswordRequest>,
 ) -> Result<StatusCode, AuthRouteError> {
+    human_check::require(&state, Scope::Forgot, req.altcha.as_deref()).await?;
     let email = req.email.trim().to_lowercase();
     if !looks_like_email(&email) {
-        return Ok(StatusCode::OK);
+        return Ok(StatusCode::NO_CONTENT);
     }
     let Some(mail) = state.mail.as_ref() else {
-        return Ok(StatusCode::OK);
+        return Ok(StatusCode::NO_CONTENT);
     };
     if !may_send(&state, Some(ip), &email).await? {
-        return Ok(StatusCode::OK);
+        return Ok(StatusCode::NO_CONTENT);
     }
 
     let row: Option<(Uuid,)> = sqlx::query_as(
@@ -228,7 +235,7 @@ async fn forgot_password(
     .fetch_optional(&state.pool)
     .await?;
     let Some((user_id,)) = row else {
-        return Ok(StatusCode::OK);
+        return Ok(StatusCode::NO_CONTENT);
     };
 
     let token = new_token();
@@ -251,7 +258,7 @@ async fn forgot_password(
     {
         tracing::error!(error = ?e, user_id = %user_id, "password-reset mail failed");
     }
-    Ok(StatusCode::OK)
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -307,7 +314,7 @@ async fn reset_password(
     // old cookies on the next login attempt.
     let _ = invalidate_user_sessions(&state, user_id).await;
 
-    Ok(StatusCode::OK)
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Walk the console session prefix in Valkey and drop every row that

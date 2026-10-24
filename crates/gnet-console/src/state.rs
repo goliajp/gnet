@@ -23,4 +23,6 @@ pub struct AppState {
     /// set; `None` matches the auto-verify mode in `auto_verify_email`.
     /// The two are kept consistent in `Config::from_env`.
     pub mail: Option<MailClient>,
+    /// `None` when the human check is turned off by config.
+    pub human_check: Option<Arc<crate::human_check::Secrets>>,
 }

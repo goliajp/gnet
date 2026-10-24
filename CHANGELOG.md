@@ -36,7 +36,35 @@ public releases, have been removed — their content is rolled into the
 
 ## [Unreleased]
 
-_No entries yet on `develop`._
+### Security — gnet-console
+
+- **Dispatcher endpoints must be public addresses.** Registering a
+  network, and every request through `/api/networks/{id}/proxy/*`,
+  now refuses endpoints that are or resolve to loopback, private,
+  link-local (including cloud metadata `169.254.169.254`), shared /
+  CGNAT, multicast or reserved addresses, IPv6 forms that embed such
+  an IPv4 address, and URLs with credentials. Resolution is checked at
+  connect time, so a name that later re-resolves inward is still
+  refused; redirects are no longer followed. Previously any signed-in
+  user could make the console fetch internal URLs and read the reply.
+- **Signup, resend-verification and forgot-password are rate-limited**
+  per client IP and per recipient address. Over a limit, resend and
+  forgot still answer success but send nothing; signup answers 429.
+- **Forgot-password only mails confirmed addresses.**
+- **Proof-of-work human check on the three mail-sending forms**
+  (self-hosted ALTCHA, nothing leaves the console). The browser solves
+  a challenge in the background while the form is open; answers are
+  scoped to one form and single-use. New endpoint
+  `GET /api/auth/challenge?scope=register|resend|forgot`.
+
+### Changed — gnet-console
+
+- **New required env `GNET_CONSOLE_ALTCHA_SECRET`** (64-char hex).
+  The console refuses to start without it; `GNET_CONSOLE_HUMAN_CHECK=off`
+  turns the check off for local development.
+- `forgot-password`, `resend-verification` and `reset-password` answer
+  `204` instead of an empty `200`; the SPA failed to parse the empty
+  body and showed an error after a successful send.
 
 ## [1.1.0] — 2026-06-04
 

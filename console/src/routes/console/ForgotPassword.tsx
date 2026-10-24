@@ -2,13 +2,14 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { api } from "../../api/client";
+import { useHumanCheck } from "../../api/humanCheck";
 import type { ForgotPasswordRequest } from "../../api/types";
 import { AuthShell, ErrorLine, Field } from "./Login";
 
 /**
  * `/forgot-password` — request a reset link.
  *
- * The backend ALWAYS returns 200 (so we can't enumerate accounts
+ * The backend ALWAYS returns 204 (so we can't enumerate accounts
  * from the response), so the page collapses the two outcomes into a
  * single confirmation regardless of whether the email actually
  * matched a row. The user learns the mail status from… the actual
@@ -17,12 +18,13 @@ import { AuthShell, ErrorLine, Field } from "./Login";
 export default function ConsoleForgotPassword() {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
+  const humanCheck = useHumanCheck("forgot");
 
   const submit = useMutation({
-    mutationFn: (body: ForgotPasswordRequest) =>
+    mutationFn: async (body: ForgotPasswordRequest) =>
       api<void>("/api/auth/email/forgot-password", {
         method: "POST",
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, altcha: await humanCheck() }),
       }),
     onSuccess: () => setSent(true),
   });
