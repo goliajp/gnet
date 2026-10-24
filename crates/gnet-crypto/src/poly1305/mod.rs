@@ -194,7 +194,7 @@ fn emit(h: [u64; 5], pad: &[u8; 16]) -> [u8; 16] {
     ];
     let mut tag = [0u8; 16];
     let mut carry = 0u64;
-    for (i, word) in tag.chunks_exact_mut(4).enumerate() {
+    for (i, word) in tag.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let sum = f[i] + load_le32(&pad[4 * i..4 * i + 4]) + carry;
         carry = sum >> 32;
         word.copy_from_slice(&(sum as u32).to_le_bytes());
@@ -205,11 +205,10 @@ fn emit(h: [u64; 5], pad: &[u8; 16]) -> [u8; 16] {
 /// Process `msg` through `st` block by block (full blocks, then a final
 /// partial block with the `1` pad byte), then finalize the tag.
 fn absorb_tail(mut st: State, msg: &[u8], pad: &[u8; 16]) -> [u8; 16] {
-    let mut chunks = msg.chunks_exact(16);
-    for blk in chunks.by_ref() {
-        st.block(blk.try_into().expect("chunks_exact(16)"), 1 << 24);
+    let (blocks, rem) = msg.as_chunks::<16>();
+    for blk in blocks {
+        st.block(blk, 1 << 24);
     }
-    let rem = chunks.remainder();
     if !rem.is_empty() {
         let mut buf = [0u8; 16];
         buf[..rem.len()].copy_from_slice(rem);
@@ -292,9 +291,8 @@ impl Mac {
         let full = &data[..n_full * 16];
         let (h, consumed) = simd_bulk(&self.st.r, self.st.h, full);
         self.st.h = h;
-        for blk in full[consumed..].chunks_exact(16) {
-            self.st
-                .block(blk.try_into().expect("chunks_exact(16)"), 1 << 24);
+        for blk in full[consumed..].as_chunks::<16>().0 {
+            self.st.block(blk, 1 << 24);
         }
         let rem = &data[n_full * 16..];
         if !rem.is_empty() {

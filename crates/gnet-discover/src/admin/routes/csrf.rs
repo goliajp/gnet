@@ -45,16 +45,16 @@ const EXEMPT_PATHS: &[&str] = &[
 /// <device_token>`, not a cookie — there's no CSRF surface to protect.
 const EXEMPT_PREFIXES: &[&str] = &["/api/internal/"];
 
-pub async fn guard(req: Request, next: Next) -> Result<Response, Response> {
+pub async fn guard(req: Request, next: Next) -> Response {
     if matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS) {
-        return Ok(next.run(req).await);
+        return next.run(req).await;
     }
     let path = req.uri().path();
     if EXEMPT_PATHS.contains(&path) {
-        return Ok(next.run(req).await);
+        return next.run(req).await;
     }
     if EXEMPT_PREFIXES.iter().any(|p| path.starts_with(p)) {
-        return Ok(next.run(req).await);
+        return next.run(req).await;
     }
 
     // Federation-bearer requests carry no cookie and so have no CSRF
@@ -67,22 +67,22 @@ pub async fn guard(req: Request, next: Next) -> Result<Response, Response> {
         .map(|s| s.starts_with("Bearer ") || s.starts_with("bearer "))
         .unwrap_or(false)
     {
-        return Ok(next.run(req).await);
+        return next.run(req).await;
     }
 
     let headers = req.headers();
     let Some(cookie_value) = parse_cookie(headers, CSRF_COOKIE_NAME) else {
-        return Err(forbidden("missing csrf cookie"));
+        return forbidden("missing csrf cookie");
     };
     let Some(header_value) = headers.get(CSRF_HEADER_NAME).and_then(|v| v.to_str().ok()) else {
-        return Err(forbidden("missing csrf header"));
+        return forbidden("missing csrf header");
     };
 
     if !ct_eq(cookie_value.as_bytes(), header_value.as_bytes()) {
-        return Err(forbidden("csrf mismatch"));
+        return forbidden("csrf mismatch");
     }
 
-    Ok(next.run(req).await)
+    next.run(req).await
 }
 
 fn forbidden(why: &'static str) -> Response {
