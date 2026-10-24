@@ -77,8 +77,8 @@ pub(super) fn keccak_f(s: &mut [u64; 25]) {
 
 /// XOR `block` (length `rate`, a multiple of 8) into the state lanes (LE).
 pub(super) fn xor_block(s: &mut [u64; 25], block: &[u8]) {
-    for (lane, chunk) in s.iter_mut().zip(block.chunks_exact(8)) {
-        *lane ^= u64::from_le_bytes(chunk.try_into().expect("chunks_exact(8)"));
+    for (lane, chunk) in s.iter_mut().zip(block.as_chunks::<8>().0) {
+        *lane ^= u64::from_le_bytes(*chunk);
     }
 }
 
@@ -107,7 +107,12 @@ pub(super) fn sponge(rate: usize, domain: u8, input: &[u8], out: &mut [u8]) {
     let mut off = 0;
     loop {
         let mut block = [0u8; 168];
-        for (chunk, lane) in block[..rate].chunks_exact_mut(8).zip(s.iter()) {
+        for (chunk, lane) in block[..rate]
+            .as_chunks_mut::<8>()
+            .0
+            .iter_mut()
+            .zip(s.iter())
+        {
             chunk.copy_from_slice(&lane.to_le_bytes());
         }
         let n = rate.min(out.len() - off);

@@ -95,7 +95,7 @@ pub fn accumulate(r: &[u64; 5], init: [u64; 5], msg: &[u8]) -> [u64; 5] {
     let vb5_hi: [uint32x2_t; 4] = core::array::from_fn(|j| mk(r2s[j], rs[j]));
 
     let mut acc = init;
-    for group in msg.chunks_exact(64) {
+    for group in msg.as_chunks::<64>().0 {
         let n0 = block_to_limbs(&group[0..16]);
         let n1 = block_to_limbs(&group[16..32]);
         let n2 = block_to_limbs(&group[32..48]);

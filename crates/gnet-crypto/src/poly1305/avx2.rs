@@ -91,7 +91,7 @@ pub unsafe fn accumulate(r: &[u64; 5], init: [u64; 5], msg: &[u8]) -> [u64; 5] {
         let (vb5_0, vb5_1, vb5_2, vb5_3) = (vb5(0), vb5(1), vb5(2), vb5(3));
 
         let mut acc = init;
-        for group in msg.chunks_exact(64) {
+        for group in msg.as_chunks::<64>().0 {
             let n0 = block_to_limbs(&group[0..16]);
             let n1 = block_to_limbs(&group[16..32]);
             let n2 = block_to_limbs(&group[32..48]);

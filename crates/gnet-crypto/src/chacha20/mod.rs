@@ -46,12 +46,12 @@ fn quarter_round_state(s: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize
 fn init_state(key: &[u8; 32], counter: u32, nonce: &[u8; 12]) -> [u32; 16] {
     let mut s = [0u32; 16];
     s[0..4].copy_from_slice(&CONSTANTS);
-    for (word, chunk) in s[4..12].iter_mut().zip(key.chunks_exact(4)) {
-        *word = u32::from_le_bytes(chunk.try_into().expect("chunks_exact(4) yields 4 bytes"));
+    for (word, chunk) in s[4..12].iter_mut().zip(key.as_chunks::<4>().0) {
+        *word = u32::from_le_bytes(*chunk);
     }
     s[12] = counter;
-    for (word, chunk) in s[13..16].iter_mut().zip(nonce.chunks_exact(4)) {
-        *word = u32::from_le_bytes(chunk.try_into().expect("chunks_exact(4) yields 4 bytes"));
+    for (word, chunk) in s[13..16].iter_mut().zip(nonce.as_chunks::<4>().0) {
+        *word = u32::from_le_bytes(*chunk);
     }
     s
 }
@@ -74,7 +74,7 @@ pub fn block(key: &[u8; 32], counter: u32, nonce: &[u8; 12]) -> [u8; 64] {
         quarter_round_state(&mut s, 3, 4, 9, 14);
     }
     let mut out = [0u8; 64];
-    for (i, chunk) in out.chunks_exact_mut(4).enumerate() {
+    for (i, chunk) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         chunk.copy_from_slice(&s[i].wrapping_add(initial[i]).to_le_bytes());
     }
     out
