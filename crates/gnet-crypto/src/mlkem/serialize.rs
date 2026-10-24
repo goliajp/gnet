@@ -59,7 +59,7 @@ pub fn byte_decode(d: usize, bytes: &[u8]) -> [u16; 256] {
 /// `d = 12`: every 2 coefficients (24 bits) pack into 3 bytes. The dominant
 /// case (matrix vectors, public keys, private keys).
 fn encode_d12(coeffs: &[u16; 256], out: &mut [u8]) {
-    for (pair_idx, chunk) in out.chunks_exact_mut(3).enumerate() {
+    for (pair_idx, chunk) in out.as_chunks_mut::<3>().0.iter_mut().enumerate() {
         let c0 = coeffs[2 * pair_idx];
         let c1 = coeffs[2 * pair_idx + 1];
         chunk[0] = c0 as u8;
@@ -70,7 +70,7 @@ fn encode_d12(coeffs: &[u16; 256], out: &mut [u8]) {
 
 fn decode_d12(bytes: &[u8]) -> [u16; 256] {
     let mut coeffs = [0u16; 256];
-    for (pair_idx, chunk) in bytes.chunks_exact(3).enumerate() {
+    for (pair_idx, chunk) in bytes.as_chunks::<3>().0.iter().enumerate() {
         let b0 = u16::from(chunk[0]);
         let b1 = u16::from(chunk[1]);
         let b2 = u16::from(chunk[2]);
@@ -85,7 +85,7 @@ fn decode_d12(bytes: &[u8]) -> [u16; 256] {
 /// `d = 10`: every 4 coefficients (40 bits) pack into 5 bytes. Used for
 /// the `u` ciphertext vector (compressed at width `du = 10`).
 fn encode_d10(coeffs: &[u16; 256], out: &mut [u8]) {
-    for (quad_idx, chunk) in out.chunks_exact_mut(5).enumerate() {
+    for (quad_idx, chunk) in out.as_chunks_mut::<5>().0.iter_mut().enumerate() {
         let c0 = coeffs[4 * quad_idx];
         let c1 = coeffs[4 * quad_idx + 1];
         let c2 = coeffs[4 * quad_idx + 2];
@@ -101,7 +101,7 @@ fn encode_d10(coeffs: &[u16; 256], out: &mut [u8]) {
 fn decode_d10(bytes: &[u8]) -> [u16; 256] {
     let mut coeffs = [0u16; 256];
     const MASK10: u16 = 0x3ff;
-    for (quad_idx, chunk) in bytes.chunks_exact(5).enumerate() {
+    for (quad_idx, chunk) in bytes.as_chunks::<5>().0.iter().enumerate() {
         let b0 = u16::from(chunk[0]);
         let b1 = u16::from(chunk[1]);
         let b2 = u16::from(chunk[2]);

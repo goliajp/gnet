@@ -98,16 +98,12 @@ pub fn run_blocking(bind: SocketAddr, state: AdminState) -> std::io::Result<()> 
     })
 }
 
-async fn bearer_guard(
-    State(state): State<AdminState>,
-    req: Request,
-    next: Next,
-) -> Result<Response, Response> {
+async fn bearer_guard(State(state): State<AdminState>, req: Request, next: Next) -> Response {
     // /api/host-role is the SPA's pre-auth probe — keep it open so a
     // console federation handshake can identify the binary before
     // supplying credentials.
     if req.uri().path() == "/api/host-role" {
-        return Ok(next.run(req).await);
+        return next.run(req).await;
     }
 
     let Some(presented) = req
@@ -119,13 +115,13 @@ async fn bearer_guard(
                 .or_else(|| s.strip_prefix("bearer "))
         })
     else {
-        return Err((StatusCode::UNAUTHORIZED, "missing bearer\n").into_response());
+        return (StatusCode::UNAUTHORIZED, "missing bearer\n").into_response();
     };
 
     if !constant_time_eq(presented.as_bytes(), state.expected_token.as_bytes()) {
-        return Err((StatusCode::UNAUTHORIZED, "bad bearer\n").into_response());
+        return (StatusCode::UNAUTHORIZED, "bad bearer\n").into_response();
     }
-    Ok(next.run(req).await)
+    next.run(req).await
 }
 
 /// `subtle`-style constant-time bytes comparison. Hand-rolled to avoid

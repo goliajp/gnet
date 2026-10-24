@@ -143,8 +143,8 @@ pub fn keystream4(key: &[u8; 32], counter: u32, nonce: &[u8; 12]) -> [u8; 256] {
         }
 
         let mut out = [0u8; 256];
-        for (b, chunk) in out.chunks_exact_mut(64).enumerate() {
-            for (w, word) in chunk.chunks_exact_mut(4).enumerate() {
+        for (b, chunk) in out.as_chunks_mut::<64>().0.iter_mut().enumerate() {
+            for (w, word) in chunk.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 word.copy_from_slice(&cols[w][b].to_le_bytes());
             }
         }
@@ -166,7 +166,7 @@ mod tests {
         for &c in &[0u32, 1, 5, 1000, u32::MAX - 1, u32::MAX] {
             let ks4 = keystream4(&key, c, &nonce);
             let mut expected = [0u8; 256];
-            for (k, chunk) in expected.chunks_exact_mut(64).enumerate() {
+            for (k, chunk) in expected.as_chunks_mut::<64>().0.iter_mut().enumerate() {
                 chunk.copy_from_slice(&block(&key, c.wrapping_add(k as u32), &nonce));
             }
             assert_eq!(ks4, expected);
