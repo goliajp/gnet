@@ -41,6 +41,8 @@ pub enum ProxyError {
     Body(axum::Error),
     #[error("bad method")]
     BadMethod,
+    #[error("{0}")]
+    Egress(#[from] crate::egress::EgressError),
 }
 
 impl IntoResponse for ProxyError {
@@ -49,6 +51,7 @@ impl IntoResponse for ProxyError {
             ProxyError::NotLoggedIn | ProxyError::Auth(_) => StatusCode::UNAUTHORIZED,
             ProxyError::NotFound => StatusCode::NOT_FOUND,
             ProxyError::BadMethod => StatusCode::BAD_REQUEST,
+            ProxyError::Egress(_) => StatusCode::FORBIDDEN,
             ProxyError::Db(_) | ProxyError::Upstream(_) | ProxyError::Body(_) => {
                 StatusCode::BAD_GATEWAY
             }
@@ -92,7 +95,9 @@ async fn proxy(
         .query()
         .map(|q| format!("?{q}"))
         .unwrap_or_default();
-    let target = format!("{endpoint}/{rest}{query}");
+    // re-checked per request: rows stored before the guard existed
+    // are not trusted, and the resolver hook never sees IP literals
+    let target = crate::egress::check_url(&format!("{endpoint}/{rest}{query}")).await?;
 
     let method = req.method().clone();
     let req_content_type = req
@@ -108,8 +113,8 @@ async fn proxy(
         .map_err(|_| ProxyError::BadMethod)?;
 
     let mut upstream_req = state
-        .http
-        .request(rq_method, &target)
+        .dispatcher_http
+        .request(rq_method, target)
         .bearer_auth(&token)
         .body(body);
     if let Some(ct) = req_content_type {

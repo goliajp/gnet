@@ -4,6 +4,8 @@ use axum::middleware;
 use crate::state::AppState;
 
 pub mod auth;
+pub mod auth_email;
+pub mod client_ip;
 pub mod csrf;
 pub mod headers;
 pub mod health;
@@ -20,6 +22,7 @@ pub fn router(state: AppState) -> Router {
         .merge(health::routes())
         .merge(host_role::routes())
         .merge(auth::routes())
+        .merge(auth_email::routes())
         .merge(oauth::routes())
         .merge(networks::routes())
         .merge(proxy::routes())
