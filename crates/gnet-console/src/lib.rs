@@ -7,8 +7,10 @@
 
 pub mod auth;
 pub mod config;
+pub mod egress;
 pub mod error;
 pub mod federation;
+pub mod human_check;
 pub mod mail;
 pub mod oauth;
 pub mod ratelimit;
@@ -75,16 +77,25 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         pool,
         kv,
         http,
+        dispatcher_http: egress::dispatcher_client()?,
         public_url: config.public_url.clone(),
         oauth: Arc::new(oauth),
         auto_verify_email: config.auto_verify_email,
         federation_secret: config.federation_secret,
+        human_check: config
+            .human_check_secret
+            .as_ref()
+            .map(|m| Arc::new(human_check::Secrets::derive(m))),
         mail,
     };
     let app = routes::router(state);
 
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     tracing::info!(addr = %listener.local_addr()?, "listening");
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }

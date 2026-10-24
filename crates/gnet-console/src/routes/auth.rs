@@ -2,6 +2,8 @@
 //!
 //! - POST /api/auth/email/register   create an account
 //! - POST /api/auth/email/login      get a session
+//!
+//! Confirm / resend / forgot / reset live in `auth_email`.
 //! - GET  /api/auth/me                whoami
 //! - POST /api/auth/logout            drop session + clear cookies
 //!
@@ -20,12 +22,14 @@ use time::Duration;
 use uuid::Uuid;
 
 use crate::auth::{AuthError, hash_password, looks_like_email, verify_password};
+use crate::human_check::Scope;
+use crate::routes::client_ip::ClientIp;
 use crate::routes::csrf::CSRF_COOKIE_NAME;
 use crate::session::{self, SESSION_TTL_SECS, Session};
 use crate::state::AppState;
 
 const SESSION_COOKIE: &str = "gnet_sess";
-const MIN_PASSWORD_LEN: usize = 12;
+pub(super) const MIN_PASSWORD_LEN: usize = 12;
 
 /// Whether the SaaS console is fronted by HTTPS — controls the
 /// `Secure` attribute on session + CSRF + OAuth-state cookies.
@@ -43,6 +47,8 @@ pub(super) fn secure_cookies() -> bool {
 pub struct RegisterRequest {
     pub email: String,
     pub password: String,
+    #[serde(default)]
+    pub altcha: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -74,8 +80,11 @@ pub enum AuthRouteError {
     AlreadyExists,
     /// Brute-force throttle tripped. `retry_after_secs` becomes
     /// the `Retry-After` header on the 429 response (plan §17.12).
-    #[error("too many login attempts; retry in {retry_after_secs}s")]
+    #[error("too many attempts; retry in {retry_after_secs}s")]
     Throttled { retry_after_secs: u64 },
+    /// Missing, invalid, wrong-scope or replayed proof-of-work payload.
+    #[error("human check failed; reload the form and try again")]
+    HumanCheckFailed,
     #[error("password hash: {0}")]
     Hash(#[from] AuthError),
     #[error("session: {0}")]
@@ -109,6 +118,7 @@ impl IntoResponse for AuthRouteError {
                 StatusCode::UNAUTHORIZED
             }
             AuthRouteError::AlreadyExists => StatusCode::CONFLICT,
+            AuthRouteError::HumanCheckFailed => StatusCode::FORBIDDEN,
             AuthRouteError::Throttled { .. } => StatusCode::TOO_MANY_REQUESTS,
             AuthRouteError::Hash(_)
             | AuthRouteError::Session(_)
@@ -124,22 +134,25 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/auth/email/register", post(register))
         .route("/api/auth/email/login", post(login))
-        .route("/api/auth/email/verify", post(verify_email))
-        .route(
-            "/api/auth/email/resend-verification",
-            post(resend_verification),
-        )
-        .route("/api/auth/email/forgot-password", post(forgot_password))
-        .route("/api/auth/email/reset-password", post(reset_password))
+        .route("/api/auth/challenge", get(crate::human_check::challenge))
         .route("/api/auth/me", get(me))
         .route("/api/auth/logout", post(logout))
 }
 
 async fn register(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     jar: CookieJar,
     Json(req): Json<RegisterRequest>,
 ) -> Result<(CookieJar, (StatusCode, Json<MeResponse>)), AuthRouteError> {
+    crate::human_check::require(&state, Scope::Register, req.altcha.as_deref()).await?;
+    let mut kv = state.kv.clone();
+    let (limit, window) = crate::ratelimit::REGISTER_PER_IP;
+    if let crate::ratelimit::Decision::Throttle { retry_after_secs } =
+        crate::ratelimit::hit(&mut kv, &format!("register_rl:ip:{ip}"), limit, window).await?
+    {
+        return Err(AuthRouteError::Throttled { retry_after_secs });
+    }
     let email = req.email.trim().to_lowercase();
     if !looks_like_email(&email) {
         return Err(AuthRouteError::BadEmail);
@@ -200,28 +213,24 @@ async fn register(
 
     tx.commit().await?;
 
-    // Dispatch the verification mail AFTER commit. Failure here is
-    // logged but doesn't roll back the signup — the user can ask for
-    // a fresh token via the "resend" affordance (TODO when ready).
-    // The mail-loop branch is only entered when mail.is_some()
-    // because both come from the same env conditional in Config.
-    if let (Some(token), Some(mail)) = (verify_token.as_ref(), state.mail.as_ref()) {
-        let link = format!("{}/verify?token={}", state.public_url, token);
-        let body = format!(
-            "Welcome to gnet.\n\nConfirm this address to finish signing in:\n\n  {link}\n\nIf you didn't sign up for gnet, ignore this mail.\n\n— gnet.golia.jp\n"
-        );
-        let html_body = format!(
-            "<p>Welcome to gnet.</p><p>Confirm this address to finish signing in:</p><p><a href=\"{link}\">{link}</a></p><p>If you didn't sign up for gnet, ignore this mail.</p><p>— gnet.golia.jp</p>"
-        );
-        if let Err(e) = mail
-            .send(&email, "Confirm your gnet account", &body, Some(&html_body))
-            .await
-        {
-            tracing::error!(error = ?e, user_id = %user_id, "verification mail send failed");
-        }
+    // Mail after commit; a send failure doesn't roll back the signup,
+    // the user can ask for a fresh link via resend-verification.
+    if let Some(token) = verify_token.as_ref()
+        && super::auth_email::may_send(&state, None, &email).await?
+    {
+        super::auth_email::send_verification(&state, &email, token, false).await;
     }
 
-    let (jar, _resp_session) = open_session(jar, &state, user_id, Some(email.clone())).await?;
+    // an unconfirmed address gets no session: everything behind login
+    // (networks, the dispatcher proxy) requires a proven mailbox, and
+    // login refuses the account until the link is followed
+    let jar = if state.auto_verify_email {
+        open_session(jar, &state, user_id, Some(email.clone()))
+            .await?
+            .0
+    } else {
+        jar
+    };
 
     Ok((
         jar,
@@ -234,269 +243,6 @@ async fn register(
             }),
         ),
     ))
-}
-
-#[derive(Deserialize)]
-pub struct VerifyEmailRequest {
-    pub token: String,
-}
-
-#[derive(Serialize)]
-pub struct VerifyEmailResponse {
-    pub verified: bool,
-}
-
-/// Confirm an email-address verification token. The token row stays
-/// in the table after use (with `used_at = now()`) so a stolen link
-/// that's already been redeemed gets the same 404 a never-existing
-/// one does — leaks neither the original validity nor when the user
-/// confirmed.
-async fn verify_email(
-    State(state): State<AppState>,
-    Json(req): Json<VerifyEmailRequest>,
-) -> Result<Json<VerifyEmailResponse>, AuthRouteError> {
-    let mut tx = state.pool.begin().await?;
-    let row: Option<(Uuid, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
-        "SELECT user_id, used_at FROM email_verification_tokens \
-         WHERE token = $1 AND created_at > now() - INTERVAL '1 hour' \
-         FOR UPDATE",
-    )
-    .bind(&req.token)
-    .fetch_optional(&mut *tx)
-    .await?;
-
-    let Some((user_id, used_at)) = row else {
-        return Err(AuthRouteError::BadCreds);
-    };
-    if used_at.is_some() {
-        return Err(AuthRouteError::BadCreds);
-    }
-
-    sqlx::query("UPDATE email_credentials SET verified_at = now() WHERE user_id = $1")
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("UPDATE email_verification_tokens SET used_at = now() WHERE token = $1")
-        .bind(&req.token)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-
-    Ok(Json(VerifyEmailResponse { verified: true }))
-}
-
-#[derive(Deserialize)]
-pub struct ResendVerificationRequest {
-    pub email: String,
-}
-
-/// Issue a fresh verification token for an unverified account, mail
-/// it out, and ALWAYS return 200. We deliberately don't differentiate
-/// "no such account" from "account already verified" from "fresh
-/// token issued" — the response shape is identical so a probe can't
-/// enumerate which addresses are real.
-///
-/// Auto-verify mode is a no-op success too (the binary has no mail
-/// loop at all; signups already land verified). The frontend treats
-/// 200 as "if your address is on file and still needs verification,
-/// a new link is on the way."
-async fn resend_verification(
-    State(state): State<AppState>,
-    Json(req): Json<ResendVerificationRequest>,
-) -> Result<StatusCode, AuthRouteError> {
-    let email = req.email.trim().to_lowercase();
-    // No validation 400s — even a bad email shape returns 200 so the
-    // enumeration surface stays flat.
-    if !looks_like_email(&email) || state.auto_verify_email {
-        return Ok(StatusCode::OK);
-    }
-    let Some(mail) = state.mail.as_ref() else {
-        return Ok(StatusCode::OK);
-    };
-
-    let row: Option<(Uuid, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
-        "SELECT u.id, c.verified_at \
-         FROM users u JOIN email_credentials c ON c.user_id = u.id \
-         WHERE u.email = $1",
-    )
-    .bind(&email)
-    .fetch_optional(&state.pool)
-    .await?;
-    let Some((user_id, verified_at)) = row else {
-        return Ok(StatusCode::OK);
-    };
-    if verified_at.is_some() {
-        return Ok(StatusCode::OK);
-    }
-
-    let mut raw = [0u8; 32];
-    gnet_rand::fill(&mut raw);
-    let token = gnet_hex::encode(&raw);
-    sqlx::query("INSERT INTO email_verification_tokens (token, user_id) VALUES ($1, $2)")
-        .bind(&token)
-        .bind(user_id)
-        .execute(&state.pool)
-        .await?;
-
-    let link = format!("{}/verify?token={}", state.public_url, token);
-    let body = format!(
-        "Here's a fresh confirmation link for gnet:\n\n  {link}\n\nIf you didn't ask to resend, you can safely ignore this mail.\n\n— gnet.golia.jp\n"
-    );
-    let html_body = format!(
-        "<p>Here's a fresh confirmation link for gnet:</p><p><a href=\"{link}\">{link}</a></p><p>If you didn't ask to resend, you can safely ignore this mail.</p><p>— gnet.golia.jp</p>"
-    );
-    if let Err(e) = mail
-        .send(&email, "Confirm your gnet account", &body, Some(&html_body))
-        .await
-    {
-        tracing::error!(error = ?e, user_id = %user_id, "resend verification mail failed");
-    }
-    Ok(StatusCode::OK)
-}
-
-#[derive(Deserialize)]
-pub struct ForgotPasswordRequest {
-    pub email: String,
-}
-
-/// Issue a password-reset token for an existing account, mail it
-/// out, and ALWAYS return 200 — same enumeration-flat behaviour as
-/// resend-verification. The mail's link points at
-/// `/reset-password?token=…` which the SPA hosts.
-async fn forgot_password(
-    State(state): State<AppState>,
-    Json(req): Json<ForgotPasswordRequest>,
-) -> Result<StatusCode, AuthRouteError> {
-    let email = req.email.trim().to_lowercase();
-    if !looks_like_email(&email) {
-        return Ok(StatusCode::OK);
-    }
-    let Some(mail) = state.mail.as_ref() else {
-        return Ok(StatusCode::OK);
-    };
-
-    let row: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT u.id FROM users u JOIN email_credentials c ON c.user_id = u.id \
-         WHERE u.email = $1",
-    )
-    .bind(&email)
-    .fetch_optional(&state.pool)
-    .await?;
-    let Some((user_id,)) = row else {
-        return Ok(StatusCode::OK);
-    };
-
-    let mut raw = [0u8; 32];
-    gnet_rand::fill(&mut raw);
-    let token = gnet_hex::encode(&raw);
-    sqlx::query("INSERT INTO password_reset_tokens (token, user_id) VALUES ($1, $2)")
-        .bind(&token)
-        .bind(user_id)
-        .execute(&state.pool)
-        .await?;
-
-    let link = format!("{}/reset-password?token={}", state.public_url, token);
-    let body = format!(
-        "Someone asked to reset the password on your gnet account.\n\nIf that was you, follow this link within one hour:\n\n  {link}\n\nIf it wasn't, ignore this mail — your password is unchanged.\n\n— gnet.golia.jp\n"
-    );
-    let html_body = format!(
-        "<p>Someone asked to reset the password on your gnet account.</p><p>If that was you, follow this link within one hour:</p><p><a href=\"{link}\">{link}</a></p><p>If it wasn't, ignore this mail — your password is unchanged.</p><p>— gnet.golia.jp</p>"
-    );
-    if let Err(e) = mail
-        .send(&email, "Reset your gnet password", &body, Some(&html_body))
-        .await
-    {
-        tracing::error!(error = ?e, user_id = %user_id, "password-reset mail failed");
-    }
-    Ok(StatusCode::OK)
-}
-
-#[derive(Deserialize)]
-pub struct ResetPasswordRequest {
-    pub token: String,
-    pub password: String,
-}
-
-/// Consume a password-reset token and set a new password. Same
-/// shape as `verify_email`: SELECT … FOR UPDATE inside a tx, single-
-/// use (used_at IS NULL gates re-use), one-hour TTL. Also clears
-/// every live session for that user so a thief with the old session
-/// cookie loses access at reset time.
-async fn reset_password(
-    State(state): State<AppState>,
-    Json(req): Json<ResetPasswordRequest>,
-) -> Result<StatusCode, AuthRouteError> {
-    if req.password.chars().count() < MIN_PASSWORD_LEN {
-        return Err(AuthRouteError::WeakPassword);
-    }
-
-    let mut tx = state.pool.begin().await?;
-    let row: Option<(Uuid, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
-        "SELECT user_id, used_at FROM password_reset_tokens \
-         WHERE token = $1 AND created_at > now() - INTERVAL '1 hour' \
-         FOR UPDATE",
-    )
-    .bind(&req.token)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let Some((user_id, used_at)) = row else {
-        return Err(AuthRouteError::BadCreds);
-    };
-    if used_at.is_some() {
-        return Err(AuthRouteError::BadCreds);
-    }
-
-    let hash = hash_password(&req.password)?;
-    sqlx::query("UPDATE email_credentials SET password_hash = $1 WHERE user_id = $2")
-        .bind(&hash)
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("UPDATE password_reset_tokens SET used_at = now() WHERE token = $1")
-        .bind(&req.token)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-
-    // Best-effort: kill all live sessions for this user by walking the
-    // Valkey session prefix. Failure here just shortens the window
-    // they remain valid — the password rotation already strands the
-    // old cookies on the next login attempt.
-    let _ = invalidate_user_sessions(&state, user_id).await;
-
-    Ok(StatusCode::OK)
-}
-
-/// Walk the console session prefix in Valkey and drop every row that
-/// belongs to `user_id`. Best-effort: returns Ok even on a partial
-/// scan — caller logs the count via `?` propagation if needed.
-async fn invalidate_user_sessions(state: &AppState, user_id: Uuid) -> Result<(), AuthRouteError> {
-    use redis::AsyncCommands;
-    let mut kv = state.kv.clone();
-    let mut cursor: u64 = 0;
-    let pattern = format!("{}*", crate::session::KEY_PREFIX);
-    loop {
-        let (next, keys): (u64, Vec<String>) = redis::cmd("SCAN")
-            .arg(cursor)
-            .arg("MATCH")
-            .arg(&pattern)
-            .arg("COUNT")
-            .arg(200)
-            .query_async(&mut kv)
-            .await?;
-        for k in &keys {
-            let raw: Option<String> = kv.get(k).await?;
-            let Some(json) = raw else { continue };
-            if json.contains(&user_id.to_string()) {
-                let _: () = kv.del(k).await?;
-            }
-        }
-        if next == 0 {
-            break;
-        }
-        cursor = next;
-    }
-    Ok(())
 }
 
 async fn login(

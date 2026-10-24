@@ -12,6 +12,8 @@ pub struct AppState {
     pub pool: PgPool,
     pub kv: ConnectionManager,
     pub http: reqwest::Client,
+    /// Client for user-supplied dispatcher endpoints; see [`crate::egress`].
+    pub dispatcher_http: reqwest::Client,
     pub public_url: String,
     pub oauth: Arc<HashMap<&'static str, Provider>>,
     /// Mirrored from [`crate::config::Config::auto_verify_email`].
@@ -21,4 +23,6 @@ pub struct AppState {
     /// set; `None` matches the auto-verify mode in `auto_verify_email`.
     /// The two are kept consistent in `Config::from_env`.
     pub mail: Option<MailClient>,
+    /// `None` when the human check is turned off by config.
+    pub human_check: Option<Arc<crate::human_check::Secrets>>,
 }

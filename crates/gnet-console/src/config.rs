@@ -31,6 +31,11 @@ pub struct Config {
     /// derived (§17.6). Required in production; falls back to all
     /// zeros in dev with a loud warning so a fresh checkout boots.
     pub federation_secret: [u8; 32],
+    /// Master for the proof-of-work human check on the mail-sending
+    /// auth endpoints. `None` only when explicitly turned off with
+    /// `GNET_CONSOLE_HUMAN_CHECK=off`; there is no zero-secret
+    /// fallback, since anyone could sign challenges with it.
+    pub human_check_secret: Option<[u8; 32]>,
 }
 
 impl Config {
@@ -96,6 +101,20 @@ impl Config {
             }
         };
 
+        let human_check_off = std::env::var("GNET_CONSOLE_HUMAN_CHECK")
+            .is_ok_and(|v| v.trim().eq_ignore_ascii_case("off"));
+        let human_check_secret = if human_check_off {
+            eprintln!(
+                "WARNING: GNET_CONSOLE_HUMAN_CHECK=off — signup and mail endpoints are unprotected"
+            );
+            None
+        } else {
+            let raw = std::env::var("GNET_CONSOLE_ALTCHA_SECRET").unwrap_or_default();
+            Some(gnet_hex::decode_32(raw.trim()).ok_or(ConfigError::Missing(
+                "GNET_CONSOLE_ALTCHA_SECRET (64-char hex; or GNET_CONSOLE_HUMAN_CHECK=off for dev)",
+            ))?)
+        };
+
         Ok(Self {
             bind,
             database_url,
@@ -103,6 +122,7 @@ impl Config {
             auto_verify_email,
             public_url,
             federation_secret,
+            human_check_secret,
         })
     }
 }
