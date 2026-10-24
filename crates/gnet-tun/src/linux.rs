@@ -1,6 +1,7 @@
 //! Linux TUN device via `/dev/net/tun` (`IFF_TUN | IFF_NO_PI`: raw IP
 //! packets, no per-packet header).
 
+use std::ffi::{c_char, c_void};
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
@@ -21,10 +22,10 @@ struct IfReq {
 
 unsafe extern "C" {
     // open/ioctl are variadic in C; declare them so to use the correct ABI.
-    fn open(path: *const u8, flags: i32, ...) -> i32;
+    fn open(path: *const c_char, flags: i32, ...) -> i32;
     fn ioctl(fd: i32, request: u64, ...) -> i32;
-    fn read(fd: i32, buf: *mut u8, count: usize) -> isize;
-    fn write(fd: i32, buf: *const u8, count: usize) -> isize;
+    fn read(fd: i32, buf: *mut c_void, count: usize) -> isize;
+    fn write(fd: i32, buf: *const c_void, count: usize) -> isize;
 }
 
 /// An open Linux TUN device.
@@ -37,7 +38,7 @@ impl Tun {
     /// Open the next available TUN device. Requires `CAP_NET_ADMIN` (root).
     pub fn open() -> io::Result<Tun> {
         // SAFETY: opening a device path with O_RDWR; -1 signals error.
-        let raw = unsafe { open(TUN_PATH.as_ptr(), O_RDWR) };
+        let raw = unsafe { open(TUN_PATH.as_ptr().cast(), O_RDWR) };
         if raw < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -72,7 +73,13 @@ impl Tun {
     /// Read one IP packet (raw, no header — `IFF_NO_PI`).
     pub fn recv(&self, packet: &mut [u8]) -> io::Result<usize> {
         // SAFETY: fd valid; `packet` is a valid writable region.
-        let n = unsafe { read(self.fd.as_raw_fd(), packet.as_mut_ptr(), packet.len()) };
+        let n = unsafe {
+            read(
+                self.fd.as_raw_fd(),
+                packet.as_mut_ptr().cast(),
+                packet.len(),
+            )
+        };
         if n < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -82,7 +89,7 @@ impl Tun {
     /// Write one IP packet (raw, no header — `IFF_NO_PI`).
     pub fn send(&self, packet: &[u8]) -> io::Result<usize> {
         // SAFETY: fd valid; `packet` is a valid readable region.
-        let n = unsafe { write(self.fd.as_raw_fd(), packet.as_ptr(), packet.len()) };
+        let n = unsafe { write(self.fd.as_raw_fd(), packet.as_ptr().cast(), packet.len()) };
         if n < 0 {
             return Err(io::Error::last_os_error());
         }
