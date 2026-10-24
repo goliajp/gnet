@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router";
 import { api } from "../../api/client";
+import { useHumanCheck } from "../../api/humanCheck";
 import type {
   ConsoleMeResponse,
   EmailRegisterRequest,
@@ -15,12 +16,13 @@ export default function ConsoleSignup() {
   const [pendingMailFor, setPendingMailFor] = useState<string | null>(null);
   const qc = useQueryClient();
   const nav = useNavigate();
+  const humanCheck = useHumanCheck("register");
 
   const submit = useMutation({
-    mutationFn: (creds: EmailRegisterRequest) =>
+    mutationFn: async (creds: EmailRegisterRequest) =>
       api<ConsoleMeResponse>("/api/auth/email/register", {
         method: "POST",
-        body: JSON.stringify(creds),
+        body: JSON.stringify({ ...creds, altcha: await humanCheck() }),
       }),
     onSuccess: (me) => {
       qc.setQueryData(["console", "me"], me);
@@ -99,11 +101,12 @@ export default function ConsoleSignup() {
 
 function PendingMail({ email }: { email: string }) {
   const [resentAt, setResentAt] = useState<number | null>(null);
+  const humanCheck = useHumanCheck("resend");
   const resend = useMutation({
-    mutationFn: (body: ResendVerificationRequest) =>
+    mutationFn: async (body: ResendVerificationRequest) =>
       api<void>("/api/auth/email/resend-verification", {
         method: "POST",
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, altcha: await humanCheck() }),
       }),
     onSuccess: () => setResentAt(Date.now()),
   });

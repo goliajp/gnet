@@ -12,6 +12,9 @@ async fn main() -> ExitCode {
             eprintln!("env vars:");
             eprintln!("  GNET_CONSOLE_BIND          default 127.0.0.1:8765");
             eprintln!("  GNET_CONSOLE_DATABASE_URL  required, postgres://user:pass@host/db");
+            eprintln!(
+                "  GNET_CONSOLE_ALTCHA_SECRET required, 64-char hex (GNET_CONSOLE_HUMAN_CHECK=off disables)"
+            );
             eprintln!("  RUST_LOG                   default info");
             ExitCode::SUCCESS
         }

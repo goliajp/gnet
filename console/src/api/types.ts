@@ -54,6 +54,8 @@ export type EmailLoginRequest = {
 export type EmailRegisterRequest = {
   email: string;
   password: string;
+  /** proof-of-work answer; absent when the server has the check off */
+  altcha?: string;
 };
 
 export type VerifyEmailRequest = {
@@ -66,10 +68,12 @@ export type VerifyEmailResponse = {
 
 export type ResendVerificationRequest = {
   email: string;
+  altcha?: string;
 };
 
 export type ForgotPasswordRequest = {
   email: string;
+  altcha?: string;
 };
 
 export type ResetPasswordRequest = {

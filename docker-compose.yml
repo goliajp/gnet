@@ -85,6 +85,7 @@ services:
       GNET_CONSOLE_VALKEY_URL: redis://valkey:6379
       GNET_CONSOLE_PUBLIC_URL: ${GNET_CONSOLE_PUBLIC_URL:-https://gnet.golia.jp}
       GNET_CONSOLE_FEDERATION_SECRET: ${GNET_CONSOLE_FEDERATION_SECRET:?GNET_CONSOLE_FEDERATION_SECRET must be set (64-char hex)}
+      GNET_CONSOLE_ALTCHA_SECRET: ${GNET_CONSOLE_ALTCHA_SECRET:?GNET_CONSOLE_ALTCHA_SECRET must be set (64-char hex)}
       GNET_CONSOLE_SECURE_COOKIES: "1"
       # OAuth providers — leave blank to disable a provider. The
       # binary logs a warning on startup naming the providers that

@@ -10,6 +10,7 @@ pub mod config;
 pub mod egress;
 pub mod error;
 pub mod federation;
+pub mod human_check;
 pub mod mail;
 pub mod oauth;
 pub mod ratelimit;
@@ -81,6 +82,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         oauth: Arc::new(oauth),
         auto_verify_email: config.auto_verify_email,
         federation_secret: config.federation_secret,
+        human_check: config
+            .human_check_secret
+            .as_ref()
+            .map(|m| Arc::new(human_check::Secrets::derive(m))),
         mail,
     };
     let app = routes::router(state);
