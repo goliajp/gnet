@@ -44,10 +44,10 @@ export default function ConsoleVerify() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  // auto-redirect to /dashboard on success after a moment
+  // signup opens no session, so a confirmed user still has to sign in
   useEffect(() => {
     if (auto) {
-      const t = setTimeout(() => nav("/dashboard", { replace: true }), 2000);
+      const t = setTimeout(() => nav("/login", { replace: true }), 2000);
       return () => clearTimeout(t);
     }
   }, [auto, nav]);
@@ -79,10 +79,10 @@ export default function ConsoleVerify() {
     return (
       <AuthShell title="Email confirmed" subtitle="redirecting…">
         <p className="text-zinc-300">
-          Thanks. Taking you to your dashboard.
+          Thanks. Taking you to sign in.
         </p>
         <Link
-          to="/dashboard"
+          to="/login"
           className="mt-4 inline-block text-zinc-200 underline-offset-4 hover:underline"
         >
           continue now →
